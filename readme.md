@@ -46,4 +46,4 @@ shows how a configuration without flakes takes it in.
 
 # licence
 
-not chosen yet.
+see `LICENSE`.
