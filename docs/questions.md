@@ -7,11 +7,11 @@ answered question moves to `decisions.md` with its answer.
 
 - **C1 nginx or Caddy.** planning.md puts nginx in front of ike (static
   pages, `limit_req`, `client_max_body_size`; M0 is done when "a page nginx
-  serves" is regenerated). lemma0 already runs Caddy on 80 and 443 for every
-  other service. On its own VM (N2, open) ike can have nginx to itself; on
-  lemma0 it is nginx behind Caddy, or Caddy alone, whose rate limiting is a
-  plugin. *Meanwhile:* the tests run nginx, and the module's web server part
-  is a separate option, off by default.
+  serves" is regenerated). lemma0, where ike will run (decisions.md),
+  already has Caddy on 80 and 443 for every other service. So it is nginx
+  behind Caddy, or Caddy alone, whose rate limiting is a plugin.
+  *Meanwhile:* the tests run nginx, and the module's web server part is a
+  separate option, off by default.
 - **C2 Invariant 8 against the blocklist.** Purge "leaves no row … referencing
   the content, except the mod-log entry", yet purge also puts the stored hash
   and every original hash on a blocklist (planning, Moderation; G3), which is
@@ -68,8 +68,6 @@ answered question moves to `decisions.md` with its answer.
 - **Q8 Backup tool and retention (D6, D7; open decision).** Step 7 will
   snapshot through the SQLite backup API into a directory and leave shipping
   it elsewhere to a swappable command.
-- **Q9 Own VM or lemma0 (N2; open decision).** The module hardens the unit
-  as if on lemma0; nothing in it assumes either.
 
 ## Open decisions in planning.md
 
