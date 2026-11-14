@@ -56,8 +56,7 @@ one, named in `docs/status.md`, however tempting the next is.
   filesystem, database), so they survive refactors; they do not call into
   ike's modules.
 - Nix: `default.nix` is the entry and `pins.json` the only pin, as in fog.
-  `flake.nix` is a wrapper without inputs; whatever it offers must also
-  work without flakes, since fog has none.
+  No flakes.
 - Deployment lives in the fog repo. Do not touch it.
 
 ## Rules
@@ -89,7 +88,7 @@ one, named in `docs/status.md`, however tempting the next is.
 - A `phi/<topic>` branch per numbered step, never dev directly. Steps in a
   row go on one stack, each branched from the last, so dev stays linear and
   each can be fast-forwarded. lux merges.
-- Before committing: `nix-build -A checks` (or `nix flake check`).
+- Before committing: `nix-build -A checks`.
 
 ## Style
 

@@ -1,5 +1,5 @@
-# the entry for everything, flakes or not: `nix-build -A package`,
-# `nix-build -A checks`, `nix-shell`. flake.nix only wraps this
+# the entry for everything: `nix-build -A package`, `nix-build -A checks`,
+# `nix-shell`. no flake, as in fog
 {
 	system ? builtins.currentSystem,
 	pkgs ? import pins.nixpkgs { inherit system; },

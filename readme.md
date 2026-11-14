@@ -25,15 +25,13 @@ stand, `docs/decisions.md` why they are the way they are.
 
 # building
 
-everything is pinned by `pins.json`, which `default.nix` reads on its own,
-so flakes are optional:
+everything is pinned by `pins.json`, which `default.nix` reads. there is
+no flake:
 
 ```sh
 nix-build -A package   # the release, in result/
 nix-build -A checks    # what ci runs
 nix-shell              # erlang, rebar3 and friends
-
-nix build; nix flake check; nix develop   # the same, with flakes
 ```
 
 inside the shell, `rebar3 shell` runs ike on 127.0.0.1:8970 and `rebar3 ct`
