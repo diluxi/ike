@@ -79,9 +79,57 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   errors. Planned for step 3: the core modules may not mention `dynamic()`,
   `eqwalizer:fixme` or `eqwalizer:ignore`, checked by a test. If lux knows
   the switch that was meant, it goes in then.
+- **No `maybe` expressions in typed modules.** This eqWAlizer does not
+  narrow what `?=` lets through, so every one is a type error; nested
+  `case` it is. Likewise `lists:sort` and `lists:reverse` come back as
+  `[term()]` here, so `ike_migrate` avoids them.
+- **Paths are binaries** inside ike (`data_dir`), turned into strings only
+  at esqlite's door: a guard can tell eqWAlizer a value is a binary, not
+  that a list is a string.
 - **Crash dumps are off in the unit** (`ERL_CRASH_DUMP_BYTES=0`): a dump
   holds whatever was in memory, which from M1 includes the rate limiter's
   salt and addresses (N5, invariant 1).
 - **`/health`** exists so that tests and the unit have something to ask.
 - **Listening on loopback, port 8970** by default; a Unix socket (N3) can
   replace it when the rate limiter arrives.
+
+## Schema
+
+- **Migrations are numbered SQL files in `priv/migrations`,** applied at
+  application start, each in one transaction, before anything else runs. A
+  `migration` table keeps each file's SHA-256: an applied file that changed,
+  or a database newer than the release, refuses to start. There is no down
+  migration; going back is a restore.
+- **Connection settings** (`ike_db`): WAL, `synchronous = FULL`, foreign
+  keys on, a 5 s busy timeout, `trusted_schema` off, and `secure_delete`
+  on, so that what purge deletes is overwritten in the file and not left
+  in free pages.
+- **Every table is `STRICT`.**
+- **`post.id` is `AUTOINCREMENT`:** a `>>N` is never handed out twice, not
+  even after its row is gone.
+- **A thread has no id of its own; its key is its root's post number.** An
+  OP's home thread is its own number, so the two foreign keys between
+  `post` and `thread` are deferred to the end of the transaction.
+- **Actor and link are sums stored flat.** `actor.kind` is an enum with
+  nullable `issuer` and `subject`; `link` has three nullable target
+  columns. *Pragmatic:* SQLite has no sum types, and a table per variant
+  costs a join on every read. `CHECK` constraints tie each kind to its
+  columns and each link to exactly one target, and tests try to break
+  them.
+- **A local actor is an issuer and a subject,** the pair OIDC guarantees
+  unique. No name, e-mail or group is stored.
+- **Link targets are not foreign keys.** They are weak references: a
+  target may not exist yet or any more. The source is one, and cascades.
+- **`asset.hash` is a 32-byte blob,** not hex text.
+- **The reachability view labels each row `'table.column'`.** The test for
+  invariant 9 takes the columns from the foreign keys and wants each label
+  in the view. *Limit:* it plants a row only for `post.asset`; a new asset
+  column has to add its own to the test, which fails until then.
+- **esqlite carries its own SQLite** (3.50.4), pinned by esqlite's Hex
+  hash, and builds it with the `pc` rebar3 plugin from nixpkgs. `pc` is a
+  build-time dependency esqlite brings with it.
+- **Timeouts (D5), so far:** every esqlite call runs on a dirty I/O
+  scheduler, and the busy timeout bounds waiting for a lock. A bound on a
+  running query (`esqlite3:interrupt/1` from a timer) comes with the
+  writer and the readers in step 4.
+
