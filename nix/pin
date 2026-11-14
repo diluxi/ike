@@ -1,0 +1,14 @@
+#!/bin/sh
+# nix/pin <name> <owner/repo> <branch>: point a pin at a branch's tip.
+# the same as `./fog pin`, so the two repositories' pins.json agree
+set -eu
+DIR=$(dirname "$0")/..
+
+[ $# -eq 3 ] || { echo "$0 <name> <owner/repo> <branch>" >&2; exit 1; }
+rev=$(git ls-remote "https://github.com/$2" "refs/heads/$3" | cut -f1)
+[ -n "$rev" ] || { echo "$0: no branch $3 in $2" >&2; exit 1; }
+url=https://github.com/$2/archive/$rev.tar.gz
+sha256=$(nix-prefetch-url --unpack --name source "$url")
+jq --arg n "$1" --arg url "$url" --arg sha256 "$sha256" \
+	'.[$n] = {$url, $sha256}' "$DIR/pins.json" >"$DIR/pins.json.tmp"
+mv "$DIR/pins.json.tmp" "$DIR/pins.json"

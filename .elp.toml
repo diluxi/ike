@@ -1,0 +1,3 @@
+# for editors: eqwalizer on everywhere. ci checks the modules under src
+[eqwalizer]
+enable_all = true

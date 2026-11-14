@@ -1,0 +1,17 @@
+#!/usr/bin/env escript
+%% rewrites nix/hex.json from rebar.lock, so nix can fetch what rebar3 locked
+main([]) ->
+    Dir = filename:dirname(filename:dirname(escript:script_name())),
+    {ok, [{_Vsn, Deps}, Meta]} = file:consult(filename:join(Dir, "rebar.lock")),
+    Hashes = proplists:get_value(pkg_hash_ext, Meta),
+    Pkgs = [
+        #{
+            name => Name,
+            pkg => Pkg,
+            version => Version,
+            sha256 => string:lowercase(proplists:get_value(Name, Hashes))
+        }
+     || {Name, {pkg, Pkg, Version}, _Level} <- lists:sort(Deps)
+    ],
+    Json = json:format(Pkgs, #{indent => 2}),
+    ok = file:write_file(filename:join([Dir, "nix", "hex.json"]), Json).

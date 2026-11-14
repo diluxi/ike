@@ -1,0 +1,26 @@
+[
+  {
+    "name": "cowboy",
+    "pkg": "cowboy",
+    "sha256": "90b4d6fe91806054538349dbeabcac86315a3fdaec4eb491f5445259668398f6",
+    "version": "2.21.0"
+  },
+  {
+    "name": "cowlib",
+    "pkg": "cowlib",
+    "sha256": "b1ea5995d8f1ab5086ae7afe710c2075c7872c7e1acaf45dd0db7595e900c0fc",
+    "version": "2.22.0"
+  },
+  {
+    "name": "proper",
+    "pkg": "proper",
+    "sha256": "fbf7cf0625e5441a314514f7d8e1eaff52090fcd94ff34b5171ff293d3f9969a",
+    "version": "1.5.0"
+  },
+  {
+    "name": "ranch",
+    "pkg": "ranch",
+    "sha256": "64d98b8c61d39b7b9a2e2cf92ae659b8623a69766f415ae13dc726864ec04ab9",
+    "version": "2.4.0"
+  }
+]
