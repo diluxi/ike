@@ -34,6 +34,7 @@
 			../rebar.config
 			../rebar.lock
 			../config
+			../priv
 			../src
 			../test
 		];
@@ -45,6 +46,8 @@
 		inherit src checkouts;
 		releaseType = "release";
 		profile = "prod";
+		# esqlite builds its nif, and the sqlite it carries, with pc
+		buildPlugins = [ beamPackages.pc ];
 
 		passthru = {
 			inherit beamPackages checkouts elp;

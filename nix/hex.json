@@ -12,6 +12,12 @@
     "version": "2.22.0"
   },
   {
+    "name": "esqlite",
+    "pkg": "esqlite",
+    "sha256": "578c49543b81d1fb91f62adf7459ec2924abf86c98a1b0c9900f89674b664959",
+    "version": "0.10.1"
+  },
+  {
     "name": "proper",
     "pkg": "proper",
     "sha256": "fbf7cf0625e5441a314514f7d8e1eaff52090fcd94ff34b5171ff293d3f9969a",
