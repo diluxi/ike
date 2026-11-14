@@ -4,3 +4,4 @@ result
 result-*
 erl_crash.dump
 rebar3.crashdump
+/data

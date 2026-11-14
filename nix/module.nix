@@ -7,7 +7,8 @@
 	sysConfig = pkgs.writeText "ike-sys.config" ''
 		[
 			{ike, [
-				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}}
+				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}},
+				{data_dir, <<"/var/lib/ike">>}
 			]}
 		].
 	'';

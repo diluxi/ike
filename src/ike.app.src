@@ -3,8 +3,9 @@
     {vsn, "0.0.0"},
     {registered, [ike_sup]},
     {mod, {ike_app, []}},
-    {applications, [kernel, stdlib, cowboy]},
+    {applications, [kernel, stdlib, crypto, cowboy, esqlite]},
     {env, [
-        {listen, #{ip => {127, 0, 0, 1}, port => 8970}}
+        {listen, #{ip => {127, 0, 0, 1}, port => 8970}},
+        {data_dir, <<"data">>}
     ]}
 ]}.

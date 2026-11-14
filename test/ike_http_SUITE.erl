@@ -10,6 +10,10 @@
 all() -> [health, unknown_paths].
 
 init_per_suite(Config) ->
+    _ = application:load(ike),
+    ok = application:set_env(
+        ike, data_dir, list_to_binary(?config(priv_dir, Config))
+    ),
     {ok, _} = application:ensure_all_started([inets, ike]),
     #{port := Port} = application:get_env(ike, listen, #{}),
     [{base, "http://127.0.0.1:" ++ integer_to_list(Port)} | Config].
