@@ -70,10 +70,10 @@ fog to an exact tree, so the pin bump is the commit to review.
 
 Not there yet; listed so fog's side can be planned.
 
-- **The web server** (questions.md, C1). ike's module will offer an nginx
-  virtual host as a separate option, off by default. On lemma0, Caddy owns
-  80 and 443: either Caddy serves ike's page directory and proxies the
-  rest, or nginx listens on loopback behind it.
+- **The web server** is fog's Caddy (decisions.md). ike's module will
+  offer a `services.caddy.virtualHosts` entry as a separate option, off by
+  default: `file_server` over ike's page and media directories, and
+  `reverse_proxy` to the loopback port for the rest.
 - **State.** `/var/lib/ike` (database, media, pages), through
   `StateDirectory` with `DynamicUser`. The server in front needs read
   access to the pages and media directories, which will mean a static user

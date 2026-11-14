@@ -3,74 +3,41 @@
 What lux has to decide, and what stands in for the answer meanwhile. An
 answered question moves to `decisions.md` with its answer.
 
-## Contradictions found
+## Wording that lux's documents still owe
 
-- **C1 nginx or Caddy.** planning.md puts nginx in front of ike (static
-  pages, `limit_req`, `client_max_body_size`; M0 is done when "a page nginx
-  serves" is regenerated). lemma0, where ike will run (decisions.md),
-  already has Caddy on 80 and 443 for every other service. So it is nginx
-  behind Caddy, or Caddy alone, whose rate limiting is a plugin.
-  *Meanwhile:* the tests run nginx, and the module's web server part is a
-  separate option, off by default.
-- **C2 Invariant 8 against the blocklist.** Purge "leaves no row … referencing
-  the content, except the mod-log entry", yet purge also puts the stored hash
-  and every original hash on a blocklist (planning, Moderation; G3), which is
-  a row referencing the content. Either the invariant's exception names the
-  blocklist too, or the blocklist holds something other than the hash. This
-  touches G5's open question on hashes in the mod log. Not needed before M1.
-- **C3 Where the original hash lives.** The asset is said to keep "the
-  original upload's hash", singular; G3 speaks of "every original hash seen
-  for it", and dedup maps many originals onto one stored asset. One column
-  on the asset cannot hold that. *Proposed:* a table of original hashes per
-  asset, which outlives collected uploads. Needs a yes before M1.
-- **C4 A global `>>N` and `>>>/board/N`.** If the post sequence is global,
-  the board in `>>>/board/N` picks nothing that `>>N` didn't. Either the
-  board is only a hint for rendering and for remote boards later, or
-  numbering is per board and "Global `>>N`" is wrong. *Assumed:* one global
-  sequence, and the schema is built on that.
-- **C5 Flakes.** The stack names a Nix flake; fog has none and wants none.
-  Not a real conflict: `default.nix` is the entry and takes its pins from
-  `pins.json` as fog's does; `flake.nix` wraps it and has no inputs
-  (decisions.md). Listed so it is not rediscovered.
+Answered in substance; the documents are lux's, so they are not edited
+here.
 
-## Assumed by the schema (step 3)
+- **Invariant 8 and the blocklist** (was C2). lux: hashes are no problem to
+  keep; what they were derived from is purged. So purge leaves the mod-log
+  entry *and* the blocklisted hashes, and hazards.md's invariant 8 names
+  only the first. *Proposed wording:* "…referencing the content, except
+  the mod-log entry and the blocklisted hashes". The test in M1 will be
+  written to that unless lux says otherwise.
+- **nginx in planning.md** (was C1). Caddy was chosen (decisions.md);
+  planning.md's stack, and M0's "a page nginx serves", still say nginx.
 
-lux said to go on before answering these, so migration 0001 takes the
-answer that stores least and is cheapest to change. Each is still lux's.
+## Open
 
-- **Q1 Does a post carry a time?** The post primitive lists text, an
-  optional asset and an optional parent; only uploads list a time, and
-  anonymous text posts "store nothing beyond their contents". A precise
-  time helps correlate a post with a connection. *Assumed:* no time column;
-  order is the post number. A coarse or full time is one `ALTER TABLE`
-  away, but posts made before it will have none.
-- **Q2 Who is the actor of a text post made while logged in?** M0's own
-  test is a logged-in POST. *Assumed:* every post points at an actor, and
-  anonymous is one shared row (id 1). Which actor a logged-in text post
-  gets is the writer's choice in step 4, not the schema's.
-- **Q4 Reply parents (open decision).** *Stub:* a nullable `parent` column
-  that M0 never fills.
-- **C4** above: one global sequence, no board column yet.
-
-Q3 (the upload-to-account link, I4) and C3 (original hashes) no longer
-touch M0: the schema has no upload table, since nothing uploads before M1.
-`asset` is only its hash, so that a post can name one and invariant 9 has
-something to test. Both questions come back with M1's migration.
-
-## Blocking later steps of M0
-
-- **Q5 A remote.** CI has to be green before step 3 and every step is a PR,
-  so the repository has to exist on GitHub. `./fog pin` fetches an
-  unauthenticated archive, so it would have to be public, or fog needs
-  another way to fetch it.
-- **Q6 Licence.** AGPL-3.0 or something else. The readme says "not chosen
-  yet" and there is no licence file.
+- **C3 Where the original hash lives.** Not about similarity hashes: this
+  is the SHA-256 of the bytes as uploaded, before stripping. Two uploads
+  that differ only in metadata strip to the same stored asset, so one
+  asset has several original hashes, and G3 wants each of them blocklisted
+  on purge so the same file cannot be re-uploaded. planning.md gives the
+  asset one "original upload's hash". *Proposed:* a table of original
+  hashes per asset. Perceptual hashes are a separate matter (and a
+  separate column). Needs a yes before M1.
+- **Q3 The upload-to-account link** (I4). Comes back with M1's migration;
+  M0 has no upload table.
+- **Q4 Reply parents** (open decision in planning.md). *Stub:* a nullable
+  `parent` column that M0 never fills.
+- **Q5 Is the repository public?** `./fog pin` and `fetchTarball` fetch
+  GitHub's archive without credentials, so fog can pin ike only if it is.
 - **Q7 Authelia client.** Step 6 needs the client id, the redirect URI's
   host (which name ike is served under), and whether the client is public
   (PKCE only) or confidential. Tests use a mock IdP either way.
-- **Q8 Backup tool and retention (D6, D7; open decision).** Step 7 will
-  snapshot through the SQLite backup API into a directory and leave shipping
-  it elsewhere to a swappable command.
+- **Q8 Retention** (D6, D7). How many snapshots are kept, and for how
+  long. *Meanwhile:* an option, defaulting to seven.
 
 ## Open decisions in planning.md
 

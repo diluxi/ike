@@ -5,11 +5,10 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 
 ## Nix
 
-- **`default.nix` is the entry; `flake.nix` wraps it.** fog is flake-free,
-  and one set of expressions serves both worlds.
+- **`default.nix` is the entry, and there is no flake** (lux, 2026-11-14;
+  was C5). fog has none, and a wrapper nobody evaluates only rots.
 - **`pins.json` is the only pin, in fog's format, moved by `nix/pin`**
-  (lux, 2026-11-14). `flake.nix` has no inputs and so no `flake.lock`: a
-  lock would only have been a second list of revisions to drift.
+  (lux, 2026-11-14).
 - **nixpkgs is pinned to the revision fog pins** (`1d060086`), with the
   same url, hash and store name, so lemma0 builds ike from the nixpkgs it
   already has.
@@ -28,7 +27,7 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   `/build/ld.so` and puts a loader there. *A hack,* confined to
   `nix/package.nix`, x86_64-linux only; it asserts the path occurs exactly
   once, so an ELP bump that changes this fails loudly. The alternative was
-  running eqWAlizer outside `nix flake check`.
+  running eqWAlizer outside the checks.
 - **The module is booted in a NixOS VM as a check** (`nix/test.nix`). This
   is a test of the unit, not a way to deploy: the hardening and the start
   command exist only in the module, and nothing else exercises them. Its
@@ -41,6 +40,14 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 
 ## Deployment
 
+- **Caddy is the web server in front, alone** (lux, 2026-11-14; was C1).
+  lemma0 already runs it on 80 and 443, so ike adds no second HTTP server:
+  `file_server` for the page and media directories, `reverse_proxy` for
+  the rest, `request_body max_size` for the body limit. Caddy's rate
+  limiting is a plugin and is not used; ike's own limiter (M1) is the one
+  that counts. planning.md still says nginx; that text is lux's to change.
+- **Backups are snapshots into a directory** (lux, 2026-11-14; was Q8),
+  taken through SQLite's backup API. Shipping them off the host is fog's.
 - **On lemma0, as a unit, without a VM of its own** (lux, 2026-11-14;
   hazard N2, was Q9). The unit's sandboxing is the boundary. Worth another
   look at M1, when decoders and strippers start running on what strangers
@@ -68,7 +75,7 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Tests are Common Test suites that start the application and then use
   only HTTP, the filesystem and the database.** Black-box in what they
   touch; they share a VM with ike for speed. The NixOS VM test
-  (`nix/test.nix`) is the fully separate harness, for what needs nginx or
+  (`nix/test.nix`) is the fully separate harness, for what needs Caddy or
   a restore.
 - **eqWAlizer runs over every module under `src`,** not only the typed
   core: wider than asked, and cheap while there is little code. Narrow it
@@ -93,6 +100,21 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Listening on loopback, port 8970** by default; a Unix socket (N3) can
   replace it when the rate limiter arrives.
 
+## Login
+
+- **OIDC against Authelia from the start, not LDAP** (lux left it to
+  whichever is quicker, 2026-11-14). Not slower to build: authorization
+  code with PKCE needs only `httpc`, `json` and `crypto`, all in OTP, and a
+  mock IdP for the tests is one Cowboy handler. LDAP would have ike take
+  passwords itself, which wants its own brute-force limit, goes around
+  Authelia's second factor, and names users by DN, so every actor would
+  need rewriting when SSO came. `actor (issuer, subject)` is already OIDC's
+  key.
+
+## Licence
+
+- **lux's own notice, in `LICENSE`** (lux, 2026-11-14; was Q6).
+
 ## Schema
 
 - **Migrations are numbered SQL files in `priv/migrations`,** applied at
@@ -107,6 +129,14 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Every table is `STRICT`.**
 - **`post.id` is `AUTOINCREMENT`:** a `>>N` is never handed out twice, not
   even after its row is gone.
+- **A post carries its time** (lux, 2026-11-14; was Q1): `post.time`,
+  whole seconds since the epoch, set by the writer and never taken from
+  the client. Migration 0001 was changed in place, which is allowed only
+  because no database has ever been made from it outside the tests.
+- **Every post has an actor, and anonymous is an actor** (lux, 2026-11-14;
+  was Q2): one shared row, id 1.
+- **One global post sequence** (lux, 2026-11-14; was C4): ikooru spans the
+  whole of chike, and there are no boorus per board.
 - **A thread has no id of its own; its key is its root's post number.** An
   OP's home thread is its own number, so the two foreign keys between
   `post` and `thread` are deferred to the end of the transaction.

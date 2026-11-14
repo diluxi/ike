@@ -1,4 +1,4 @@
-%% The Cowboy listener: everything nginx does not serve from disk.
+%% The Cowboy listener: everything Caddy does not serve from disk.
 -module(ike_http).
 
 -export([child_spec/0]).

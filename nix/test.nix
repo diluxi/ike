@@ -1,5 +1,5 @@
 # boots the module in a vm and asks it over http: the black-box harness the
-# later steps' tests (nginx, backup and restore) grow in
+# later steps' tests (Caddy, backup and restore) grow in
 { pkgs }: pkgs.testers.runNixOSTest {
 	name = "ike-module";
 
