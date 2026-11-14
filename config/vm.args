@@ -1,0 +1,3 @@
+## one node, never distributed: no name, no cookie, no epmd
+-start_epmd false
++K true

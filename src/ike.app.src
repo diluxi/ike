@@ -1,0 +1,10 @@
+{application, ike, [
+    {description, "imageboard, booru and wiki over one store"},
+    {vsn, "0.0.0"},
+    {registered, [ike_sup]},
+    {mod, {ike_app, []}},
+    {applications, [kernel, stdlib, cowboy]},
+    {env, [
+        {listen, #{ip => {127, 0, 0, 1}, port => 8970}}
+    ]}
+]}.
