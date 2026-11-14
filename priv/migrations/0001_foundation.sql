@@ -39,6 +39,8 @@ CREATE TABLE post (
 	thread INTEGER NOT NULL
 		REFERENCES thread (root) DEFERRABLE INITIALLY DEFERRED,
 	actor INTEGER NOT NULL REFERENCES actor (id),
+	-- seconds since the epoch, utc, set by the writer
+	time INTEGER NOT NULL,
 	parent INTEGER REFERENCES post (id),
 	asset BLOB REFERENCES asset (hash),
 	body TEXT NOT NULL

@@ -109,7 +109,8 @@ op_is_its_own_thread(Config) ->
     ok = esqlite3:exec(Conn, "ROLLBACK"),
     ok = esqlite3:exec(
         Conn,
-        "BEGIN; INSERT INTO post (thread, actor, body) VALUES (9, 1, 'x')"
+        "BEGIN; INSERT INTO post (thread, actor, time, body)"
+        " VALUES (9, 1, 0, 'x')"
     ),
     {error, _} = esqlite3:exec(Conn, "COMMIT"),
     ok = esqlite3:exec(Conn, "ROLLBACK"),
@@ -265,7 +266,7 @@ op(Conn) ->
     [] = esqlite3:q(Conn, "INSERT INTO thread (root) VALUES (?1)", [Next]),
     [[Next]] = esqlite3:q(
         Conn,
-        "INSERT INTO post (thread, actor, body) VALUES (?1, 1, 'op')"
+        "INSERT INTO post (thread, actor, time, body) VALUES (?1, 1, 0, 'op')"
         " RETURNING id",
         [Next]
     ),
@@ -275,7 +276,7 @@ op(Conn) ->
 reply(Conn, Thread) ->
     [[Id]] = esqlite3:q(
         Conn,
-        "INSERT INTO post (thread, actor, body) VALUES (?1, 1, 'reply')"
+        "INSERT INTO post (thread, actor, time, body) VALUES (?1, 1, 0, 'reply')"
         " RETURNING id",
         [Thread]
     ),
