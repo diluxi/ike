@@ -22,37 +22,40 @@ answered question moves to `decisions.md` with its answer.
   original upload's hash", singular; G3 speaks of "every original hash seen
   for it", and dedup maps many originals onto one stored asset. One column
   on the asset cannot hold that. *Proposed:* a table of original hashes per
-  asset, which outlives collected uploads. Needs a yes before step 3.
+  asset, which outlives collected uploads. Needs a yes before M1.
 - **C4 A global `>>N` and `>>>/board/N`.** If the post sequence is global,
   the board in `>>>/board/N` picks nothing that `>>N` didn't. Either the
   board is only a hint for rendering and for remote boards later, or
   numbering is per board and "Global `>>N`" is wrong. *Assumed:* one global
-  sequence. Needs a yes before step 3.
+  sequence, and the schema is built on that.
 - **C5 Flakes.** The stack names a Nix flake; fog has none and wants none.
   Not a real conflict: `default.nix` is the entry and takes its pins from
   `pins.json` as fog's does; `flake.nix` wraps it and has no inputs
   (decisions.md). Listed so it is not rediscovered.
 
-## Blocking step 3 (schema)
+## Assumed by the schema (step 3)
+
+lux said to go on before answering these, so migration 0001 takes the
+answer that stores least and is cheapest to change. Each is still lux's.
 
 - **Q1 Does a post carry a time?** The post primitive lists text, an
   optional asset and an optional parent; only uploads list a time, and
-  anonymous text posts "store nothing beyond their contents". A board
-  without timestamps is unusual, and a precise one helps correlate a post
-  with a connection. No time, a coarse one (minute, hour), or a full one?
-- **Q2 Who is the actor of a text post made while logged in?** M0's own test
-  is a logged-in POST. Is that post the account's, or the anonymous actor's
-  like an image post's would be shown? *Proposed:* posts always point at an
-  actor; anonymous is one shared row.
-- **Q3 The upload-to-account link (I4, open decision).** The uploads table
-  is in M0. *Stub:* the column is an opaque blob written and read only
-  through one module, whose M0 implementation stores the actor id as is; an
-  encrypting one can replace it without a schema change. Since no upload
-  exists before M1, nothing is committed to either answer. Is that stub
-  acceptable?
-- **Q4 Reply parents (open decision).** The post's optional parent is in the
-  schema; whether it is the first `>>N` or chosen explicitly is open.
-  *Stub:* a nullable column that M0 never fills.
+  anonymous text posts "store nothing beyond their contents". A precise
+  time helps correlate a post with a connection. *Assumed:* no time column;
+  order is the post number. A coarse or full time is one `ALTER TABLE`
+  away, but posts made before it will have none.
+- **Q2 Who is the actor of a text post made while logged in?** M0's own
+  test is a logged-in POST. *Assumed:* every post points at an actor, and
+  anonymous is one shared row (id 1). Which actor a logged-in text post
+  gets is the writer's choice in step 4, not the schema's.
+- **Q4 Reply parents (open decision).** *Stub:* a nullable `parent` column
+  that M0 never fills.
+- **C4** above: one global sequence, no board column yet.
+
+Q3 (the upload-to-account link, I4) and C3 (original hashes) no longer
+touch M0: the schema has no upload table, since nothing uploads before M1.
+`asset` is only its hash, so that a post can name one and invariant 9 has
+something to test. Both questions come back with M1's migration.
 
 ## Blocking later steps of M0
 
