@@ -62,14 +62,11 @@ here.
 - **Q22 Purge entries and hashes (G5).** Text-only purges log the
   reason and the number. When assets arrive, whether the hash is shown
   is still open; nothing logs one yet.
-- **Q23 Tools for the asset pipeline.** phi.md allows nothing beyond its
-  stack without asking, and step 6 cannot start without: libvips (decode,
-  dimensions, thumbnails), libjpeg-turbo's `jpegtran` (lossless JPEG
-  stripping and orientation), a PNG/WebP chunk filter by allowlist, and
-  exiftool in the tests only (the P7 inspector). The chunk filter may
-  not run in ike's VM (invariant 6); it could be a small C or Zig
-  program in the repo, or an escript run as its own OS process. Which
-  of these may be added, and in what for the filter?
+- **Q23 Tools for the asset pipeline.** lux: the chunk filter in Zig;
+  tests black-box over the tools and fixtures. Still to confirm: libvips
+  (header checks against bombs, thumbnails), libjpeg-turbo's `jpegtran`
+  (lossless JPEG stripping, orientation), Zig, and exiftool in the tests
+  only. Audio with cover art later brings ffmpeg, as video does.
 - **Q27 The upload-to-account link (I4).** lux, 2026-11-15: maybe drop
   it, since anyone wanting to stay anonymous logs out first. Two things
   to weigh before deciding: images cannot be posted logged out (A1;
