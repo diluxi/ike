@@ -424,3 +424,48 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Two accounts can carry one nick** if two issuers, or one careless
   one, say so. With a single issuer that is the provider's to prevent;
   it wants a unique index before a second issuer or `/user/<nick>`.
+
+## Posting without an account (M1)
+
+- **Nobody posts where a board is not locked.** Boards are still made
+  locked, and nothing in ike unlocks one before there are moderators
+  (step 5); the tests set `board.locked` in the database by hand, as
+  an operator could.
+- **The form is tied to the site by a cookie, not a session.** A
+  browser without an account gets `__Host-ike-form`: 32 random bytes,
+  Secure, HttpOnly, SameSite=Strict, no expiry, and the same value in
+  the form. A post is taken when the two match. ike keeps none of
+  them, so they name nobody and tie no two posts together on the
+  server (hazard I2); another site can neither read the cookie nor
+  set one under `__Host-`.
+- **The limiter counts in memory only** (planning.md, hazards N3 to
+  N5). An address, or for IPv6 its network, is hashed with HMAC-SHA256
+  under a random key and counted in an ETS table; key and counts are
+  thrown away every `salt_seconds`, and with the process. Nothing of
+  it is logged, written, or sent in a message. This reads invariant 1
+  as it is worded ("written to disk or logs"), not as widely as
+  phi.md's "log or store": Q18.
+- **Counted at the door.** `ike_http_anon` charges every POST before
+  it forgets the peer, and answers 429 itself to one that is over and
+  has no session. Whatever goes wrong while counting becomes that
+  answer and is reported nowhere, since a report would quote the
+  address. No handler ever holds an address or a hash of one.
+- **Every POST counts,** refused or not, with an account or without;
+  only who has a session is let through when over. An account can be
+  banned, and nobody cannot.
+- **`X-Forwarded-For` is believed from `proxies` only,** and then its
+  last entry: the one the proxy wrote (N3). The module names the
+  loopback when it sets up Caddy, whose default is to overwrite what
+  a client sent. A proxy that says nothing readable has everyone
+  behind it counted as one.
+- **IPv6 by /64,** or /56 or /48 by configuration (N4). IPv4, and
+  IPv4 written as IPv6, by the address.
+- **A pace for each board** (A2): posts by nobody on one board, from
+  anywhere, are counted too, and only those that would have gone
+  through. Configuration for now; a moderator's to set in step 5.
+- *Simplifications:* fixed windows, not a sliding one or a token
+  bucket, so a burst across a window's edge gets twice the count.
+  A new key forgets every count rather than carrying them over. At
+  200000 rows everyone without an account waits, instead of the
+  oldest rows being dropped. The numbers (4 a minute an address, 10 a
+  minute a board, an hour a key) are picked, not measured.

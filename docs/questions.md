@@ -41,6 +41,19 @@ here.
   *Meanwhile:* no link at all. If locked boards should keep one, it is
   I4's table with posts in it as well, and I4's answer decides its
   shape.
+- **Q17 How long the limiter's key lives** (N5: an open decision in
+  planning.md). *Stub:* `salt_seconds`, an hour by default. Shorter
+  forgets sooner and limits less: nothing counted by address can span
+  two keys.
+- **Q18 An address in memory.** phi.md says never to log or store an
+  address or anything derived from one; invariant 1 says written to
+  disk or logs; planning.md asks for the limiter. The limiter holds a
+  keyed hash of an address in memory for at most `salt_seconds`, and
+  that is all (decisions.md). If "store" is meant to cover memory too,
+  the limiter can only count by board, and step 4's address limit
+  goes. A crash dump would hold the table; the module turns dumps off.
+- **Q19 Unlocking a board.** Nothing does it yet. A moderator's
+  action in step 5, or the operator's in configuration, or both?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

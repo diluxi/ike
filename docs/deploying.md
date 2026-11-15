@@ -102,6 +102,13 @@ fog to an exact tree, so the pin bump is the commit to review.
   on the loopback port. It has no access log, on purpose (invariant 1),
   and caps request bodies at 64 KiB. Caddy's user joins the group `ike`
   to read the pages; it cannot read `/var/lib/ike`.
+- **Limits.** `services.ike.limit` says how often an address and a
+  board take posts without an account. With `caddy.enable` ike believes
+  the loopback's `X-Forwarded-For`, which Caddy overwrites with the
+  address it saw unless `trusted_proxies` is set; behind another proxy
+  in front of Caddy that would have to be set, and nothing else.
+  Without the module's Caddy, ike believes no such header and counts
+  whoever connects.
 - **User.** A static system user `ike`. State in `/var/lib/ike` (0700),
   pages in `/var/cache/ike` (0750).
 - **Authelia.** A confidential client `ike` in `lemma/id.nix`:

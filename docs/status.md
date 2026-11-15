@@ -22,8 +22,11 @@ Each a branch on the one before, starting from `phi/sessions`.
 3. **Links** (`phi/links`): done. `>>N` and `>>>/b/N`, reverse links
    kept by the writer and shown under each post, `/p/N`, and the same
    tombstone for every link to nothing.
-4. **Anonymous text posts** on unlocked boards, behind the rate limiter
-   (N3 to N5); invariant 1's test grows with it.
+4. **Anonymous text posts** (`phi/anon`): done. Nobody posts on an
+   unlocked board, through a form tied to the site by a cookie; every
+   post is counted by address at the door and by board behind it, in
+   memory. Invariant 1's test floods the limiter and searches for the
+   addresses afterwards.
 5. **Roles and moderation:** `groups` claim; hide, delete, purge,
    account ban, lockdown; the mod log; invariant 8's real test.
 6. **Assets:** the sandboxed pipeline, stripping with its corpus and
@@ -33,7 +36,7 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-Step 4.
+Step 5.
 
 ## Blocked on lux
 
@@ -47,6 +50,9 @@ Step 4.
   table's shape.
 - **Before step 7:** the Impressum address, and the lawyer's answers
   (L1 to L3).
+- **Q18:** whether a keyed hash of an address may live in memory at
+  all. Step 4's limiter assumes yes.
+- **Q17, Q19:** the limiter key's lifetime; who unlocks a board.
 - **Q14:** whether user boards come before M6.
 - **Q16:** whether an unsigned post on a locked board may stay
   untraceable to its account.
