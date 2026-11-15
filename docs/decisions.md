@@ -507,6 +507,9 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   be traced to an account, so cannot ban one (Q16 still stands).
 - **Lock and unlock** are moderator actions now (Q19's answer, as far
   as this goes).
+- **Asking for what already is** (hiding a hidden post, locking a locked
+  board, banning a banned account) answers 409 and logs nothing; a
+  target that is not there answers 404.
 - **The hold** between delete and purge is `hold_seconds`, 14 days by
   default; a timer in the writer purges what is due, at most once a
   minute.

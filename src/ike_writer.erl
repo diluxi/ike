@@ -507,7 +507,8 @@ act(Conn, Who, Kind, Name, Reason, Time) when
                 effects()
             );
         {ok, _} ->
-            {error, no_such_board};
+            %% there, and already so
+            there(Conn, <<"SELECT 1 FROM board WHERE name = ?1 AND log = 0">>, Name, no_such_board);
         {error, _} = Error ->
             Error
     end;
@@ -520,7 +521,7 @@ act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
                 effects()
             );
         {ok, _} ->
-            {error, no_such_account};
+            there(Conn, <<"SELECT 1 FROM actor WHERE id = ?1">>, Account, no_such_account);
         {error, _} = Error ->
             Error
     end;
@@ -563,6 +564,15 @@ act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     end;
 act(_Conn, _Who, _Kind, _Target, _Reason, _Time) ->
     {error, bad_request}.
+
+%% whether a thing that is not in the state asked of it is there at all
+-spec there(ike_db:writer(), binary(), term(), atom()) -> error().
+there(Conn, Sql, Key, Missing) ->
+    case ike_db:q(Conn, Sql, [Key]) of
+        {ok, [_]} -> {error, not_now};
+        {ok, _} -> {error, Missing};
+        {error, _} = Error -> Error
+    end.
 
 -spec effects() -> effects().
 effects() ->

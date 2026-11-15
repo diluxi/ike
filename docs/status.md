@@ -27,13 +27,14 @@ Each a branch on the one before, starting from `phi/sessions`.
    post is counted by address at the door and by board behind it, in
    memory. Invariant 1's test floods the limiter and searches for the
    addresses afterwards.
-5. **Roles and moderation** (`phi/mod`): done in the core; see
-   decisions.md. Roles from `groups`; hide, delete with a hold, restore,
-   purge, ban, unban, lock, unlock at `/mod`; the log on `/board/mod`;
-   invariant 8's real test. Still owed: a moderation suite of its own
-   (permissions, hold expiry, ban and login, restore), module options
-   for `roles` and `hold_seconds`, Authelia's `groups` in deploying.md,
-   and replacing `ike_browser:unlock/2`'s SQL with the lock form.
+5. **Roles and moderation** (`phi/mod`): done; see decisions.md. Roles
+   from `groups`; hide, delete with a hold, restore, purge, ban, unban,
+   lock, unlock at `/mod`; the log on `/board/mod`; invariant 8's real
+   test, and `ike_mod_SUITE`. The first commit extended only invariant
+   4's class list; invariants 2, 4 and 8 caught up one commit later
+   (0377cc7), against phi.md's same-commit rule. Suites still open
+   boards by SQL for setup, so that the log's posts do not shift their
+   numbers; the lock form is tested in `ike_mod_SUITE`.
 6. **Assets:** the sandboxed pipeline, stripping with its corpus and
    determinism test, thumbnails, the media origin, uploads, hash dedup
    and hash bans; invariants 5, 6, 9 and 11 for real.
@@ -41,12 +42,14 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-The rest of step 5 (above), then step 6. `phi/board` to `phi/mod`
-are not on origin: the ssh agent refused to sign the push.
+Step 6. Everything up to `phi/mod` is on origin.
 
 ## Blocked on lux
 
 - **Merging** the M0 stack, then `phi/board`.
+- **Authelia's `groups` before deploying `phi/mod`:** ike now asks for
+  the `groups` scope, and Authelia refuses a scope the client lacks, so
+  every login breaks until fog's client lists it (deploying.md).
 - **Step 5's stubs:** the hold period (14 days); who may do what (Q20);
   purge and snapshots (Q21, Q8); hashes in purge entries (Q22).
 - **Before step 6:** the upload-to-account link, plaintext or to an

@@ -56,7 +56,9 @@ here.
   action in step 5, or the operator's in configuration, or both?
 - **Q20 Who may do what.** Planning names hide, delete, purge, ban and
   lockdown but not which role does which. Stubbed in `ike_role:may/2`:
-  janitor hides/unhides, moderator all but purge, admin all.
+  janitor hides/unhides, moderator all but purge, admin all. Nothing
+  stops a moderator banning an admin's account, or their own (the ban
+  goes through a post the account signed); should roles rank accounts?
 - **Q21 Purge and the snapshots.** Invariant 8's test leaves `backups/`
   out, since a snapshot taken before a purge still holds the content
   until it ages out (D7). Is that the reading wanted, or should purge

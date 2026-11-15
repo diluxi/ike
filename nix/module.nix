@@ -25,6 +25,12 @@
 				{anonymous_names, [${lib.concatMapStringsSep ", "
 					(name: "<<${builtins.toJSON name}/utf8>>")
 					cfg.anonymousNames}]},
+				{roles, #{
+					admin => <<${builtins.toJSON cfg.roles.admin}/utf8>>,
+					moderator => <<${builtins.toJSON cfg.roles.moderator}/utf8>>,
+					janitor => <<${builtins.toJSON cfg.roles.janitor}/utf8>>
+				}},
+				{hold_seconds, ${toString cfg.holdSeconds}},
 				{limit, #{
 					posts => ${toString cfg.limit.posts},
 					seconds => ${toString cfg.limit.seconds},
@@ -206,6 +212,32 @@ in {
 					or a 48 to each.
 				'';
 			};
+		};
+		roles = {
+			admin = lib.mkOption {
+				type = lib.types.str;
+				default = "ike-admin";
+				description = "The provider's group whose accounts are admins: every action, purge included.";
+			};
+			moderator = lib.mkOption {
+				type = lib.types.str;
+				default = "ike-moderator";
+				description = "The group whose accounts moderate: everything but purge.";
+			};
+			janitor = lib.mkOption {
+				type = lib.types.str;
+				default = "ike-janitor";
+				description = "The group whose accounts may hide and unhide posts.";
+			};
+		};
+
+		holdSeconds = lib.mkOption {
+			type = lib.types.ints.positive;
+			default = 14 * 86400;
+			description = ''
+				How long a deleted post is kept, out of sight, before ike
+				purges it. An open decision in planning.md; this is a stub.
+			'';
 		};
 
 		caddy = {

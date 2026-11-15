@@ -180,8 +180,9 @@ query(Config, Sql, Args) ->
         esqlite3:close(Conn)
     end.
 
-%% what a moderator will do once there are moderators: until then, by
-%% hand in the database, as an operator would
+%% opening a board for a suite's setup, by hand in the database as an
+%% operator would. a moderator does it by form (ike_mod_SUITE:locking);
+%% that would put the log's posts ahead of the suite's own
 unlock(Config, Board) ->
     [] = query(Config, "UPDATE board SET locked = 0 WHERE name = ?", [Board]),
     ok.
