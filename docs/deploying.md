@@ -74,12 +74,12 @@ fog to an exact tree, so the pin bump is the commit to review.
 		enable = true;
 		caddy = {
 			enable = true;
-			hostName = "ike.amartia.online";
+			hostName = "chike.amartia.online";
 		};
 		oidc = {
-			issuer = "https://id.amartia.online";
+			issuer = "https://auth.amartia.online";
 			clientId = "ike";
-			redirectUri = "https://ike.amartia.online/login/callback";
+			redirectUri = "https://chike.amartia.online/login/callback";
 			# only for a confidential client
 			clientSecretFile = config.crypt.secrets.ike-oidc.path;
 		};
@@ -91,8 +91,8 @@ fog to an exact tree, so the pin bump is the commit to review.
 }
 ```
 
-The names above are examples; which host name and which kind of client
-are open (questions.md, Q7).
+The client id and the kind of client are still open (questions.md, Q7),
+and so is what `ikooru` and `wike` do about login once they exist (Q13).
 
 - **Caddy.** `caddy.enable` adds a virtual host to fog's Caddy: rendered
   pages straight from `/var/cache/ike/pages`, everything else to Cowboy
@@ -111,7 +111,7 @@ are open (questions.md, Q7).
 ## Backups and restoring
 
 Snapshots land in `/var/lib/ike/backups/<UTC time>.db`, whole SQLite
-databases, never half-written. Copying them elsewhere (witness0, say) is
+databases, never half-written, each a full copy. Copying them elsewhere (witness0, say) is
 fog's; anything that copies files will do.
 
 To restore:
@@ -125,7 +125,8 @@ systemctl start ike
 ```
 
 ike migrates the snapshot if it is from an older version and renders
-every page again. Sessions do not survive; accounts do. CI does this on
+every page again. Sessions outlive a restart but not a restore, since
+snapshots are taken without them; accounts do. CI does this on
 every change (`ike_backup_SUITE`).
 
 ## Not there

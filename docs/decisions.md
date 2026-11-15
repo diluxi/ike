@@ -207,10 +207,14 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   drain first.
 - **The renderer writes its own files.** Invariant 3 is read as: the
   database, and every deletion and unlink, belong to the writer; pages
-  are derived and only ever replaced. See `questions.md`.
-- **Nothing shows who posted.** A post made by an account stores that
-  account's actor and displays nothing of it. How posters are shown is
-  not M0's to decide.
+  are derived and only ever replaced. lux (was Q9): fine, so long as it
+  stays linearly auditable. The test lists exactly who changes files.
+- **Nothing shows who posted, yet.** A post made by an account stores
+  that account's actor and displays nothing of it. lux (was Q10): the
+  account's name goes where imageboards put the anonymous name, linking
+  to `/user/<nick>`; that page looks like a board whose pinned post is
+  the user's bio, on each of the three views. Not built: it needs a
+  name kept per actor and the user boards, see `questions.md`, Q14.
 - **Cowboy serves the pages too**, from the same files, so that ike works
   without a web server in front (development, tests). Caddy answers
   those paths first where it is there.
@@ -253,9 +257,19 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   minute, when a token names one that is not known.
 - **Both kinds of client work:** with a secret file the token request
   authenticates with it, without one it relies on PKCE (Q7).
-- **Sessions live in memory** (ETS), eight hours, with a CSRF token
-  each. *Simplification:* a restart logs everyone out. Nothing about who
-  is logged in reaches the disk, and there is no session key to keep.
+- **Sessions are rows** (lux, was Q12: they should outlive a restart),
+  eight hours, with a CSRF token each. The writer writes and deletes
+  them; they are read once at start into a table in memory, which
+  answers every request. A row is named by the SHA-256 of what the
+  cookie holds, so reading the database gives nobody a session. Chosen
+  over signed cookies, which need a key kept somewhere and cannot be
+  ended by logging out.
+- **Snapshots are taken without the session rows.** A backup does not
+  say who was logged in when, and a restore revives no session.
+  *Simplification:* the live database does say so for eight hours, and
+  `ike_db` knows the one table's name to scrub it from the copy.
+- **Half-finished logins stay in memory.** A restart in the middle of a
+  login means starting it again.
 - **Cookies** are `__Host-` prefixed, `Secure`, `HttpOnly`,
   `SameSite=Lax` (I2).
 - **Every way a login can fail gives the same answer**, a 400 that says
@@ -272,7 +286,9 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   (Ben Johnson, 2021) stays the alternative should that stop being true.
 - **`<data_dir>/backups/<UTC time>.db`**, one a day and seven kept by
   default, both options. Seven is a stand-in for the retention window,
-  which is lux's (Q8, D7). Old ones are unlinked by the writer.
+  which is lux's (Q8, D7); lux finds it generous but leaves it for now.
+  Each snapshot is a whole copy of the database, sharing nothing with
+  the others or with it. Old ones are unlinked by the writer.
 - **A restart takes no snapshot of its own** unless the newest is older
   than the interval, so that a crash loop cannot push the good ones out.
 - **A restore is a copy:** stop, put a snapshot where `ike.db` was, start.
@@ -287,7 +303,8 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   things M0 lacks (decoder, fetcher, purge, staging, stripper); their
   cases are *tripwires*: they assert the thing is absent, fail when it
   arrives, and are to be replaced by the real test in the same change.
-  They prove nothing about the thing itself.
+  They prove nothing about the thing itself. lux (was Q11): that will do
+  for M0.
 - **Structure is read from the compiled modules** with xref: who calls
   SQLite, who opens a writer, who changes files, who connects out. The
   lists are exact, so a new such place fails until it is listed.
@@ -296,3 +313,13 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   It checks that nothing is logged for ordinary and refused requests,
   and structurally that the forgetting handler is first and nothing asks
   for a peer.
+
+## Names
+
+- **The repository is public** (lux, was Q5), so fog can pin it without
+  credentials.
+- **Three host names:** `chike.amartia.online`, `ikooru.amartia.online`
+  and `wike.amartia.online`, one per view. M0 has only the board, so
+  the module still takes one name. What three names mean for one login
+  is `questions.md`, Q13.
+- **Authelia answers at `auth.amartia.online`**, which is the issuer.

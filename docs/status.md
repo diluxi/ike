@@ -26,6 +26,10 @@ written; waiting on lux to merge and to answer.
   one case per invariant. Six test what M0 has; five are tripwires for
   what it lacks (decisions.md, Invariant tests).
 
+- **After lux's answers** (`phi/sessions`, on `phi/invariants`):
+  sessions as rows, so that a restart logs nobody out; snapshots taken
+  without them.
+
 M0's exit sentence, "a logged-in POST writes a row and regenerates a
 page the web server serves, and a restore from backup reproduces it", is
 `ike_login_SUITE` and `ike_backup_SUITE` over HTTP, and the VM test for
@@ -35,26 +39,25 @@ has no provider.
 ## Checks
 
 `nix-build -A checks` (release, tests with xref and erlfmt, eqWAlizer,
-the module in a VM) was run on the tips of `phi/login`, `phi/backup` and
-`phi/invariants`. `phi/writer` and `phi/render` were checked with the
-VM test and the host's rebar3 and eqWAlizer as they were written, not
-with the full set at their final tips.
+the module in a VM) passes on the tips of `phi/login`, `phi/backup`,
+`phi/invariants` and `phi/sessions`. `phi/writer` and `phi/render` were
+checked with the VM test and the host's rebar3 and eqWAlizer as they
+were written, not with the full set at their final tips.
 
 ## Next
 
-Nothing in M0. M1 does not start until lux says so.
+Nothing in M0. M1 does not start until lux says so, and its migration
+waits for I4 (Q3) and C3.
 
 ## Blocked on lux
 
 - **Review and merge** `phi/writer` → `phi/render` → `phi/login` →
-  `phi/backup` → `phi/invariants`, in that order; each is stacked on the
-  one before.
-- **Questions** (`questions.md`): Q7 the Authelia client and ike's host
-  name; Q8 retention; Q9 whether the renderer may write its own files
-  under invariant 3; Q10 how an account's post is shown; Q11 whether
-  tripwires will do for the invariants M0 has no subject for; Q12
-  sessions across restarts; Q5 whether the repository is public; C3 and
-  Q3 before M1's migration.
+  `phi/backup` → `phi/invariants` → `phi/sessions`, in that order; each
+  is stacked on the one before. All are on origin.
+- **Questions** (`questions.md`): Q7 the client id and kind of client;
+  Q8 retention, before M1's purge; Q13 one login over three hosts; Q14
+  where a nick comes from and when user boards are built; C3 and Q3
+  before M1's migration.
 - **Wording in lux's documents:** invariant 8 and the blocklist, nginx in
   planning.md.
 - **Not committed, as asked:** `docs/planning.md`, `docs/hazards.md`,

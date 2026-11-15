@@ -28,32 +28,31 @@ here.
   M0 has no upload table.
 - **Q4 Reply parents** (open decision in planning.md). *Stub:* a nullable
   `parent` column that M0 never fills.
-- **Q5 Is the repository public?** `./fog pin` and `fetchTarball` fetch
-  GitHub's archive without credentials, so fog can pin ike only if it is.
-- **Q7 Authelia client.** Step 6 needs the client id, the redirect URI's
-  host (which name ike is served under), and whether the client is public
-  (PKCE only) or confidential. Both are built; tests use a mock provider.
-  Also: Authelia must sign id tokens with RS256 (its default).
-- **Q8 Retention** (D6, D7). How many snapshots are kept, and for how
-  long. *Meanwhile:* `services.ike.backup.keep`, defaulting to seven daily
-  ones. Purged content would live that long in them; M1's purge has to
-  know the answer.
-- **Q9 Invariant 3 and the renderer.** "Every write, deletion and file
-  unlink goes through the single writer." The renderer writes page files
-  itself, as planning.md's diagram has it. *Meanwhile:* read as the
-  database, and every deletion and unlink, being the writer's; pages are
-  derived and only replaced. The test lists exactly who changes files,
-  so it says so out loud. If the stricter reading is meant, page writes
-  become messages to the writer.
-- **Q10 How an account's post is shown.** It stores the account's actor
-  and shows nothing. Anonymous to readers, like image posts are planned
-  to be? A name? Not needed before M1.
-- **Q11 Tripwires.** Five of the eleven invariant tests can only assert
-  that their subject does not exist yet (decisions.md). Is that enough
-  for M0's "the 11 invariants as CI tests"?
-- **Q12 Sessions across restarts.** They are in memory, so a deploy logs
-  everyone out. Keeping them needs either a table (then who is logged in
-  is on disk) or signed cookies (then a key to keep).
+- **Q7 Authelia client**, what is left of it. The issuer is
+  `https://auth.amartia.online`, the board `chike.amartia.online`. Still
+  open: the client id, and whether the client is public (PKCE only) or
+  confidential. Both are built. Authelia must sign id tokens with RS256
+  (its default).
+- **Q8 Retention** (D6, D7). *Meanwhile:* seven daily snapshots, which
+  lux finds generous. They are not copy-on-write: each is a whole copy
+  through SQLite's backup API, so seven cost seven times the database,
+  whatever the filesystem. Small while there are no assets in it, and
+  assets will not be in it. Still to answer before M1: purged content
+  lives in snapshots for as long as they are kept.
+- **Q13 Three hosts, one login?** Session cookies are `__Host-`
+  prefixed and so belong to one host; the redirect URI names one host
+  too. With three names a person logs in once per view (one redirect
+  each, while Authelia remembers them), unless the cookie is widened to
+  `amartia.online`, where every other subdomain could read it. Or one
+  name carries login and posting and the others only show. *Meanwhile:*
+  one host, the board's. To answer before a second view exists.
+- **Q14 Names and user boards.** For the name on a post (decisions.md,
+  Renderer) ike has to keep a nick per actor: from the provider's
+  `preferred_username` (then scope `profile`, and a rename there has to
+  re-render every page naming them), or chosen in ike? And which
+  milestone do user boards belong to? The readme says image posts are
+  shown as anonymous; this is taken to stay so, the name being for text
+  posts made while logged in.
 
 ## Open decisions in planning.md
 
