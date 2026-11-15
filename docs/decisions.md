@@ -137,6 +137,12 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   was Q2): one shared row, id 1.
 - **One global post sequence** (lux, 2026-11-14; was C4): ikooru spans the
   whole of chike, and there are no boorus per board.
+- **What belongs to an upload is stored with the upload, not the asset**
+  (lux, 2026-11-15; was C3): the hash of the bytes as sent, and whatever
+  else describes that one act of uploading, the way an artist's commentary
+  belongs to a posting and not to the work. The asset is only the stored
+  bytes, so several uploads share one asset and each keeps its own
+  original hash. No table yet: uploads arrive with M1.
 - **A thread has no id of its own; its key is its root's post number.** An
   OP's home thread is its own number, so the two foreign keys between
   `post` and `thread` are deferred to the end of the transaction.

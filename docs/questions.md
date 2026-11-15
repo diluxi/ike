@@ -19,14 +19,11 @@ here.
 
 ## Open
 
-- **C3 Where the original hash lives.** Not about similarity hashes: this
-  is the SHA-256 of the bytes as uploaded, before stripping. Two uploads
-  that differ only in metadata strip to the same stored asset, so one
-  asset has several original hashes, and G3 wants each of them blocklisted
-  on purge so the same file cannot be re-uploaded. planning.md gives the
-  asset one "original upload's hash". *Proposed:* a table of original
-  hashes per asset. Perceptual hashes are a separate matter (and a
-  separate column). Needs a yes before M1.
+- **C3, what is left of it.** The original hash is the upload's
+  (decisions.md). G3 wants every original hash of a purged asset
+  blocklisted, so those hashes have to be readable for as long as the
+  asset lives: either upload rows are kept that long, or their hashes are
+  copied out when an upload is collected. For M1's migration.
 - **Q3 The upload-to-account link** (I4). Comes back with M1's migration;
   M0 has no upload table.
 - **Q4 Reply parents** (open decision in planning.md). *Stub:* a nullable
