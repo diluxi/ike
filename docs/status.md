@@ -45,8 +45,7 @@ Each a branch on the one before, starting from `phi/sessions`.
 Step 6, once the tools (Q23), the upload-to-account link (Q27) and the
 media domain (Q28) are settled. Step 7 is set aside: no Impressum in
 ike, and notice and action waits until ike is hosted for real.
-Origin has `phi/mod` up to 1945743; the commits after it wait on the
-ssh agent, which refused to sign the push.
+Everything up to `phi/mod` is on origin.
 
 1945743 to 8b9cc29 carry the fable cert though made under opus; from
 7bb2f49 on, commits carry the opus cert.
