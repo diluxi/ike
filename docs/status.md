@@ -19,7 +19,9 @@ Each a branch on the one before, starting from `phi/sessions`.
 2. **Names** (`phi/names`): done. A nick from `preferred_username`;
    the name on a post only when its account ticks "post as", and one of
    the server's names for nobody otherwise.
-3. **Links:** `>>N` and `>>>/b/N` in text, reverse links, tombstones.
+3. **Links** (`phi/links`): done. `>>N` and `>>>/b/N`, reverse links
+   kept by the writer and shown under each post, `/p/N`, and the same
+   tombstone for every link to nothing.
 4. **Anonymous text posts** on unlocked boards, behind the rate limiter
    (N3 to N5); invariant 1's test grows with it.
 5. **Roles and moderation:** `groups` claim; hide, delete, purge,
@@ -31,7 +33,7 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-Step 3.
+Step 4.
 
 ## Blocked on lux
 

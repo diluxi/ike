@@ -353,6 +353,37 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   waits for federation.
 - **`>>N` stays global**; a post's number says nothing of its board.
 
+## Links (M1)
+
+- **`>>N` and `>>>/board/N`**, as planning.md's grammar has them. A
+  number is written as ike writes one: no sign, no leading zero, at
+  most 18 digits. `>>>/b/N` is a link only if N is on `b`; since
+  numbers are global it says nothing `>>N` does not, and is kept as
+  typed.
+- **One reading, in `ike_text`,** used by the writer for the reverse
+  links and by the view for the markup, so the two cannot disagree
+  about what is a link (hazard D1). The rows go in with the post, in
+  its transaction.
+- **A link goes to `/p/N`,** answered per request with a redirect to
+  the thread's page (planning.md: stable names resolved at request
+  time, hazard G4). A page is made again only when what it shows
+  changes: a target appearing, or someone new pointing at one of its
+  posts.
+- **`ike_reader`:** one read-only connection behind one process, for
+  what is answered per request. *A simplification:* one, not a pool;
+  lookups queue behind each other.
+- **A link to nothing** is a `span` of class `gone` holding what was
+  typed, the same whether the target is hidden, purged, was never
+  there or is yet to come (hazard G5). A target that appears later
+  turns it into a link: the reverse-link table says which pages to
+  make again.
+- **Who points at a post** is listed under it, oldest first.
+- **At most 32 links in a post;** what follows is only text. Each is a
+  row and possibly a page to render. *A number picked, not measured.*
+- **The renderer reads targets from `link`, not from the text.** A
+  post written before `link` was filled would show its links as gone;
+  there is none, since nothing was deployed.
+
 ## Uploads (M1, ahead of the code)
 
 - **Original hashes are copied out** (lux, was C3) when an upload is
