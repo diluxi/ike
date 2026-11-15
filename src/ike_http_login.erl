@@ -74,10 +74,10 @@ callback(Req0) ->
 -spec finish(binary(), ike_session:login(), cowboy_req:req()) -> cowboy_req:req().
 finish(Code, Login, Req) ->
     case ike_oidc:subject(Code, Login) of
-        {ok, Issuer, Subject} ->
-            case ike_writer:local_actor(Issuer, Subject) of
+        {ok, Issuer, Subject, Nick} ->
+            case ike_writer:local_actor(Issuer, Subject, Nick) of
                 {ok, Actor} ->
-                    case ike_session:create(Actor) of
+                    case ike_session:create(Actor, Nick) of
                         {ok, Id, _Session} ->
                             Lifetime = ike_config:session_seconds(),
                             ike_http:see_other(

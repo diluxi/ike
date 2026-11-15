@@ -21,7 +21,10 @@
 				{backup_keep, ${toString cfg.backup.keep}},
 				{boards, [${lib.concatStringsSep ", " (lib.mapAttrsToList
 					(name: title: ''{<<"${name}">>, <<${builtins.toJSON title}/utf8>>}'')
-					cfg.boards)}]}${lib.optionalString (cfg.oidc != null) '',
+					cfg.boards)}]},
+				{anonymous_names, [${lib.concatMapStringsSep ", "
+					(name: "<<${builtins.toJSON name}/utf8>>")
+					cfg.anonymousNames}]}${lib.optionalString (cfg.oidc != null) '',
 				{oidc, #{
 					issuer => <<"${cfg.oidc.issuer}">>,
 					client_id => <<"${cfg.oidc.clientId}">>,
@@ -45,6 +48,17 @@ in {
 				The boards there are, as name and title. A name is one to
 				sixteen of a to z and digits. Taking a board out of here
 				does not delete it or its threads.
+			'';
+		};
+
+		anonymousNames = lib.mkOption {
+			type = lib.types.nonEmptyListOf lib.types.str;
+			default = [ "anon" ];
+			example = [ "nemo" "outis" "nihil" ];
+			description = ''
+				What stands where a name would on a post that carries none.
+				Given several, each post takes one of them by its number,
+				and keeps it for as long as the list does not change.
 			'';
 		};
 

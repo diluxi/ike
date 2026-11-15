@@ -143,14 +143,18 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
         "SELECT b.name, b.title FROM thread t JOIN board b ON b.id = t.board"
         " WHERE t.root = ?1"
     >>,
-    Sql = <<"SELECT id, time, body FROM post WHERE thread = ?1 ORDER BY id">>,
+    Sql = <<
+        "SELECT p.id, p.time, p.body, a.name FROM post p JOIN actor a ON a.id = p.actor"
+        " WHERE p.thread = ?1 ORDER BY p.id"
+    >>,
     case ike_db:q(Conn, Where, [Thread]) of
         {ok, [[Name, Title]]} when is_binary(Name), is_binary(Title) ->
             case ike_db:q(Conn, Sql, [Thread]) of
                 {ok, Rows} ->
+                    Names = ike_config:anonymous_names(),
                     Posts = [
-                        #{id => Id, time => Time, body => Body}
-                     || [Id, Time, Body] <- Rows,
+                        #{id => Id, time => Time, body => Body, name => name(Name0, Id, Names)}
+                     || [Id, Time, Body, Name0] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)
@@ -167,6 +171,17 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
             none;
         {error, Reason} ->
             error({render, Thread, Reason})
+    end.
+
+%% an account's name, or one of the names for nobody: always the same
+%% one for the same post, so that a page rendered again reads the same
+-spec name(term(), integer(), [binary(), ...]) -> {account | nobody, binary()}.
+name(Name, _Id, _Names) when is_binary(Name) ->
+    {account, Name};
+name(_, Id, [First | _] = Names) ->
+    case lists:nth(Id rem length(Names) + 1, Names) of
+        Name when is_binary(Name) -> {nobody, Name};
+        _ -> {nobody, First}
     end.
 
 -spec render_board(#state{}, binary()) -> ok.

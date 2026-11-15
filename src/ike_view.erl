@@ -5,7 +5,10 @@
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export_type([post/0, summary/0, board/0]).
 
--type post() :: #{id := integer(), time := integer(), body := binary()}.
+%% name: an account's, or what stands in for one
+-type post() :: #{
+    id := integer(), time := integer(), body := binary(), name := {account | nobody, binary()}
+}.
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
 -type board() :: #{name := binary(), title := binary()}.
@@ -24,12 +27,19 @@ thread(#{name := Name} = Board, Root, Posts) ->
     ]).
 
 -spec post(post()) -> ike_html:html().
-post(#{id := Id, time := Time, body := Body}) ->
+post(#{id := Id, time := Time, body := Body, name := {Kind, Name}}) ->
     N = integer_to_binary(Id),
     Anchor = <<"p", N/binary>>,
     Stamp = stamp(Time),
+    Class =
+        case Kind of
+            account -> <<"name account">>;
+            nobody -> <<"name">>
+        end,
     ike_html:el(article, [{id, Anchor}], [
         ike_html:el(header, [
+            ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
+            ike_html:text(<<" ">>),
             anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
             ike_html:text(<<" ">>),
             ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
@@ -78,7 +88,8 @@ index() ->
 
 %% the form for a new thread or a reply, for whoever is logged in; anyone
 %% else is shown the way to log in. plain forms: nothing here needs a script
--spec post_form(Action :: binary(), {csrf, binary()} | anonymous) -> ike_html:html().
+-spec post_form(Action :: binary(), {csrf, binary(), Name :: binary() | none} | anonymous) ->
+    ike_html:html().
 post_form(Action, anonymous) ->
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
@@ -90,7 +101,32 @@ post_form(Action, anonymous) ->
             ike_html:text(<<".">>)
         ])
     ]);
-post_form(Action, {csrf, Csrf}) ->
+post_form(Action, {csrf, Csrf, Name}) ->
+    %% unticked unless asked for: a post carries no name by default
+    Signed =
+        case Name of
+            none ->
+                [];
+            _ ->
+                [
+                    ike_html:el(p, [
+                        ike_html:el(
+                            input,
+                            [
+                                {type, <<"checkbox">>},
+                                {id, <<"signed">>},
+                                {name, <<"signed">>},
+                                {value, <<"1">>}
+                            ],
+                            []
+                        ),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(label, [{for, <<"signed">>}], [
+                            ike_html:text(<<"post as ", Name/binary>>)
+                        ])
+                    ])
+                ]
+        end,
     Token = ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
@@ -104,10 +140,13 @@ post_form(Action, {csrf, Csrf}) ->
                     [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
                     []
                 )
-            ]),
-            ike_html:el(p, [
-                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
             ])
+            | Signed ++
+                [
+                    ike_html:el(p, [
+                        ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+                    ])
+                ]
         ]),
         ike_html:el(form, [{method, <<"post">>}, {action, <<"/logout">>}], [
             Token,

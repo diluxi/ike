@@ -36,7 +36,7 @@ form(Place, Req) ->
         true ->
             Session =
                 case ike_http_login:session(Req) of
-                    {ok, _Id, #{csrf := Csrf}} -> {csrf, Csrf};
+                    {ok, _Id, #{csrf := Csrf, name := Name}} -> {csrf, Csrf, Name};
                     error -> anonymous
                 end,
             ike_http:page(200, ike_view:post_form(action(Place), Session), Req);
@@ -47,13 +47,22 @@ form(Place, Req) ->
 -spec submit(place(), cowboy_req:req()) -> cowboy_req:req().
 submit(Place, Req0) ->
     case ike_http_login:session(Req0) of
-        {ok, _Id, #{actor := Actor, csrf := Csrf}} ->
+        {ok, _Id, #{actor := Account, csrf := Csrf, name := Name}} ->
             case ike_http:form(Req0) of
                 {ok, #{<<"csrf">> := Token} = Form, Req} ->
                     case
                         byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf)
                     of
                         true ->
+                            %% a post is its account's only when the account
+                            %% asks for that and has a name to put on it.
+                            %% otherwise it is nobody's, and nothing ties
+                            %% the two together
+                            Actor =
+                                case Form of
+                                    #{<<"signed">> := <<"1">>} when is_binary(Name) -> Account;
+                                    _ -> ike_id:anonymous()
+                                end,
                             case exists(Place) of
                                 true -> write(Place, Actor, maps:get(<<"body">>, Form, <<>>), Req);
                                 false -> ike_http:not_found(Req)

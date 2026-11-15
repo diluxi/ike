@@ -7,8 +7,8 @@
 -include_lib("public_key/include/public_key.hrl").
 
 -export([start/2, stop/0, restart/0]).
--export([login/2, begin_login/1, expect/3, callback/3, claims/3, id_token/4]).
--export([post/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
+-export([login/2, login/3, begin_login/1, expect/3, callback/3, claims/3, id_token/4]).
+-export([post/4, sign/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
 -export([query/3, posts/1, page_file/2]).
 
 -define(CLIENT, <<"ike-test">>).
@@ -54,9 +54,13 @@ restart() ->
 
 %% a whole login; returns the session cookie and the form token
 login(Config, Subject) ->
+    login(Config, Subject, #{}).
+
+%% More is claims over the usual ones
+login(Config, Subject, More) ->
     Login = begin_login(Config),
     Code = "code-" ++ binary_to_list(Subject),
-    ok = expect(Login, Code, fun(Nonce) -> id_token(Config, Nonce, Subject, #{}) end),
+    ok = expect(Login, Code, fun(Nonce) -> id_token(Config, Nonce, Subject, More) end),
     {303, Headers, _} = callback(Config, Login, Code),
     "/" = proplists:get_value("location", Headers),
     Id = set_cookie("__Host-ike", Headers),
@@ -101,6 +105,7 @@ claims(Config, Nonce, Subject) ->
         nonce => Nonce,
         iat => Now,
         exp => Now + 300,
+        preferred_username => Subject,
         %% a provider says more than is asked for; none of it may be kept
         email => <<Subject/binary, "@example.org">>,
         name => <<"A Person">>
@@ -113,8 +118,17 @@ id_token(Config, Nonce, Subject, More) ->
         public_key:sign(Input, sha256, Key)
     end).
 
-post(Config, Path, #{csrf := Csrf} = Session, Text) ->
-    Form = uri_string:compose_query([{<<"csrf">>, list_to_binary(Csrf)}, {<<"body">>, Text}]),
+post(Config, Path, Session, Text) ->
+    post(Config, Path, Session, Text, []).
+
+%% a post with the box ticked that puts the account's name on it
+sign(Config, Path, Session, Text) ->
+    post(Config, Path, Session, Text, [{<<"signed">>, <<"1">>}]).
+
+post(Config, Path, #{csrf := Csrf} = Session, Text, More) ->
+    Form = uri_string:compose_query(
+        [{<<"csrf">>, list_to_binary(Csrf)}, {<<"body">>, Text} | More]
+    ),
     request(Config, post, Path, cookies(Session), {form, Form}).
 
 cookies(#{id := Id}) ->

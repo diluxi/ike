@@ -24,11 +24,18 @@
     code_must_be_the_issued_one/1,
     logout/1,
     sessions_outlive_a_restart/1,
-    same_subject_same_actor/1
+    same_subject_same_actor/1,
+    a_name_is_asked_for/1,
+    no_name_no_asking/1,
+    only_plain_names/1,
+    a_new_name_is_on_old_posts/1,
+    nobody_has_many_names/1
 ]).
 
 -import(ike_browser, [
     login/2,
+    login/3,
+    sign/4,
     begin_login/1,
     expect/3,
     callback/3,
@@ -63,7 +70,12 @@ all() ->
         code_must_be_the_issued_one,
         logout,
         sessions_outlive_a_restart,
-        same_subject_same_actor
+        same_subject_same_actor,
+        a_name_is_asked_for,
+        no_name_no_asking,
+        only_plain_names,
+        a_new_name_is_on_old_posts,
+        nobody_has_many_names
     ].
 
 -define(CLIENT, <<"ike-test">>).
@@ -82,7 +94,7 @@ login_sends_the_browser_away(Config) ->
     #{
         "response_type" := "code",
         "client_id" := "ike-test",
-        "scope" := "openid",
+        "scope" := "openid profile",
         "code_challenge_method" := "S256",
         "state" := State,
         "nonce" := Nonce,
@@ -103,7 +115,7 @@ login_sends_the_browser_away(Config) ->
 login_then_post(Config) ->
     Session = login(Config, <<"alice">>),
     Text = <<"hello from a test, with <b>angle</b> & \"quotes\"\nand a second line">>,
-    {303, Headers, _} = post(Config, "/board/b/new", Session, Text),
+    {303, Headers, _} = sign(Config, "/board/b/new", Session, Text),
     "/board/b/" ++ Rest = proplists:get_value("location", Headers),
     {N, "#p" ++ P} = string:to_integer(Rest),
     N = list_to_integer(P),
@@ -120,7 +132,9 @@ login_then_post(Config) ->
     File = Served,
     {_, _} = binary:match(File, <<"&lt;b&gt;angle&lt;/b&gt; &amp; &quot;quotes&quot;">>),
     nomatch = binary:match(File, <<"<b>">>),
-    nomatch = binary:match(File, <<"alice">>).
+    {_, _} = binary:match(File, <<"<span class=\"name account\">alice</span>">>),
+    nomatch = binary:match(File, <<"example.org">>),
+    nomatch = binary:match(File, <<"A Person">>).
 
 reply_and_index(Config) ->
     Session = login(Config, <<"bob">>),
@@ -405,15 +419,154 @@ sessions_outlive_a_restart(Config) ->
 same_subject_same_actor(Config) ->
     S1 = login(Config, <<"lena">>),
     S2 = login(Config, <<"lena">>),
-    {303, H1, _} = post(Config, "/board/b/new", S1, <<"first session">>),
-    {303, H2, _} = post(Config, "/board/b/new", S2, <<"second session">>),
+    {303, H1, _} = sign(Config, "/board/b/new", S1, <<"first session">>),
+    {303, H2, _} = sign(Config, "/board/b/new", S2, <<"second session">>),
     {N1, _} = string:to_integer(proplists:get_value("location", H1) -- "/board/b/"),
     {N2, _} = string:to_integer(proplists:get_value("location", H2) -- "/board/b/"),
     [[1]] = query(
         Config, "SELECT count(DISTINCT actor) FROM post WHERE id IN (?, ?)", [N1, N2]
     ),
     [[1]] = query(Config, "SELECT count(*) FROM actor WHERE subject = 'lena'", []),
-    %% an account is its issuer and subject, and that is all there is of it
-    [[<<"id,kind,issuer,subject">>]] = query(
+    %% an account is its issuer, its subject and what it is called, and
+    %% that is all there is of it
+    [[<<"id,kind,issuer,subject,name">>]] = query(
         Config, "SELECT group_concat(name) FROM pragma_table_info('actor')", []
+    ),
+    [] = query(
+        Config,
+        "SELECT id FROM actor WHERE name LIKE '%example.org%' OR name LIKE '%Person%'",
+        []
     ).
+
+thread(Headers) ->
+    {N, _} = string:to_integer(proplists:get_value("location", Headers) -- "/board/b/"),
+    N.
+
+%% a post carries its account's name only when the box is ticked. left
+%% alone, it is nobody's: not on the page and not in the row
+a_name_is_asked_for(Config) ->
+    Session = login(Config, <<"carol">>),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+    {_, _} = binary:match(Form, <<"post as carol">>),
+    {_, _} = binary:match(Form, <<"name=\"signed\"">>),
+    nomatch = binary:match(Form, <<"checked">>),
+    {303, H1, _} = post(Config, "/board/b/new", Session, <<"said by nobody">>),
+    N = thread(H1),
+    {303, H2, _} = sign(
+        Config, "/board/b/" ++ integer_to_list(N) ++ "/reply", Session, <<"said by carol">>
+    ),
+    {_, "#p" ++ P} = string:to_integer(proplists:get_value("location", H2) -- "/board/b/"),
+    [[<<"anonymous">>, undefined]] = query(
+        Config,
+        "SELECT a.kind, a.subject FROM post p JOIN actor a ON a.id = p.actor WHERE p.id = ?",
+        [N]
+    ),
+    [[<<"local">>, <<"carol">>]] = query(
+        Config,
+        "SELECT a.kind, a.subject FROM post p JOIN actor a ON a.id = p.actor WHERE p.id = ?",
+        [list_to_integer(P)]
+    ),
+    {ok, Page} = file:read_file(page_file(Config, N)),
+    [_, First, Second] = binary:split(Page, <<"<article">>, [global]),
+    {_, _} = binary:match(First, <<"<span class=\"name\">anon</span>">>),
+    nomatch = binary:match(First, <<"carol">>),
+    {_, _} = binary:match(Second, <<"<span class=\"name account\">carol</span>">>).
+
+%% a provider that gives no name: nothing to tick, and ticking it anyway
+%% signs nothing
+no_name_no_asking(Config) ->
+    Session = login(Config, <<"dora">>, #{preferred_username => null}),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+    nomatch = binary:match(Form, <<"signed">>),
+    {303, Headers, _} = sign(Config, "/board/b/new", Session, <<"ticked all the same">>),
+    N = thread(Headers),
+    [[1]] = query(Config, "SELECT actor FROM post WHERE id = ?", [N]),
+    [[undefined]] = query(Config, "SELECT name FROM actor WHERE subject = 'dora'", []).
+
+%% a name that could not stand in a path, or that is markup, or too long,
+%% is no name; the login itself still works
+only_plain_names(Config) ->
+    Bad = [
+        <<"<script>alert(1)</script>">>,
+        <<"a/b">>,
+        <<"..">>,
+        <<".">>,
+        <<"dot.">>,
+        <<"two words">>,
+        <<"caf", 16#C3, 16#A9>>,
+        <<>>,
+        binary:copy(<<"x">>, 33),
+        17
+    ],
+    lists:foreach(
+        fun({I, Nick}) ->
+            Subject = <<"erin", (integer_to_binary(I))/binary>>,
+            Session = login(Config, Subject, #{preferred_username => Nick}),
+            {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+            nomatch = binary:match(Form, <<"signed">>),
+            [[undefined]] = query(Config, "SELECT name FROM actor WHERE subject = ?", [Subject])
+        end,
+        lists:enumerate(Bad)
+    ),
+    Session = login(Config, <<"erin">>, #{preferred_username => <<"Erin_M.-2">>}),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+    {_, _} = binary:match(Form, <<"post as Erin_M.-2">>).
+
+%% the provider renames an account: the pages that showed the old name
+%% show the new one, since a name belongs to the account and not the post
+a_new_name_is_on_old_posts(Config) ->
+    Session = login(Config, <<"fay">>),
+    {303, Headers, _} = sign(Config, "/board/b/new", Session, <<"signed before the change">>),
+    N = thread(Headers),
+    {ok, Before} = file:read_file(page_file(Config, N)),
+    {_, _} = binary:match(Before, <<"\">fay</span>">>),
+    _ = login(Config, <<"fay">>, #{preferred_username => <<"faye">>}),
+    ok = until(fun() ->
+        {ok, After} = file:read_file(page_file(Config, N)),
+        binary:match(After, <<"\">faye</span>">>) =/= nomatch
+    end),
+    %% and losing the name altogether leaves the post nobody's to read
+    _ = login(Config, <<"fay">>, #{preferred_username => null}),
+    ok = until(fun() ->
+        {ok, After} = file:read_file(page_file(Config, N)),
+        binary:match(After, <<"faye">>) =:= nomatch
+    end).
+
+%% the names for nobody are the server's to choose. with several, a post
+%% takes one by its number and keeps it
+nobody_has_many_names(Config) ->
+    Session = login(Config, <<"gus">>),
+    ok = application:set_env(ike, anonymous_names, [<<"nemo">>, <<"outis">>]),
+    try
+        {303, H1, _} = post(Config, "/board/b/new", Session, <<"one of two">>),
+        N = thread(H1),
+        Reply = "/board/b/" ++ integer_to_list(N) ++ "/reply",
+        {303, _, _} = post(Config, Reply, Session, <<"two of two">>),
+        {ok, Page} = file:read_file(page_file(Config, N)),
+        [_, First, Second] = binary:split(Page, <<"<article">>, [global]),
+        Names = [<<"<span class=\"name\">nemo</span>">>, <<"<span class=\"name\">outis</span>">>],
+        [A] = [X || X <- Names, binary:match(First, X) =/= nomatch],
+        [B] = [X || X <- Names, binary:match(Second, X) =/= nomatch],
+        true = A =/= B,
+        {303, _, _} = post(Config, Reply, Session, <<"three, and the page is made again">>),
+        {ok, Again} = file:read_file(page_file(Config, N)),
+        [_, First, Second2, _] = binary:split(Again, <<"<article">>, [global]),
+        {_, _} = binary:match(Second2, B),
+        nomatch = binary:match(Again, <<"gus">>)
+    after
+        ok = application:unset_env(ike, anonymous_names)
+    end.
+
+until(Fun) ->
+    until(Fun, 100).
+
+until(_Fun, 0) ->
+    timeout;
+until(Fun, Tries) ->
+    case Fun() of
+        true ->
+            ok;
+        false ->
+            timer:sleep(50),
+            until(Fun, Tries - 1)
+    end.

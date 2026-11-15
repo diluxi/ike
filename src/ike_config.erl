@@ -3,7 +3,7 @@
 
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
--export([board_name/1]).
+-export([board_name/1, anonymous_names/0]).
 -export_type([oidc/0]).
 
 -type oidc() :: #{
@@ -42,6 +42,17 @@ board_name(_) ->
 lower(<<C, Rest/binary>>) when C >= $a, C =< $z; C >= $0, C =< $9 -> lower(Rest);
 lower(<<>>) -> true;
 lower(_) -> false.
+
+%% what stands where a name would, on a post that carries none. more
+%% than one, and each post gets one of them by its number
+-spec anonymous_names() -> [binary(), ...].
+anonymous_names() ->
+    case application:get_env(ike, anonymous_names) of
+        {ok, [First | Rest]} when is_binary(First) ->
+            [First | [Name || Name <- Rest, is_binary(Name)]];
+        _ ->
+            [<<"anon">>]
+    end.
 
 -spec data_dir() -> binary().
 data_dir() ->

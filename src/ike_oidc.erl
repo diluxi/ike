@@ -49,7 +49,7 @@ authorize_url(#{state := State, nonce := Nonce, verifier := Verifier}) ->
                         {<<"response_type">>, <<"code">>},
                         {<<"client_id">>, ClientId},
                         {<<"redirect_uri">>, RedirectUri},
-                        {<<"scope">>, <<"openid">>},
+                        {<<"scope">>, <<"openid profile">>},
                         {<<"state">>, State},
                         {<<"nonce">>, Nonce},
                         {<<"code_challenge">>, Challenge},
@@ -68,7 +68,7 @@ authorize_url(#{state := State, nonce := Nonce, verifier := Verifier}) ->
 
 %% trades the code for an id token and returns who it is about
 -spec subject(Code :: binary(), ike_session:login()) ->
-    {ok, Issuer :: binary(), Subject :: binary()} | error().
+    {ok, Issuer :: binary(), Subject :: binary(), Nick :: binary() | none} | error().
 subject(Code, #{nonce := Nonce, verifier := Verifier}) ->
     case ike_config:oidc() of
         {ok, #{issuer := Issuer, client_id := ClientId} = Config} ->
@@ -77,7 +77,7 @@ subject(Code, #{nonce := Nonce, verifier := Verifier}) ->
                     case token(Endpoint, Code, Verifier, Config) of
                         {ok, IdToken} ->
                             case verify(IdToken, Issuer, ClientId, Nonce) of
-                                {ok, Subject} -> {ok, Issuer, Subject};
+                                {ok, Subject, Nick} -> {ok, Issuer, Subject, Nick};
                                 {error, _} = Error -> Error
                             end;
                         {error, _} = Error ->
@@ -159,7 +159,8 @@ quote(Value) ->
 
 %% the id token (a jws in compact form)
 
--spec verify(binary(), binary(), binary(), binary()) -> {ok, binary()} | error().
+-spec verify(binary(), binary(), binary(), binary()) ->
+    {ok, Subject :: binary(), Nick :: binary() | none} | error().
 verify(IdToken, Issuer, ClientId, Nonce) ->
     case binary:split(IdToken, <<".">>, [global]) of
         [Header64, Claims64, Signature64] ->
@@ -195,7 +196,8 @@ signed(#{<<"alg">> := <<"RS256">>} = Header, Signed, Signature) ->
 signed(_Header, _Signed, _Signature) ->
     {error, bad_algorithm}.
 
--spec claims(map(), binary(), binary(), binary()) -> {ok, binary()} | error().
+-spec claims(map(), binary(), binary(), binary()) ->
+    {ok, Subject :: binary(), Nick :: binary() | none} | error().
 claims(Claims, Issuer, ClientId, Nonce) ->
     Now = erlang:system_time(second),
     Checks = [
@@ -217,13 +219,37 @@ claims(Claims, Issuer, ClientId, Nonce) ->
         [] ->
             case maps:get(<<"sub">>, Claims, none) of
                 Subject when is_binary(Subject), byte_size(Subject) > 0 ->
-                    {ok, Subject};
+                    {ok, Subject, nick(maps:get(<<"preferred_username">>, Claims, none))};
                 _ ->
                     {error, {bad_claim, subject}}
             end;
         [Name | _] ->
             {error, {bad_claim, Name}}
     end.
+
+%% what the account is called, if the provider says and it is a name
+%% that can stand in a path: letters, digits, dot, dash and underscore.
+%% anything else is no name, and the login goes on without one
+-spec nick(term()) -> binary() | none.
+nick(Name) when is_binary(Name), byte_size(Name) >= 1, byte_size(Name) =< 32 ->
+    case plain(Name) of
+        true -> Name;
+        false -> none
+    end;
+nick(_) ->
+    none.
+
+-spec plain(binary()) -> boolean().
+plain(<<C, Rest/binary>>) when
+    C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C =< $9; C =:= $_; C =:= $-
+->
+    plain(Rest);
+plain(<<$., Rest/binary>>) when byte_size(Rest) > 0 ->
+    plain(Rest);
+plain(<<>>) ->
+    true;
+plain(_) ->
+    false.
 
 %% the token is for this client: alone, or among others with azp saying so
 -spec audience(map(), binary()) -> boolean().

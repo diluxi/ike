@@ -5,7 +5,7 @@
 -module(ike_writer).
 -behaviour(gen_server).
 
--export([start_link/0, local_actor/2, post/1, snapshot/0]).
+-export([start_link/0, local_actor/3, post/1, snapshot/0]).
 -export([open_session/4, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export_type([new_post/0]).
@@ -30,11 +30,12 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% the actor of an account, made on its first login
--spec local_actor(Issuer :: binary(), Subject :: binary()) ->
+%% the actor of an account, made on its first login, and called what the
+%% provider calls it now
+-spec local_actor(Issuer :: binary(), Subject :: binary(), Nick :: binary() | none) ->
     {ok, ike_id:actor()} | error().
-local_actor(Issuer, Subject) ->
-    case call({local_actor, Issuer, Subject}) of
+local_actor(Issuer, Subject, Nick) ->
+    case call({local_actor, Issuer, Subject, Nick}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:actor(Id)};
         Other -> failed(Other)
     end.
@@ -136,12 +137,22 @@ boards(_Conn, []) ->
 
 -spec handle_call(term(), gen_server:from(), ike_db:writer()) ->
     {reply, term(), ike_db:writer()}.
-handle_call({local_actor, Issuer, Subject}, _From, Conn) when
-    is_binary(Issuer), is_binary(Subject)
+handle_call({local_actor, Issuer, Subject, Nick}, _From, Conn) when
+    is_binary(Issuer), is_binary(Subject), is_binary(Nick) orelse Nick =:= none
 ->
-    Reply = ike_db:transaction(Conn, fun() ->
-        local_actor(Conn, Issuer, Subject)
-    end),
+    Reply =
+        case
+            ike_db:transaction(Conn, fun() ->
+                local_actor(Conn, Issuer, Subject, Nick)
+            end)
+        of
+            {ok, {Id, Threads}} when is_integer(Id), is_list(Threads) ->
+                %% a new name is on every page that showed the old one
+                [ike_render:dirty(Thread) || Thread <- Threads, is_integer(Thread)],
+                {ok, Id};
+            Other ->
+                Other
+        end,
     {reply, Reply, Conn};
 handle_call({post, Actor, Home, Body}, _From, Conn) when
     is_integer(Actor), is_binary(Body)
@@ -249,22 +260,42 @@ prune(Dir, Keep) ->
 
 %% inside a transaction
 
--spec local_actor(ike_db:writer(), binary(), binary()) ->
-    {ok, integer()} | error().
-local_actor(Conn, Issuer, Subject) ->
+-spec local_actor(ike_db:writer(), binary(), binary(), binary() | none) ->
+    {ok, {Id :: integer(), Renamed :: [term()]}} | error().
+local_actor(Conn, Issuer, Subject, Nick) ->
     Insert = <<
         "INSERT INTO actor (kind, issuer, subject) VALUES ('local', ?1, ?2)"
         " ON CONFLICT DO NOTHING"
     >>,
+    %% whether the name is the one given, null and none being the same
     Select = <<
-        "SELECT id FROM actor"
+        "SELECT id, name IS ?3 FROM actor"
         " WHERE kind = 'local' AND issuer = ?1 AND subject = ?2"
     >>,
+    Name =
+        case Nick of
+            none -> undefined;
+            _ -> Nick
+        end,
     case ike_db:q(Conn, Insert, [Issuer, Subject]) of
         {ok, _} ->
-            case ike_db:q(Conn, Select, [Issuer, Subject]) of
-                {ok, [[Id]]} when is_integer(Id) -> {ok, Id};
+            case ike_db:q(Conn, Select, [Issuer, Subject, Name]) of
+                {ok, [[Id, 1]]} when is_integer(Id) -> {ok, {Id, []}};
+                {ok, [[Id, 0]]} when is_integer(Id) -> rename(Conn, Id, Name);
                 {ok, Rows} -> {error, {unexpected, Rows}};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec rename(ike_db:writer(), integer(), binary() | undefined) ->
+    {ok, {Id :: integer(), Renamed :: [term()]}} | error().
+rename(Conn, Id, Name) ->
+    case ike_db:q(Conn, <<"UPDATE actor SET name = ?2 WHERE id = ?1">>, [Id, Name]) of
+        {ok, _} ->
+            case ike_db:q(Conn, <<"SELECT DISTINCT thread FROM post WHERE actor = ?1">>, [Id]) of
+                {ok, Rows} -> {ok, {Id, [Thread || [Thread] <- Rows]}};
                 {error, _} = Error -> Error
             end;
         {error, _} = Error ->
