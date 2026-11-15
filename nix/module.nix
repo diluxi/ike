@@ -1,14 +1,22 @@
-# services.ike: the release as a hardened unit. a plain path, so that a
-# configuration without flakes imports it as "${ike}/nix/module.nix"
+# services.ike: the release as a hardened unit, and optionally its place in
+# caddy. a plain path, imported as "${ike}/nix/module.nix"
 { config, lib, pkgs, ... }: let
 	cfg = config.services.ike;
+
+	# derived from the database and rebuilt at every start, hence a cache.
+	# apart from the state, so that caddy can read pages and nothing else
+	pages = "/var/cache/ike/pages";
+
+	# what cowboy sends with its own responses, for the pages caddy serves
+	csp = "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 	# given after the release's own sys.config, whose keys it overrides
 	sysConfig = pkgs.writeText "ike-sys.config" ''
 		[
 			{ike, [
 				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}},
-				{data_dir, <<"/var/lib/ike">>}
+				{data_dir, <<"/var/lib/ike">>},
+				{pages_dir, <<"${pages}">>}
 			]}
 		].
 	'';
@@ -33,9 +41,64 @@ in {
 			default = 8970;
 			description = "Loopback port Cowboy listens on, for the web server in front.";
 		};
+
+		caddy = {
+			enable = lib.mkEnableOption ''
+				a Caddy virtual host for ike: the rendered pages straight from
+				disk, everything else passed on to Cowboy
+			'';
+
+			hostName = lib.mkOption {
+				type = lib.types.str;
+				example = "ike.example.org";
+				description = "The site address, as Caddy takes it.";
+			};
+		};
 	};
 
 	config = lib.mkIf cfg.enable {
+		# a user of its own and not DynamicUser, whose directories nobody
+		# else can reach: caddy has to read the pages
+		users.users.ike = {
+			isSystemUser = true;
+			group = "ike";
+		};
+		users.groups.ike = {};
+		users.users.caddy = lib.mkIf cfg.caddy.enable { extraGroups = [ "ike" ]; };
+
+		services.caddy = lib.mkIf cfg.caddy.enable {
+			enable = true;
+			virtualHosts.${cfg.caddy.hostName} = {
+				# invariant 1: an access log is a list of addresses
+				logFormat = null;
+				extraConfig = ''
+					header {
+						Content-Security-Policy "${csp}"
+						X-Content-Type-Options nosniff
+						Referrer-Policy same-origin
+					}
+					request_body {
+						max_size 64KB
+					}
+					@page {
+						method GET HEAD
+						file {
+							root ${pages}
+							try_files {path}.html {path}index.html
+						}
+					}
+					handle @page {
+						root * ${pages}
+						rewrite * {file_match.relative}
+						file_server
+					}
+					handle {
+						reverse_proxy 127.0.0.1:${toString cfg.port}
+					}
+				'';
+			};
+		};
+
 		systemd.services.ike = {
 			description = "ike";
 			wantedBy = [ "multi-user.target" ];
@@ -48,11 +111,16 @@ in {
 			serviceConfig = {
 				ExecStart = "${cfg.package}/rel/ike/bin/ike -noinput -config ${sysConfig}";
 				Restart = "on-failure";
-				DynamicUser = true;
+				User = "ike";
+				Group = "ike";
 				StateDirectory = "ike";
 				StateDirectoryMode = "0700";
+				CacheDirectory = "ike";
+				CacheDirectoryMode = "0750";
 				WorkingDirectory = "/var/lib/ike";
-				UMask = "0077";
+				# pages are group-readable; the state directory's own mode
+				# keeps everyone out of the database
+				UMask = "0027";
 				# hazard N2: nothing of the host's beyond its own state
 				PrivateTmp = true;
 				PrivateDevices = true;

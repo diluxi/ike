@@ -8,6 +8,10 @@
 		services.ike = {
 			enable = true;
 			package = pkgs.callPackage ./package.nix {};
+			caddy = {
+				enable = true;
+				hostName = "http://localhost";
+			};
 		};
 	};
 
