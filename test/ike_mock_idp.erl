@@ -4,7 +4,7 @@
 -module(ike_mock_idp).
 -behaviour(cowboy_handler).
 
--export([start/1, stop/0, expect/1, token/3]).
+-export([start/1, stop/0, expect/1, token/3, hits/0]).
 -export([init/2]).
 
 -define(PORT, 8972).
@@ -14,9 +14,12 @@ start(Key) ->
         {'_', [
             {"/.well-known/openid-configuration", ?MODULE, discovery},
             {"/jwks", ?MODULE, {jwks, Key}},
-            {"/token", ?MODULE, token}
+            {"/token", ?MODULE, token},
+            %% nobody has a reason to ask for this; see hits/0
+            {"/canary/[...]", ?MODULE, canary}
         ]}
     ]),
+    persistent_term:put({?MODULE, hits}, counters:new(1, [])),
     {ok, _} = cowboy:start_clear(
         ?MODULE, [{ip, {127, 0, 0, 1}}, {port, ?PORT}], #{env => #{dispatch => Dispatch}}
     ),
@@ -31,6 +34,10 @@ issuer() ->
 %% what the next token request must bring, and what it gets back
 expect(#{code := _, challenge := _, id_token := _} = Expected) ->
     persistent_term:put(?MODULE, Expected).
+
+%% how often anything fetched a url under /canary
+hits() ->
+    counters:get(persistent_term:get({?MODULE, hits}), 1).
 
 %% a compact jws. Alg is what the header claims, Sign makes the signature
 token(Alg, Claims, Sign) ->
@@ -57,6 +64,9 @@ init(Req, {jwks, {E, N}} = State) ->
         n => b64(binary:encode_unsigned(N))
     },
     json(Req, State, #{keys => [Jwk]});
+init(Req, canary) ->
+    counters:add(persistent_term:get({?MODULE, hits}), 1, 1),
+    {ok, cowboy_req:reply(200, #{}, <<"fetched\n">>, Req), canary};
 init(Req0, token) ->
     {ok, Form, Req} = cowboy_req:read_urlencoded_body(Req0),
     #{code := Code, challenge := Challenge, id_token := IdToken} =
