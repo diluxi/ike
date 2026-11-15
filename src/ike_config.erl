@@ -2,6 +2,7 @@
 -module(ike_config).
 
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
+-export([backup_dir/0, backup_seconds/0, backup_keep/0]).
 -export_type([oidc/0]).
 
 -type oidc() :: #{
@@ -29,6 +30,28 @@ pages_dir() ->
     case application:get_env(ike, pages_dir) of
         {ok, Dir} when is_binary(Dir) -> Dir;
         _ -> <<(data_dir())/binary, "/pages">>
+    end.
+
+%% snapshots of the database. where they go from here is the host's affair
+-spec backup_dir() -> binary().
+backup_dir() ->
+    <<(data_dir())/binary, "/backups">>.
+
+%% seconds between snapshots
+-spec backup_seconds() -> pos_integer().
+backup_seconds() ->
+    case application:get_env(ike, backup_seconds) of
+        {ok, Seconds} when is_integer(Seconds), Seconds > 0 -> Seconds;
+        _ -> 86400
+    end.
+
+%% how many snapshots are kept. a stand-in for the retention window, which
+%% is lux's to decide (hazard d7, questions.md)
+-spec backup_keep() -> pos_integer().
+backup_keep() ->
+    case application:get_env(ike, backup_keep) of
+        {ok, Count} when is_integer(Count), Count > 0 -> Count;
+        _ -> 7
     end.
 
 -spec session_seconds() -> pos_integer().

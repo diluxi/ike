@@ -15,5 +15,6 @@ init([]) ->
     Render = #{id => ike_render, start => {ike_render, start_link, []}},
     Session = #{id => ike_session, start => {ike_session, start_link, []}},
     Oidc = #{id => ike_oidc, start => {ike_oidc, start_link, []}},
-    Children = [Writer, Render, Session, Oidc, ike_http:child_spec()],
+    Backup = #{id => ike_backup, start => {ike_backup, start_link, []}},
+    Children = [Writer, Render, Session, Oidc, ike_http:child_spec(), Backup],
     {ok, {#{strategy => rest_for_one}, Children}}.

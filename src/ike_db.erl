@@ -4,7 +4,7 @@
 -module(ike_db).
 
 -export([open_reader/1, open_writer/1, close/1]).
--export([q/3, q/4, exec/2, transaction/2]).
+-export([q/3, q/4, exec/2, transaction/2, snapshot/2]).
 -export_type([reader/0, writer/0, conn/0, row/0, error/0]).
 
 -opaque reader() :: {reader, esqlite3:esqlite3()}.
@@ -31,6 +31,8 @@
 
 %% hazard d5: no query runs longer than this, whoever wrote it
 -define(TIMEOUT, 5000).
+%% pages a snapshot copies between giving the scheduler back
+-define(PAGES, 256).
 
 -spec open_reader(binary()) -> {ok, reader()} | error().
 open_reader(Path) ->
@@ -115,4 +117,48 @@ transaction({writer, Raw} = Conn, Fun) ->
             end;
         {error, _} = Error ->
             Error
+    end.
+
+%% a consistent copy of the whole database at Path, through sqlite's
+%% backup api (hazard d6). taken from the writer's own connection, so that
+%% no write can land halfway through it
+-spec snapshot(writer(), binary()) -> ok | error().
+snapshot({writer, Raw}, Path) ->
+    case esqlite3:open(binary_to_list(Path)) of
+        {ok, Copy} ->
+            try
+                case esqlite3:backup_init(Copy, "main", Raw, "main") of
+                    {ok, Backup} ->
+                        case copy(Backup) of
+                            ok -> sound(Copy);
+                            {error, _} = Error -> Error
+                        end;
+                    {error, _} = Error ->
+                        Error
+                end
+            after
+                esqlite3:close(Copy)
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec copy(esqlite3:esqlite3_backup()) -> ok | error().
+copy(Backup) ->
+    case esqlite3:backup_step(Backup, ?PAGES) of
+        ok ->
+            copy(Backup);
+        '$done' ->
+            esqlite3:backup_finish(Backup);
+        {error, _} = Error ->
+            _ = esqlite3:backup_finish(Backup),
+            Error
+    end.
+
+%% a snapshot that sqlite itself would not trust is not kept
+-spec sound(esqlite3:esqlite3()) -> ok | error().
+sound(Copy) ->
+    case esqlite3:q(Copy, <<"PRAGMA integrity_check">>) of
+        [[<<"ok">>]] -> ok;
+        Other -> {error, {unsound, Other}}
     end.

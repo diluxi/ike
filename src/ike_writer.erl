@@ -5,7 +5,7 @@
 -module(ike_writer).
 -behaviour(gen_server).
 
--export([start_link/0, local_actor/2, post/1]).
+-export([start_link/0, local_actor/2, post/1, snapshot/0]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export_type([new_post/0]).
 
@@ -21,6 +21,7 @@
 %% long enough for a write queued behind a few others; a caller that gives
 %% up does not undo what was committed
 -define(CALL_TIMEOUT, 15000).
+-define(SNAPSHOT_TIMEOUT, 120000).
 %% bytes
 -define(MAX_BODY, 16384).
 
@@ -47,6 +48,15 @@ post(#{actor := Actor, thread := Thread, body := Body}) ->
         end,
     case call({post, ike_id:to_integer(Actor), Home, Body}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
+        Other -> failed(Other)
+    end.
+
+%% a snapshot of the database among the backups, and the oldest ones
+%% beyond what is kept unlinked: both here, since nobody else deletes
+-spec snapshot() -> {ok, Path :: binary()} | error().
+snapshot() ->
+    case gen_server:call(?MODULE, snapshot, ?SNAPSHOT_TIMEOUT) of
+        {ok, Path} when is_binary(Path) -> {ok, Path};
         Other -> failed(Other)
     end.
 
@@ -107,6 +117,8 @@ handle_call({post, Actor, Home, Body}, _From, Conn) when
                 {error, bad_text}
         end,
     {reply, Reply, Conn};
+handle_call(snapshot, _From, Conn) ->
+    {reply, snapshot(Conn), Conn};
 handle_call(_Request, _From, Conn) ->
     {reply, {error, bad_request}, Conn}.
 
@@ -126,6 +138,46 @@ committed({ok, {Id, Thread}}) when is_integer(Id), is_integer(Thread) ->
     {ok, Id};
 committed(Other) ->
     Other.
+
+%% written under another name and renamed, so that whatever is among the
+%% backups under a snapshot's name is a whole one
+-spec snapshot(ike_db:writer()) -> {ok, binary()} | error().
+snapshot(Conn) ->
+    Dir = ike_config:backup_dir(),
+    Name = ike_backup:name(erlang:system_time(second)),
+    Path = <<Dir/binary, "/", Name/binary>>,
+    Tmp = <<Path/binary, ".tmp">>,
+    case filelib:ensure_path(Dir) of
+        ok ->
+            _ = file:delete(Tmp),
+            case ike_db:snapshot(Conn, Tmp) of
+                ok ->
+                    case file:rename(Tmp, Path) of
+                        ok ->
+                            prune(Dir, ike_config:backup_keep()),
+                            {ok, Path};
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {error, _} = Error ->
+                    _ = file:delete(Tmp),
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec prune(binary(), pos_integer()) -> ok.
+prune(Dir, Keep) ->
+    Names = ike_backup:list(Dir),
+    case length(Names) - Keep of
+        Extra when Extra > 0 ->
+            [Oldest | _] = Names,
+            _ = file:delete(<<Dir/binary, "/", Oldest/binary>>),
+            prune(Dir, Keep);
+        _ ->
+            ok
+    end.
 
 %% inside a transaction
 
