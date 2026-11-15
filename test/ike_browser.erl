@@ -16,7 +16,9 @@
 %% Env is ike's application environment beyond the data directory and the
 %% provider, and is taken back by stop/0
 start(Config, Env) ->
-    Dir = list_to_binary(?config(priv_dir, Config)),
+    %% a data directory of its own for each start: suites share priv_dir
+    Stamp = integer_to_list(erlang:system_time(microsecond)),
+    Dir = list_to_binary(filename:join(?config(priv_dir, Config), "ike-" ++ Stamp)),
     Key = public_key:generate_key({rsa, 2048, 65537}),
     Other = public_key:generate_key({rsa, 2048, 65537}),
     #'RSAPrivateKey'{publicExponent = E, modulus = N} = Key,
