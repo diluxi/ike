@@ -16,7 +16,9 @@
 			{ike, [
 				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}},
 				{data_dir, <<"/var/lib/ike">>},
-				{pages_dir, <<"${pages}">>}${lib.optionalString (cfg.oidc != null) '',
+				{pages_dir, <<"${pages}">>},
+				{backup_seconds, ${toString cfg.backup.interval}},
+				{backup_keep, ${toString cfg.backup.keep}}${lib.optionalString (cfg.oidc != null) '',
 				{oidc, #{
 					issuer => <<"${cfg.oidc.issuer}">>,
 					client_id => <<"${cfg.oidc.clientId}">>,
@@ -92,6 +94,29 @@ in {
 					};
 				};
 			});
+		};
+
+		backup = {
+			interval = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 86400;
+				description = ''
+					Seconds between snapshots of the database, which land in
+					`/var/lib/ike/backups`, named for when they were taken.
+					Taking them off the host is the host's affair.
+				'';
+			};
+
+			keep = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 7;
+				description = ''
+					How many snapshots are kept; older ones are deleted. What
+					was purged from ike lives on in them for `interval` times
+					`keep`, and for as long as copies made elsewhere are kept
+					(hazard D7).
+				'';
+			};
 		};
 
 		caddy = {

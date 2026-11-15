@@ -4,6 +4,10 @@ machine.succeed("curl -fsS http://127.0.0.1:8970/health | grep -x ok")
 # the schema was migrated into the state directory
 machine.succeed("test -s /var/lib/ike/ike.db")
 
+# a first snapshot is taken at once, and it is a database
+machine.wait_until_succeeds("ls /var/lib/ike/backups/*Z.db")
+machine.succeed("head -c 15 /var/lib/ike/backups/*Z.db | grep -q 'SQLite format 3'")
+
 # caddy serves the rendered index from disk, with ike's headers, and
 # passes on what is not a page
 machine.wait_for_unit("caddy.service")
