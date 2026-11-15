@@ -212,6 +212,26 @@ inv02_works_without_scripts(Config) ->
         Config, get, hd(string:split(proplists:get_value("location", H2), "#")), [], none
     ),
     {_, _} = binary:match(Page2, <<"a reply, by form alone">>),
+    %% moderation is forms too: look a post up by number, hide it with a
+    %% reason, and bring it back, from the fields the pages give
+    Admin = ike_browser:cookies(
+        ike_browser:login(Config, <<"noscript-admin">>, #{groups => [<<"ike-admin">>]})
+    ),
+    "#p" ++ ReplyNumber = string:find(proplists:get_value("location", H2), "#"),
+    {200, _, Mod} = ike_browser:request(Config, get, "/mod", Admin, none),
+    {_, _} = binary:match(Mod, <<"<form method=\"get\" action=\"/mod\">">>),
+    ModPost = "/mod/post/" ++ ReplyNumber,
+    {303, Found, _} = ike_browser:request(Config, get, "/mod?post=" ++ ReplyNumber, Admin, none),
+    ModPost = proplists:get_value("location", Found),
+    {200, _, Held} = ike_browser:request(Config, get, ModPost, Admin, none),
+    {303, _, _} = act(Config, Admin, Held, ModPost, <<"hide">>, "by form alone"),
+    {200, _, Hidden} = ike_browser:request(Config, get, Thread, [], none),
+    nomatch = binary:match(Hidden, <<"a reply, by form alone">>),
+    {200, _, Held2} = ike_browser:request(Config, get, ModPost, Admin, none),
+    {303, _, _} = act(Config, Admin, Held2, ModPost, <<"unhide">>, "and back"),
+    {200, _, Back} = ike_browser:request(Config, get, Thread, [], none),
+    {_, _} = binary:match(Back, <<"a reply, by form alone">>),
+    [scriptless(H) || H <- [Mod, Held, Held2]],
     %% logged out, the same pages say how to log in, with a link
     {200, _, Anonymous} = ike_browser:request(Config, get, "/board/b/new", [], none),
     {_, _} = binary:match(Anonymous, <<"href=\"/login\"">>),
@@ -280,9 +300,10 @@ inv03_one_writer(Config) ->
     [{ike_writer, {ike_migrate, run}}] =
         Callers(fun(Mod, M, _) -> M =:= ike_migrate andalso Mod =/= ike_migrate end),
     %% files. the writer makes its directories, moves a snapshot into
-    %% place and unlinks old ones. the renderer writes pages, which are
-    %% derived from the database and replaced whole by rename; it unlinks
-    %% nothing (see questions.md on reading the invariant this way)
+    %% place and unlinks old ones, and unlinks the page of a thread that
+    %% was taken down. the renderer writes pages, which are derived from
+    %% the database and replaced whole by rename; it unlinks nothing (see
+    %% decisions.md on reading the invariant this way)
     Changing = [
         change_group,
         change_mode,
@@ -386,6 +407,48 @@ inv04_text_is_escaped(Config) ->
             <<">>>/b:alert(1)/1 >>1:alert(1) >>>/b/1:alert(1)">>,
             <<">>999999999<img src=x onerror=alert(1)> >>>/meta/999999999<svg onload=alert(1)>">>,
             <<"<a href=\"/p/1\">>>1</a> &gt;&gt;1 >>&#49;">>
+        ]
+    ),
+    %% a moderator's pages are made per request from the same text, and
+    %% the log quotes a reason: both escaped, both only ike's tags
+    Admin = ike_browser:login(Config, <<"hostile-admin">>, #{groups => [<<"ike-admin">>]}),
+    lists:foreach(
+        fun(Text) ->
+            {303, Headers, _} = ike_browser:post(Config, "/board/b/new", Session, Text),
+            "#p" ++ N = string:find(proplists:get_value("location", Headers), "#"),
+            Path = "/mod/post/" ++ N,
+            {200, _, Look} = ike_browser:request(
+                Config, get, Path, ike_browser:cookies(Admin), none
+            ),
+            scriptless(Look),
+            true = lists:all(fun known_tag/1, tags(Look)),
+            {_, _} = binary:match(Look, escaped(Text)),
+            #{csrf := Csrf} = Admin,
+            Form = uri_string:compose_query([
+                {"csrf", Csrf}, {"kind", "hide"}, {"reason", Text}
+            ]),
+            {303, _, _} = ike_browser:request(
+                Config, post, Path, ike_browser:cookies(Admin), {form, Form}
+            ),
+            [[Entry]] = ike_browser:query(
+                Config,
+                "SELECT entry FROM action WHERE kind = 'hide' AND post = ?",
+                [list_to_integer(N)]
+            ),
+            {303, At, _} = ike_browser:request(
+                Config, get, "/p/" ++ integer_to_list(Entry), [], none
+            ),
+            Log = hd(string:split(proplists:get_value("location", At), "#")),
+            {200, _, LogPage} = ike_browser:request(Config, get, Log, [], none),
+            scriptless(LogPage),
+            true = lists:all(fun known_tag/1, tags(LogPage)),
+            {_, _} = binary:match(LogPage, escaped(Text))
+        end,
+        [
+            <<"\"><script>alert(1)</script>">>,
+            <<"' onmouseover='alert(1)' x='">>,
+            <<"<img src=x onerror=alert(1)> &amp; &lt;b&gt;">>,
+            <<"</textarea></form><form action=\"//evil\"><input name=csrf>">>
         ]
     ),
     %% per-request pages: what a request says of itself is never echoed
@@ -572,6 +635,32 @@ inv08_purge_leaves_nothing(Config) ->
     ),
     scriptless(Look),
     {_, _} = binary:match(Look, <<"value=\"purge\"">>),
+    %% a reply goes alone: its thread's page stays, made again without it
+    Kept = <<"purge-marker-77d2e9">>,
+    {303, H3, _} = ike_browser:post(Config, "/board/b/new", Writer, <<"a thread that stays">>),
+    Stays = hd(string:split(proplists:get_value("location", H3), "#")),
+    {303, H4, _} = ike_browser:post(
+        Config, Stays ++ "/reply", Writer, <<Kept/binary, " in a reply">>
+    ),
+    "#p" ++ Reply = string:find(proplists:get_value("location", H4), "#"),
+    #{csrf := AdminCsrf} = Admin,
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/mod/post/" ++ Reply,
+        ike_browser:cookies(Admin),
+        {form,
+            uri_string:compose_query([
+                {"csrf", AdminCsrf}, {"kind", "purge"}, {"reason", "spam"}
+            ])}
+    ),
+    {200, _, StaysPage} = ike_browser:request(Config, get, Stays, [], none),
+    {_, _} = binary:match(StaysPage, <<"a thread that stays">>),
+    nomatch = binary:match(StaysPage, Kept),
+    {404, _, _} = ike_browser:request(Config, get, "/p/" ++ Reply, [], none),
+    [[0]] = ike_browser:query(
+        Config, "SELECT count(*) FROM post WHERE id = ?", [list_to_integer(Reply)]
+    ),
     {303, _, _} = Purge(Admin),
     %% through HTTP: the thread, the post and its reply are not there
     {404, _, _} = ike_browser:request(Config, get, Thread, [], none),
@@ -612,7 +701,7 @@ inv08_purge_leaves_nothing(Config) ->
             F
          || F <- files(Dir),
             not lists:prefix(filename:join(Dir, "backups"), F),
-            holds(F, Marker)
+            holds(F, Marker) orelse holds(F, Kept)
         ]
     end,
     [] = eventually(Searched, 50),
@@ -775,6 +864,31 @@ submit(Config, Cookies, Html, Action, Text) ->
     ]),
     {_, _} = binary:match(Form, <<"<button type=\"submit\">">>),
     Fields = [{N, V} || [N, V] <- Hidden] ++ [{Area, list_to_binary(Text)}],
+    ike_browser:request(Config, post, Action, Cookies, {form, uri_string:compose_query(Fields)}).
+
+%% the same for a moderator's page, which has a form per action under
+%% one address: the one whose hidden kind is Kind, its reason filled in
+act(Config, Cookies, Html, Action, Kind, Reason) ->
+    {match, Forms} = re:run(
+        Html,
+        "<form method=\"post\" action=\"" ++ Action ++ "\">(.*?)</form>",
+        [global, dotall, {capture, all_but_first, binary}]
+    ),
+    [Form] = [
+        F
+     || [F] <- Forms,
+        binary:match(F, <<"name=\"kind\" value=\"", Kind/binary, "\"">>) =/= nomatch
+    ],
+    {match, Hidden} = re:run(
+        Form,
+        "<input type=\"hidden\" name=\"([^\"]+)\" value=\"([^\"]*)\"",
+        [global, {capture, all_but_first, binary}]
+    ),
+    {match, [Field]} = re:run(Form, "<input name=\"([^\"]+)\"[^>]* required", [
+        {capture, all_but_first, binary}
+    ]),
+    {_, _} = binary:match(Form, <<"<button type=\"submit\">">>),
+    Fields = [{N, V} || [N, V] <- Hidden] ++ [{Field, unicode:characters_to_binary(Reason)}],
     ike_browser:request(Config, post, Action, Cookies, {form, uri_string:compose_query(Fields)}).
 
 scriptless(Html) ->
