@@ -103,7 +103,8 @@ limit() ->
             end
     }.
 
-%% the provider's group behind each role
+%% the provider's group behind each role. a janitor's is a prefix, and
+%% the board it looks after follows it: ike-janitor-b
 -spec roles() -> #{admin := binary(), moderator := binary(), janitor := binary()}.
 roles() ->
     Given =
@@ -120,7 +121,7 @@ roles() ->
     #{
         admin => Group(admin, <<"ike-admin">>),
         moderator => Group(moderator, <<"ike-moderator">>),
-        janitor => Group(janitor, <<"ike-janitor">>)
+        janitor => Group(janitor, <<"ike-janitor-">>)
     }.
 
 %% how long a deleted post is held before it is purged

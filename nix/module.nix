@@ -226,8 +226,8 @@ in {
 			};
 			janitor = lib.mkOption {
 				type = lib.types.str;
-				default = "ike-janitor";
-				description = "The group whose accounts may hide and unhide posts.";
+				default = "ike-janitor-";
+				description = "The prefix of the groups whose accounts may hide and unhide posts on one board: `ike-janitor-b` for /b/.";
 			};
 		};
 

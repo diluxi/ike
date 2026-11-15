@@ -428,8 +428,9 @@ same_subject_same_actor(Config) ->
     ),
     [[1]] = query(Config, "SELECT count(*) FROM actor WHERE subject = 'lena'", []),
     %% an account is its issuer, its subject and what it is called, and
-    %% whether it is suspended; that is all there is of it
-    [[<<"id,kind,issuer,subject,name,banned">>]] = query(
+    %% whether it is suspended and its rank at its last login; that is
+    %% all there is of it
+    [[<<"id,kind,issuer,subject,name,banned,rank">>]] = query(
         Config, "SELECT group_concat(name) FROM pragma_table_info('actor')", []
     ),
     [] = query(

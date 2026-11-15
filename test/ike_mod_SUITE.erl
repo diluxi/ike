@@ -10,6 +10,9 @@
 -export([
     nobody_else_sees_it/1,
     a_janitor_only_hides/1,
+    a_janitor_keeps_to_its_boards/1,
+    nobody_bans_their_rank/1,
+    nobody_undoes_a_higher_rank/1,
     a_moderator_does_not_purge/1,
     a_first_post_takes_its_thread/1,
     a_ban_outlives_a_restart/1,
@@ -25,6 +28,9 @@ all() ->
     [
         nobody_else_sees_it,
         a_janitor_only_hides,
+        a_janitor_keeps_to_its_boards,
+        nobody_bans_their_rank,
+        nobody_undoes_a_higher_rank,
         a_moderator_does_not_purge,
         a_first_post_takes_its_thread,
         a_ban_outlives_a_restart,
@@ -41,7 +47,7 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ike_browser:stop().
 
-janitor(Config, Name) -> login(Config, Name, #{groups => [<<"ike-janitor">>]}).
+janitor(Config, Name) -> login(Config, Name, #{groups => [<<"ike-janitor-b">>]}).
 moderator(Config, Name) -> login(Config, Name, #{groups => [<<"ike-moderator">>]}).
 admin(Config, Name) -> login(Config, Name, #{groups => [<<"ike-admin">>]}).
 
@@ -109,6 +115,78 @@ a_janitor_only_hides(Config) ->
         [list_to_integer(N)]
     ),
     _ = Root.
+
+a_janitor_keeps_to_its_boards(Config) ->
+    Writer = login(Config, <<"kwriter">>),
+    {303, H, _} = post(Config, "/board/meta/new", Writer, <<"on meta">>),
+    N = number(H),
+    Path = "/mod/post/" ++ N,
+    Janitor = janitor(Config, <<"kjanitor">>),
+    {200, _, Look} = request(Config, get, Path, cookies(Janitor), none),
+    [] = forms(Look),
+    {403, _, _} = act(Config, Janitor, Path, "hide", "not my board"),
+    {200, _, Mod} = request(Config, get, "/mod", cookies(Janitor), none),
+    {_, _} = binary:match(Mod, <<"janitor of /b/">>),
+    %% a group that names no board, or no group of the kind, is no role
+    [
+        {404, _, _} = request(
+            Config, get, "/mod", cookies(login(Config, Name, #{groups => [Group]})), none
+        )
+     || {Name, Group} <- [
+            {<<"k1">>, <<"ike-janitor-">>},
+            {<<"k2">>, <<"ike-janitor-B!">>},
+            {<<"k3">>, <<"ike-janitor">>}
+        ]
+    ],
+    %% two groups, two boards
+    Both = login(Config, <<"kboth">>, #{groups => [<<"ike-janitor-meta">>, <<"ike-janitor-b">>]}),
+    {303, _, _} = act(Config, Both, Path, "hide", "now it is").
+
+%% a post signed by the account behind Session, and its moderation page
+signed(Config, Session, Text) ->
+    {303, H, _} = sign(Config, "/board/b/new", Session, Text),
+    "/mod/post/" ++ number(H).
+
+nobody_bans_their_rank(Config) ->
+    Moderator = moderator(Config, <<"rmoderator">>),
+    Other = moderator(Config, <<"rmoderator2">>),
+    Admin = admin(Config, <<"radmin">>),
+    Janitor = janitor(Config, <<"rjanitor">>),
+    Own = signed(Config, Moderator, <<"by a moderator">>),
+    Peer = signed(Config, Other, <<"by another moderator">>),
+    Above = signed(Config, Admin, <<"by an admin">>),
+    Below = signed(Config, Janitor, <<"by a janitor">>),
+    Offered = fun(Path) ->
+        {200, _, Look} = request(Config, get, Path, cookies(Moderator), none),
+        lists:member(<<"ban">>, [K || [K] <- forms(Look)])
+    end,
+    [false = Offered(P) || P <- [Own, Peer, Above]],
+    [{403, _, _} = act(Config, Moderator, P, "ban", "x") || P <- [Own, Peer, Above]],
+    true = Offered(Below),
+    {303, _, _} = act(Config, Moderator, Below, "ban", "rank does not shield a janitor"),
+    %% and above a moderator, an admin may
+    {303, _, _} = act(Config, Admin, Peer, "ban", "rule 6"),
+    %% a moderator logged in again without the group is a moderator no
+    %% longer, and can be banned like anyone
+    _ = login(Config, <<"rmoderator">>),
+    Third = moderator(Config, <<"rmoderator3">>),
+    {303, _, _} = act(Config, Third, Own, "ban", "demoted, then banned"),
+    [[0]] = query(Config, "SELECT rank FROM actor WHERE subject = 'rmoderator'", []).
+
+nobody_undoes_a_higher_rank(Config) ->
+    Writer = login(Config, <<"uwriter">>),
+    {303, H, _} = post(Config, "/board/b/new", Writer, <<"hidden by a moderator">>),
+    Path = "/mod/post/" ++ number(H),
+    Moderator = moderator(Config, <<"umoderator">>),
+    Janitor = janitor(Config, <<"ujanitor">>),
+    {303, _, _} = act(Config, Moderator, Path, "hide", "moderator's call"),
+    {200, _, Look} = request(Config, get, Path, cookies(Janitor), none),
+    [] = forms(Look),
+    {403, _, _} = act(Config, Janitor, Path, "unhide", "overruled"),
+    {303, _, _} = act(Config, Moderator, Path, "unhide", "my own call"),
+    %% and the other way about
+    {303, _, _} = act(Config, Janitor, Path, "hide", "janitor's call"),
+    {303, _, _} = act(Config, Moderator, Path, "unhide", "overruled").
 
 %% the kinds a moderator's page offers, in order
 forms(Html) ->

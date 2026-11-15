@@ -92,12 +92,7 @@ moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Rea
             _ when is_binary(Target) -> Target;
             _ -> ike_id:to_integer(Target)
         end,
-    done(
-        call(
-            {moderate, ike_id:to_integer(By), ike_role:to_binary(Role), ike_role:to_binary(Kind),
-                Subject, Reason}
-        )
-    ).
+    done(call({moderate, ike_id:to_integer(By), Role, ike_role:to_binary(Kind), Subject, Reason})).
 
 %% a session is a row, so that it outlives a restart. Hash is the sha-256
 %% of what the cookie holds, Expires in unix seconds
@@ -106,7 +101,7 @@ moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Rea
     ike_id:actor(),
     Csrf :: binary(),
     Expires :: integer(),
-    Role :: binary() | undefined
+    ike_role:role() | none
 ) ->
     ok | error().
 open_session(Hash, Actor, Csrf, Expires, Role) ->
@@ -231,32 +226,38 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
     is_integer(By), is_binary(Kind), is_binary(Reason)
 ->
     Reply =
-        case {ike_role:of_binary(Role), ike_role:kind(Kind)} of
+        case {ike_role:check(Role), ike_role:kind(Kind)} of
             {none, _} -> {error, not_allowed};
             {_, error} -> {error, bad_request};
             {Held, {ok, Rung}} -> moderated(Conn, {By, Held}, Rung, Target, Reason)
         end,
     {reply, Reply, Conn};
-handle_call({open_session, Hash, Actor, Csrf, Expires, Role}, _From, Conn) when
-    is_binary(Hash),
-    is_integer(Actor),
-    is_binary(Csrf),
-    is_integer(Expires),
-    is_binary(Role) orelse Role =:= undefined
+handle_call({open_session, Hash, Actor, Csrf, Expires, Role0}, _From, Conn) when
+    is_binary(Hash), is_integer(Actor), is_binary(Csrf), is_integer(Expires)
 ->
+    Role = ike_role:check(Role0),
+    {Name, Boards} = ike_role:encode(Role),
     %% an account suspended while it was logging in gets no session
     Insert = <<
-        "INSERT INTO session (hash, actor, csrf, expires, role)"
-        " SELECT ?1, id, ?3, ?4, ?5 FROM actor WHERE id = ?2 AND banned = 0"
+        "INSERT INTO session (hash, actor, csrf, expires, role, boards)"
+        " SELECT ?1, id, ?3, ?4, ?5, ?6 FROM actor WHERE id = ?2 AND banned = 0"
         " RETURNING actor"
     >>,
+    %% the rank the account has now, demotions included: what banning it takes
+    Rank = <<"UPDATE actor SET rank = ?2 WHERE id = ?1">>,
     Reply =
         case
             ike_db:transaction(Conn, fun() ->
-                case ike_db:q(Conn, Insert, [{blob, Hash}, Actor, Csrf, Expires, Role]) of
-                    {ok, [_]} -> ok;
-                    {ok, _} -> {error, suspended};
-                    {error, _} = Error -> Error
+                case ike_db:q(Conn, Insert, [{blob, Hash}, Actor, Csrf, Expires, Name, Boards]) of
+                    {ok, [_]} ->
+                        case ike_db:q(Conn, Rank, [Actor, ike_role:rank(Role)]) of
+                            {ok, _} -> ok;
+                            {error, _} = Error -> Error
+                        end;
+                    {ok, _} ->
+                        {error, suspended};
+                    {error, _} = Error ->
+                        Error
                 end
             end)
         of
@@ -513,6 +514,74 @@ act(Conn, Who, Kind, Name, Reason, Time) when
             Error
     end;
 act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
+    Rank = <<"SELECT rank FROM actor WHERE id = ?1">>,
+    case ike_db:q(Conn, Rank, [Account]) of
+        {ok, [[Of]]} when is_integer(Of) ->
+            case permits(Who, unban, #{board => any, account => Of, undo => 0}, Account) of
+                true -> unban(Conn, Who, Account, Reason, Time);
+                false -> {error, not_allowed}
+            end;
+        {ok, _} ->
+            {error, no_such_account};
+        {error, _} = Error ->
+            Error
+    end;
+act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
+    %% nothing on the log is ever taken down. undo: who put the post in
+    %% the state it is in, by role
+    Sql = <<
+        "SELECT p.thread, p.state, p.actor, a.kind = 'local', a.banned, b.name, a.rank,"
+        " (SELECT role FROM action WHERE post = p.id AND kind IN ('hide', 'delete')"
+        " ORDER BY entry DESC LIMIT 1)"
+        " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
+        " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
+    >>,
+    case ike_db:q(Conn, Sql, [Post]) of
+        {ok, [[Thread, State, Actor, Local, Banned, Board, Rank, Undo]]} when
+            is_integer(Thread),
+            is_integer(State),
+            is_integer(Actor),
+            is_binary(Board),
+            is_integer(Rank)
+        ->
+            Facts = #{board => Board, account => Rank, undo => ike_role:rank_of(Undo)},
+            case permits(Who, Kind, Facts, Actor) of
+                true ->
+                    ladder(Conn, Who, Kind, {Post, Thread, Board, Actor}, {State, Local, Banned}, {
+                        Reason, Time
+                    });
+                false ->
+                    {error, not_allowed}
+            end;
+        {ok, _} ->
+            {error, no_such_post};
+        {error, _} = Error ->
+            Error
+    end;
+act(_Conn, _Who, _Kind, _Target, _Reason, _Time) ->
+    {error, bad_request}.
+
+%% the rules of ike_role, with the actor's own account told apart
+-spec permits(who(), ike_role:kind(), map(), integer()) -> boolean().
+permits(system, Kind, _Facts, _Account) ->
+    ike_role:permits(system, Kind, #{board => any, self => false, account => 0, undo => 0});
+permits({By, Role}, Kind, #{board := Board, account := Rank, undo := Undo}, Account) when
+    is_binary(Board) orelse Board =:= any,
+    is_integer(Rank),
+    Rank >= 0,
+    Rank =< 3,
+    is_integer(Undo),
+    Undo >= 0,
+    Undo =< 4
+->
+    ike_role:permits(Role, Kind, #{
+        board => Board, self => By =:= Account, account => Rank, undo => Undo
+    });
+permits(_Who, _Kind, _Facts, _Account) ->
+    false.
+
+-spec unban(ike_db:writer(), who(), integer(), binary(), integer()) -> {ok, effects()} | error().
+unban(Conn, Who, Account, Reason, Time) ->
     Update = <<"UPDATE actor SET banned = 0 WHERE id = ?1 AND banned = 1 RETURNING id">>,
     case ike_db:q(Conn, Update, [Account]) of
         {ok, [_]} ->
@@ -524,46 +593,38 @@ act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
             there(Conn, <<"SELECT 1 FROM actor WHERE id = ?1">>, Account, no_such_account);
         {error, _} = Error ->
             Error
-    end;
-act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
-    %% nothing on the log is ever taken down
-    Sql = <<
-        "SELECT p.thread, p.state, p.actor, a.kind = 'local', a.banned, b.name"
-        " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
-        " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
-    >>,
-    case ike_db:q(Conn, Sql, [Post]) of
-        {ok, [[Thread, State, Actor, Local, Banned, Board]]} when
-            is_integer(Thread), is_integer(State), is_integer(Actor), is_binary(Board)
-        ->
-            case {Kind, State, Local, Banned} of
-                {ban, _, 1, 0} ->
-                    suspend(Conn, Who, Post, Actor, Reason, Time);
-                {ban, _, 1, _} ->
-                    {error, not_now};
-                {ban, _, _, _} ->
-                    {error, no_such_account};
-                {hide, 0, _, _} ->
-                    state(Conn, Who, Kind, {Post, Thread, Board}, {1, undefined}, Reason, Time);
-                {unhide, 1, _, _} ->
-                    state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
-                {delete, Shown, _, _} when Shown < 2 ->
-                    Until = Time + ike_config:hold_seconds(),
-                    state(Conn, Who, Kind, {Post, Thread, Board}, {2, Until}, Reason, Time);
-                {restore, 2, _, _} ->
-                    state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
-                {purge, _, _, _} ->
-                    state(Conn, Who, Kind, {Post, Thread, Board}, purge, Reason, Time);
-                _ ->
-                    {error, not_now}
-            end;
-        {ok, _} ->
-            {error, no_such_post};
-        {error, _} = Error ->
-            Error
-    end;
-act(_Conn, _Who, _Kind, _Target, _Reason, _Time) ->
-    {error, bad_request}.
+    end.
+
+-spec ladder(
+    ike_db:writer(),
+    who(),
+    ike_role:kind(),
+    {integer(), integer(), binary(), integer()},
+    {integer(), term(), term()},
+    {binary(), integer()}
+) -> {ok, effects()} | error().
+ladder(Conn, Who, Kind, {Post, Thread, Board, Actor}, {State, Local, Banned}, {Reason, Time}) ->
+    case {Kind, State, Local, Banned} of
+        {ban, _, 1, 0} ->
+            suspend(Conn, Who, Post, Actor, Reason, Time);
+        {ban, _, 1, _} ->
+            {error, not_now};
+        {ban, _, _, _} ->
+            {error, no_such_account};
+        {hide, 0, _, _} ->
+            state(Conn, Who, Kind, {Post, Thread, Board}, {1, undefined}, Reason, Time);
+        {unhide, 1, _, _} ->
+            state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
+        {delete, Shown, _, _} when Shown < 2 ->
+            Until = Time + ike_config:hold_seconds(),
+            state(Conn, Who, Kind, {Post, Thread, Board}, {2, Until}, Reason, Time);
+        {restore, 2, _, _} ->
+            state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
+        {purge, _, _, _} ->
+            state(Conn, Who, Kind, {Post, Thread, Board}, purge, Reason, Time);
+        _ ->
+            {error, not_now}
+    end.
 
 %% whether a thing that is not in the state asked of it is there at all
 -spec there(ike_db:writer(), binary(), term(), atom()) -> error().

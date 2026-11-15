@@ -30,7 +30,11 @@
     time := integer(),
     body := binary(),
     name := binary() | none,
-    account := local | suspended | none
+    account := local | suspended | none,
+    %% who signed it, their rank, and the rank that put it in its state
+    author := integer(),
+    rank := 0..3,
+    undo := 0..4
 }.
 
 -define(EXCERPT, 120).
@@ -261,14 +265,14 @@ post_form(Action, {csrf, Csrf, Name}) ->
 -spec moderation(
     {Csrf :: binary(), ike_role:role()},
     [{Name :: binary(), Title :: binary(), Locked :: boolean()}],
-    [{Account :: integer(), Name :: binary()}]
+    [{Account :: integer(), Name :: binary(), Rank :: 0..3}]
 ) -> ike_html:html().
 moderation({Csrf, Role}, Boards, Suspended) ->
     layout(<<"moderation">>, [
         ike_html:el(h1, [ike_html:text(<<"moderation">>)]),
         ike_html:el(p, [
             ike_html:text(
-                <<"as ", (ike_role:to_binary(Role))/binary, ". what is done is written to ">>
+                <<"as ", (as(Role))/binary, ". what is done is written to ">>
             ),
             anchor(<<"/board/mod">>, <<"/mod/">>),
             ike_html:text(<<", with the reason given and without your name.">>)
@@ -293,11 +297,16 @@ moderation({Csrf, Role}, Boards, Suspended) ->
                 | act(
                     <<"/mod/board/", Name/binary>>,
                     Csrf,
-                    Role,
-                    case Locked of
-                        true -> [unlock];
-                        false -> [lock]
-                    end
+                    [
+                        K
+                     || K <- [
+                            case Locked of
+                                true -> unlock;
+                                false -> lock
+                            end
+                        ],
+                        ike_role:may(Role, K)
+                    ]
                 )
             ])
          || {Name, Title, Locked} <- Boards
@@ -305,16 +314,21 @@ moderation({Csrf, Role}, Boards, Suspended) ->
         ike_html:el(ul, [
             ike_html:el(li, [
                 ike_html:text(<<Name/binary, ": suspended">>)
-                | act(<<"/mod/account/", (integer_to_binary(Account))/binary>>, Csrf, Role, [unban])
+                | act(<<"/mod/account/", (integer_to_binary(Account))/binary>>, Csrf, [
+                    unban
+                 || ike_role:permits(Role, unban, #{
+                        board => any, self => false, account => Rank, undo => 0
+                    })
+                ])
             ])
-         || {Account, Name} <- Suspended
+         || {Account, Name, Rank} <- Suspended
         ])
     ]).
 
 %% one post, as it is stored, and what this role may do with it
 -spec moderated({Csrf :: binary(), ike_role:role()}, held(), [ike_role:kind()]) ->
     ike_html:html().
-moderated({Csrf, Role}, #{id := Id, thread := Thread, board := Board} = Post, Kinds) ->
+moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, Kinds) ->
     #{state := State, time := Time, body := Body, name := Name} = Post,
     N = integer_to_binary(Id),
     Stamp = stamp(Time),
@@ -338,18 +352,23 @@ moderated({Csrf, Role}, #{id := Id, thread := Thread, board := Board} = Post, Ki
         ]),
         %% as text and nothing more: no link in it is followed from here
         ike_html:el(article, [ike_html:el(p, plain(binary:split(Body, <<"\n">>, [global])))])
-        | act(<<"/mod/post/", N/binary>>, Csrf, Role, Kinds)
+        | act(<<"/mod/post/", N/binary>>, Csrf, Kinds)
     ]).
+
+-spec as(ike_role:role()) -> binary().
+as({janitor, [First | Rest]}) ->
+    <<"janitor of /", First/binary, "/", <<<<" /", B/binary, "/">> || B <- Rest>>/binary>>;
+as(Role) ->
+    ike_role:to_binary(Role).
 
 -spec plain([binary()]) -> [ike_html:html()].
 plain([Line]) -> [ike_html:text(Line)];
 plain([Line | Rest]) -> [ike_html:text(Line), ike_html:el(br, []) | plain(Rest)];
 plain([]) -> [].
 
-%% a form for each thing the role may do, each with its reason
--spec act(Action :: binary(), Csrf :: binary(), ike_role:role(), [ike_role:kind()]) ->
-    [ike_html:html()].
-act(Action, Csrf, Role, Kinds) ->
+%% one form for each thing that would go through, each with its reason
+-spec act(Action :: binary(), Csrf :: binary(), [ike_role:kind()]) -> [ike_html:html()].
+act(Action, Csrf, Kinds) ->
     [
         ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
             ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
@@ -366,7 +385,7 @@ act(Action, Csrf, Role, Kinds) ->
                 ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(atom_to_binary(Kind))])
             ])
         ])
-     || Kind <- Kinds, ike_role:may(Role, Kind)
+     || Kind <- Kinds
     ].
 
 %% a page that only says something

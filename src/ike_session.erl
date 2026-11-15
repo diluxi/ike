@@ -67,7 +67,7 @@ lookup(Id) ->
                 actor => ike_id:actor(Actor),
                 csrf => Csrf,
                 name => Name,
-                role => ike_role:of_binary(Role)
+                role => ike_role:check(Role)
             }};
         _ ->
             error
@@ -120,7 +120,7 @@ init([]) ->
     case ike_db:open_reader(ike_config:db_path()) of
         {ok, Conn} ->
             Select = <<
-                "SELECT s.hash, s.actor, s.csrf, s.expires, a.name, s.role"
+                "SELECT s.hash, s.actor, s.csrf, s.expires, a.name, s.role, s.boards"
                 " FROM session s JOIN actor a ON a.id = s.actor WHERE s.expires > ?1"
             >>,
             Result = ike_db:q(Conn, Select, [Now]),
@@ -137,7 +137,7 @@ init([]) ->
     end.
 
 -spec restore([ike_db:row()]) -> ok.
-restore([[Hash, Actor, Csrf, Expires, Name0, Role] | Rows]) when
+restore([[Hash, Actor, Csrf, Expires, Name0, Role, Boards] | Rows]) when
     is_binary(Hash), is_integer(Actor), is_binary(Csrf), is_integer(Expires)
 ->
     Name =
@@ -145,7 +145,9 @@ restore([[Hash, Actor, Csrf, Expires, Name0, Role] | Rows]) when
             _ when is_binary(Name0) -> Name0;
             _ -> none
         end,
-    true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires, Name, Role}),
+    true = ets:insert(
+        ?SESSIONS, {Hash, Actor, Csrf, Expires, Name, ike_role:decode(Role, Boards)}
+    ),
     restore(Rows);
 restore([_ | Rows]) ->
     restore(Rows);
@@ -154,12 +156,7 @@ restore([]) ->
 
 -spec handle_call(term(), gen_server:from(), []) -> {reply, term(), []}.
 handle_call({create, Actor, Name, Role0}, _From, []) when is_integer(Actor), Actor > 0 ->
-    Role =
-        case Role0 of
-            none -> undefined;
-            _ when is_atom(Role0) -> atom_to_binary(Role0);
-            _ -> undefined
-        end,
+    Role = ike_role:check(Role0),
     Id = token(),
     Csrf = token(),
     Hash = hash(Id),

@@ -611,7 +611,7 @@ inv08_purge_leaves_nothing(Config) ->
     {_, _} = binary:match(Before, <<"href=\"/p/", R/binary, "\"">>),
     %% a janitor may only hide, and nobody else is shown that there is
     %% anything here at all
-    Janitor = ike_browser:login(Config, <<"janitor8">>, #{groups => [<<"ike-janitor">>]}),
+    Janitor = ike_browser:login(Config, <<"janitor8">>, #{groups => [<<"ike-janitor-b">>]}),
     Purge = fun(#{csrf := Csrf} = Session) ->
         Form = uri_string:compose_query([
             {"csrf", Csrf}, {"kind", "purge"}, {"reason", "rule 1, the reason stays"}

@@ -522,10 +522,24 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 ## lux's answers, 2026-11-15
 
 - **Ranked roles (was Q20).** janitor < moderator < admin. Janitors are
-  per board, moderators across all of them, admins also read logs and
-  can put ike into read-only. To build: a janitor's group names its
-  board, and nobody acts on an account of their rank or above, which
-  needs the rank an account last logged in with kept on its row.
+  per board, moderators across all of them; what admins do beyond that
+  is Q29. As built:
+  - A janitor's group is `ike-janitor-` and a board's name; one group
+    per board, and a suffix that is no board's name gives nothing.
+  - Nobody bans or unbans an account of their own rank or above, their
+    own included. The rank is the one the account had at its last login,
+    kept on `actor.rank` and rewritten at every login, so a demotion
+    lands then.
+  - Nobody undoes a higher rank: unhide and restore need at least the
+    rank of whoever last hid or deleted the post. A janitor cannot
+    unhide a moderator's hide; a moderator can unhide a janitor's.
+  - Checked in the writer's transaction; `/mod` offers only the forms
+    that would go through.
+  - *Simplifications:* the role is stored flat, a role name and a
+    janitor's boards in a second column, not as one structured value.
+    An account promoted since its last login, or not logged in since
+    ranks came, counts as unranked, so it can be banned by anyone with
+    a role until it logs in again.
 - **The sandbox (was Q24):** a template unit, under ike's name
   (`ike-strip@`). bubblewrap noted as an alternative.
 - **Staging early (was Q25):** uploads that are not yet posted, as on

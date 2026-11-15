@@ -43,8 +43,8 @@ boards() ->
             []
     end.
 
-%% the accounts that may not log in
--spec suspended() -> [{Account :: integer(), Name :: binary()}].
+%% the accounts that may not log in, and their rank when they last did
+-spec suspended() -> [{Account :: integer(), Name :: binary(), Rank :: 0..3}].
 suspended() ->
     case gen_server:call(?MODULE, suspended) of
         {ok, Rows} when is_list(Rows) ->
@@ -53,8 +53,9 @@ suspended() ->
                     case Name of
                         _ when is_binary(Name) -> Name;
                         _ -> <<"(no name)">>
-                    end}
-             || [Id, Name] <- Rows, is_integer(Id)
+                    end,
+                    Rank}
+             || [Id, Name, Rank] <- Rows, is_integer(Id), is_integer(Rank), Rank >= 0, Rank =< 3
             ];
         _ ->
             []
@@ -65,8 +66,15 @@ suspended() ->
 -spec post(Post :: integer()) -> {ok, ike_view:held()} | none.
 post(Post) ->
     case gen_server:call(?MODULE, {post, Post}) of
-        {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned]]} when
-            is_integer(Thread), is_binary(Board), is_integer(Time), is_binary(Body)
+        {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned, Author, Rank, Undo]]} when
+            is_integer(Thread),
+            is_binary(Board),
+            is_integer(Time),
+            is_binary(Body),
+            is_integer(Author),
+            is_integer(Rank),
+            Rank >= 0,
+            Rank =< 3
         ->
             {ok, #{
                 id => Post,
@@ -90,7 +98,10 @@ post(Post) ->
                         {1, 0} -> local;
                         {1, _} -> suspended;
                         _ -> none
-                    end
+                    end,
+                author => Author,
+                rank => Rank,
+                undo => ike_role:rank_of(Undo)
             }};
         _ ->
             none
@@ -130,11 +141,13 @@ handle_call(boards, _From, Conn) ->
     Sql = <<"SELECT name, title, locked FROM board WHERE log = 0 ORDER BY name">>,
     {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call(suspended, _From, Conn) ->
-    Sql = <<"SELECT id, name FROM actor WHERE banned = 1 ORDER BY id">>,
+    Sql = <<"SELECT id, name, rank FROM actor WHERE banned = 1 ORDER BY id">>,
     {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
     Sql = <<
-        "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, a.kind = 'local', a.banned"
+        "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, a.kind = 'local', a.banned,"
+        " p.actor, a.rank, (SELECT role FROM action WHERE post = p.id"
+        " AND kind IN ('hide', 'delete') ORDER BY entry DESC LIMIT 1)"
         " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
     >>,

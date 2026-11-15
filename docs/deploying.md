@@ -123,7 +123,8 @@ fog to an exact tree, so the pin bump is the commit to review.
   not granted, so without it in the client's `scopes` no one can log in.
   The claims policy must also put `groups` in the id token; without that,
   logins work and nobody has a role. `services.ike.roles` names the
-  groups (default `ike-admin`, `ike-moderator`, `ike-janitor`).
+  groups (default `ike-admin`, `ike-moderator`, and `ike-janitor-`
+  followed by a board's name, one group per board a janitor keeps).
   The secret, if there is one, is loaded with
   `LoadCredential` and need not be readable by ike's user; its first
   line is the secret.

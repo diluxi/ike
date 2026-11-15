@@ -14,9 +14,9 @@
 init(Req, What) ->
     Reply =
         case ike_http_login:session(Req) of
-            {ok, _Id, #{role := none}} ->
-                ike_http:not_found(Req);
-            {ok, _Id, #{actor := Actor, csrf := Csrf, role := Role}} ->
+            {ok, _Id, #{actor := Actor, csrf := Csrf, role := Role}} when
+                Role =:= admin; Role =:= moderator; element(1, Role) =:= janitor
+            ->
                 Who = {Actor, Csrf, Role},
                 case {What, cowboy_req:method(Req)} of
                     {front, <<"GET">>} -> front(Who, Req);
@@ -25,7 +25,7 @@ init(Req, What) ->
                     {_, <<"POST">>} -> submit(What, Who, Req);
                     _ -> ike_http:reply(405, Req)
                 end;
-            error ->
+            _ ->
                 ike_http:not_found(Req)
         end,
     {ok, Reply, What}.
@@ -49,12 +49,13 @@ front({_, Csrf, Role}, Req) ->
     end.
 
 -spec look(who(), cowboy_req:req()) -> cowboy_req:req().
-look({_, Csrf, Role}, Req) ->
+look({Actor, Csrf, Role}, Req) ->
     case cowboy_req:binding(post, Req) of
         N when is_integer(N), N > 0 ->
             case ike_reader:post(N) of
                 {ok, Post} ->
-                    ike_http:page(200, ike_view:moderated({Csrf, Role}, Post, kinds(Post)), Req);
+                    Kinds = kinds(Post, Role, ike_id:to_integer(Actor)),
+                    ike_http:page(200, ike_view:moderated({Csrf, Role}, Post, Kinds), Req);
                 none ->
                     ike_http:not_found(Req)
             end;
@@ -62,9 +63,16 @@ look({_, Csrf, Role}, Req) ->
             ike_http:not_found(Req)
     end.
 
-%% what can be done to a post as it now is
--spec kinds(ike_view:held()) -> [ike_role:kind()].
-kinds(#{state := State, account := Account}) ->
+%% what this role can do to a post as it now is: the forms that would
+%% go through, and no others
+-spec kinds(ike_view:held(), ike_role:role(), integer()) -> [ike_role:kind()].
+kinds(#{state := State, account := Account} = Post, Role, Actor) ->
+    #{board := Board, author := Author, rank := Rank, undo := Undo} = Post,
+    Facts = #{board => Board, self => Author =:= Actor, account => Rank, undo => Undo},
+    [K || K <- ladder(State, Account), ike_role:permits(Role, K, Facts)].
+
+-spec ladder(shown | hidden | deleted, local | suspended | none) -> [ike_role:kind()].
+ladder(State, Account) ->
     Ladder =
         case State of
             shown -> [hide, delete, purge];
