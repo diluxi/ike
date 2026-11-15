@@ -137,13 +137,40 @@ index() ->
 
 %% the form for a new thread or a reply, for whoever is logged in; anyone
 %% else is shown the way to log in. plain forms: nothing here needs a script
--spec post_form(Action :: binary(), {csrf, binary(), Name :: binary() | none} | anonymous) ->
+-spec post_form(
+    Action :: binary(),
+    {csrf, binary(), Name :: binary() | none} | {nobody, Token :: binary()} | locked
+) ->
     ike_html:html().
-post_form(Action, anonymous) ->
+post_form(Action, {nobody, Token}) ->
+    layout(<<"post">>, [
+        ike_html:el(h1, [ike_html:text(<<"post">>)]),
+        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
+            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}], []),
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
+                ike_html:el(br, []),
+                ike_html:el(
+                    textarea,
+                    [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
+                    []
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+            ])
+        ]),
+        ike_html:el(p, [
+            ike_html:text(<<"posted without an account: nothing is kept but the text. or ">>),
+            anchor(<<"/login">>, <<"log in">>),
+            ike_html:text(<<".">>)
+        ])
+    ]);
+post_form(Action, locked) ->
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
         ike_html:el(p, [
-            ike_html:text(<<"posting needs an account for now: ">>),
+            ike_html:text(<<"posting here needs an account: ">>),
             anchor(<<"/login">>, <<"log in">>),
             ike_html:text(<<", then come back to ">>),
             anchor(Action, <<"this page">>),

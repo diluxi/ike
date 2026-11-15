@@ -3,8 +3,8 @@
 
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
--export([board_name/1, anonymous_names/0]).
--export_type([oidc/0]).
+-export([board_name/1, anonymous_names/0, limit/0]).
+-export_type([oidc/0, limit/0]).
 
 -type oidc() :: #{
     issuer := binary(),
@@ -53,6 +53,55 @@ anonymous_names() ->
         _ ->
             [<<"anon">>]
     end.
+
+%% posts, seconds: how often one address, or one ipv6 network of
+%% v6_prefix bits, may post without an account.
+%% board_posts, board_seconds: how often nobody may post on one board,
+%% all addresses together.
+%% salt_seconds: how long the key the addresses are hashed with lives.
+%% proxies: whose x-forwarded-for is believed; anyone else's is ignored
+%% and they are counted as themselves
+-type limit() :: #{
+    posts := pos_integer(),
+    seconds := pos_integer(),
+    board_posts := pos_integer(),
+    board_seconds := pos_integer(),
+    salt_seconds := pos_integer(),
+    v6_prefix := 48 | 56 | 64,
+    proxies := [term()]
+}.
+
+-spec limit() -> limit().
+limit() ->
+    Given =
+        case application:get_env(ike, limit) of
+            {ok, Map} when is_map(Map) -> Map;
+            _ -> #{}
+        end,
+    Count = fun(Key, Default) ->
+        case Given of
+            #{Key := N} when is_integer(N), N > 0 -> N;
+            _ -> Default
+        end
+    end,
+    #{
+        posts => Count(posts, 4),
+        seconds => Count(seconds, 60),
+        board_posts => Count(board_posts, 10),
+        board_seconds => Count(board_seconds, 60),
+        salt_seconds => Count(salt_seconds, 3600),
+        v6_prefix =>
+            case Given of
+                #{v6_prefix := 48} -> 48;
+                #{v6_prefix := 56} -> 56;
+                _ -> 64
+            end,
+        proxies =>
+            case Given of
+                #{proxies := Proxies} when is_list(Proxies) -> Proxies;
+                _ -> []
+            end
+    }.
 
 -spec data_dir() -> binary().
 data_dir() ->

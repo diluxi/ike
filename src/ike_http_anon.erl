@@ -1,7 +1,11 @@
 %% Invariant 1, at the door: the first stream handler forgets where a
 %% request came from before anything else sees it. No handler, and no
 %% crash report quoting a request, can then log an address it never had.
-%% The rate limiter (M1) belongs here, ahead of the forgetting.
+%%
+%% The rate limiter sits here, ahead of the forgetting, and its answer
+%% is acted on here too: a request that is turned away never reaches a
+%% handler, and one that is let through carries no trace of having been
+%% counted.
 -module(ike_http_anon).
 -behaviour(cowboy_stream).
 
@@ -21,8 +25,46 @@
 
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts()) ->
     {cowboy_stream:commands(), next()}.
-init(StreamID, Req, Opts) ->
-    cowboy_stream:init(StreamID, forget(Req), Opts).
+init(StreamID, Req0, Opts) ->
+    Verdict = verdict(Req0),
+    Req = forget(Req0),
+    case Verdict of
+        ok ->
+            cowboy_stream:init(StreamID, Req, Opts);
+        limited ->
+            %% only who posts as nobody is held to it: an account can be
+            %% banned, and nobody cannot
+            case ike_http_login:session(Req) of
+                {ok, _, _} -> cowboy_stream:init(StreamID, Req, Opts);
+                error -> {[slow_down(), stop], undefined}
+            end
+    end.
+
+%% every post is counted against where it came from, whoever sent it and
+%% whatever becomes of it. nothing that goes wrong in the counting may
+%% be reported, since a report would quote the address: it is turned
+%% into the answer no instead
+-spec verdict(cowboy_req:req()) -> ok | limited.
+verdict(#{method := <<"POST">>, peer := {Peer, _}, headers := Headers}) ->
+    try
+        ike_limit:charge(Peer, maps:get(<<"x-forwarded-for">>, Headers, undefined))
+    catch
+        _:_ -> limited
+    end;
+verdict(_) ->
+    ok.
+
+-spec slow_down() -> cowboy_stream:resp_command().
+slow_down() ->
+    #{seconds := Seconds} = ike_config:limit(),
+    Html = ike_view:message(
+        <<"slow down">>, <<"too many posts from your network just now. try again in a while.">>
+    ),
+    Headers = (ike_http:headers())#{
+        <<"content-type">> => <<"text/html; charset=utf-8">>,
+        <<"retry-after">> => integer_to_binary(Seconds)
+    },
+    {response, 429, Headers, ike_html:to_iodata(Html)}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), binary(), next()) ->
     {cowboy_stream:commands(), next()}.

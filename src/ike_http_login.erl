@@ -5,7 +5,7 @@
 -behaviour(cowboy_handler).
 
 -export([init/2]).
--export([session/1]).
+-export([session/1, cookie/2]).
 
 -define(SESSION, <<"__Host-ike">>).
 -define(LOGIN, <<"__Host-ike-login">>).

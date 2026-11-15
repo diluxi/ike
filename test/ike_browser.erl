@@ -9,7 +9,7 @@
 -export([start/2, stop/0, restart/0]).
 -export([login/2, login/3, begin_login/1, expect/3, callback/3, claims/3, id_token/4]).
 -export([post/4, sign/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
--export([query/3, posts/1, page_file/2]).
+-export([query/3, posts/1, page_file/2, unlock/2, form/3, anonymous/4]).
 
 -define(CLIENT, <<"ike-test">>).
 
@@ -33,7 +33,10 @@ start(Config, Env) ->
         redirect_uri => list_to_binary(Base ++ "/login/callback")
     },
     Boards = [{<<"b">>, <<"random">>}, {<<"meta">>, <<"about ike">>}],
-    All = [{data_dir, Dir}, {oidc, Oidc}, {boards, Boards} | Env],
+    %% the suites all come from one address; only those that are about
+    %% the limiter ask to be held to one
+    Limit = #{posts => 1000000, board_posts => 1000000},
+    All = [{data_dir, Dir}, {oidc, Oidc}, {boards, Boards}, {limit, Limit} | Env],
     [ok = application:set_env(ike, K, V) || {K, V} <- All],
     persistent_term:put(?MODULE, [K || {K, _} <- All]),
     {ok, _} = application:ensure_all_started(ike),
@@ -176,6 +179,26 @@ query(Config, Sql, Args) ->
     after
         esqlite3:close(Conn)
     end.
+
+%% what a moderator will do once there are moderators: until then, by
+%% hand in the database, as an operator would
+unlock(Config, Board) ->
+    [] = query(Config, "UPDATE board SET locked = 0 WHERE name = ?", [Board]),
+    ok.
+
+%% the form nobody is given: its token, and the cookie that goes with it
+form(Config, Path, Headers) ->
+    {200, ResponseHeaders, Page} = request(Config, get, Path, Headers, none),
+    {match, [Token]} = re:run(
+        Page, "name=\"csrf\" value=\"([^\"]+)\"", [{capture, all_but_first, list}]
+    ),
+    {Token, set_cookie("__Host-ike-form", ResponseHeaders), ResponseHeaders}.
+
+%% a post by nobody, as a browser without an account sends it
+anonymous(Config, Path, Headers, Text) ->
+    {Token, Cookie, _} = form(Config, Path, Headers),
+    Form = uri_string:compose_query([{<<"csrf">>, list_to_binary(Token)}, {<<"body">>, Text}]),
+    request(Config, post, Path, [{"cookie", "__Host-ike-form=" ++ Cookie} | Headers], {form, Form}).
 
 posts(Config) ->
     query(Config, "SELECT count(*) FROM post", []).

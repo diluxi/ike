@@ -4,7 +4,7 @@
 -module(ike_reader).
 -behaviour(gen_server).
 
--export([start_link/0, whereabouts/1]).
+-export([start_link/0, whereabouts/1, board/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 
 -spec start_link() -> gen_server:start_ret().
@@ -16,6 +16,15 @@ start_link() ->
 whereabouts(Post) ->
     case gen_server:call(?MODULE, {whereabouts, Post}) of
         {ok, Board, Thread} when is_binary(Board), is_integer(Thread) -> {ok, Board, Thread};
+        _ -> none
+    end.
+
+%% whether a board takes posts from nobody, if there is such a board
+-spec board(Name :: binary()) -> open | locked | none.
+board(Name) ->
+    case gen_server:call(?MODULE, {board, Name}) of
+        open -> open;
+        locked -> locked;
         _ -> none
     end.
 
@@ -37,6 +46,14 @@ handle_call({whereabouts, Post}, _From, Conn) when is_integer(Post) ->
     Reply =
         case ike_db:q(Conn, Sql, [Post]) of
             {ok, [[Board, Thread]]} -> {ok, Board, Thread};
+            _ -> none
+        end,
+    {reply, Reply, Conn};
+handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
+    Reply =
+        case ike_db:q(Conn, <<"SELECT locked FROM board WHERE name = ?1">>, [Name]) of
+            {ok, [[0]]} -> open;
+            {ok, [[1]]} -> locked;
             _ -> none
         end,
     {reply, Reply, Conn};

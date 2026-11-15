@@ -34,6 +34,16 @@ machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://
 # where a post is, is asked of ike each time; there is no post yet
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/p/1) = 404")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -F body=x http://localhost/board/b/new) = 403")
+# posts are counted by where caddy says they came from, whatever became
+# of them: these make six from one address, where four are let through.
+# what the client says of itself is not believed
+for _ in range(4):
+    machine.succeed("curl -s -o /dev/null -d body=x http://localhost/board/b/new")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://localhost/board/b/new) = 429")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 203.0.113.9' -d body=x http://localhost/board/b/new) = 429")
+machine.succeed("curl -s -D - -o /dev/null -d body=x http://localhost/board/b/new | grep -i '^retry-after: 60'")
+# reading is never counted
+machine.succeed("curl -fsS http://localhost/board/b/new | grep -q 'log in'")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
 machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")

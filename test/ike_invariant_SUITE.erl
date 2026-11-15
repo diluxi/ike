@@ -48,6 +48,8 @@ all() ->
 %% addresses nobody has (rfc 5737, rfc 3849), claimed in forwarding headers
 -define(V4, "203.0.113.77").
 -define(V6, "2001:db8::77").
+%% posts an address is let, for the limiter to count to and past
+-define(POSTS, 60).
 
 init_per_suite(Config0) ->
     %% everything logged from here on, by anything, lands in a file
@@ -57,7 +59,10 @@ init_per_suite(Config0) ->
     }),
     Level = maps:get(level, logger:get_primary_config()),
     ok = logger:set_primary_config(level, all),
-    Config = ike_browser:start(Config0, [{backup_seconds, 1}]),
+    %% the limiter is the one thing that looks at an address, so here it
+    %% is made to: the loopback is its proxy, and the headers are believed
+    Limit = #{posts => ?POSTS, seconds => 3600, proxies => [{127, 0, 0, 1}]},
+    Config = ike_browser:start(Config0, [{backup_seconds, 1}, {limit, Limit}]),
     [{log, Log}, {level, Level}, {calls, calls()} | Config].
 
 end_per_suite(Config) ->
@@ -113,6 +118,18 @@ inv01_no_address_is_written(Config) ->
         end,
         Requests
     ),
+    %% nobody posts too, from an address the limiter counts
+    ok = ike_browser:unlock(Config, <<"meta">>),
+    {303, _, _} = ike_browser:anonymous(Config, "/board/meta/new", Forwarded, <<"from nobody">>),
+    %% and from another until it is turned away, and then some
+    Flood = [{"x-forwarded-for", ?V6 ++ ", " ++ ?V4}, {"x-real-ip", ?V4}],
+    Statuses = [
+        element(1, ike_browser:request(Config, post, "/board/b/new", Flood, Form([{"body", "x"}])))
+     || _ <- lists:seq(1, ?POSTS + 5)
+    ],
+    {Let, Turned} = lists:split(?POSTS, Statuses),
+    [403] = lists:usort(Let),
+    [429] = lists:usort(Turned),
     %% a snapshot exists by now, so backups are among what is searched
     [_ | _] = wait_for(fun() -> files(filename:join(?config(dir, Config), "backups")) end, 20),
 
@@ -161,7 +178,13 @@ inv01_no_address_is_written(Config) ->
             {ranch, remove_connection}
         ])
     ],
-    [] = Asks.
+    [] = Asks,
+    %% the limiter is asked at the door, before the forgetting, and by
+    %% nothing behind it that could hand it an address
+    [ike_http_anon] = lists:usort([
+        Mod
+     || {{Mod, _, _}, {ike_limit, charge, _}} <- ?config(calls, Config)
+    ]).
 
 %% 2. Every page and action works with JS disabled; islands only enhance
 %% pages that already work.

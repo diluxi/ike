@@ -24,7 +24,17 @@
 					cfg.boards)}]},
 				{anonymous_names, [${lib.concatMapStringsSep ", "
 					(name: "<<${builtins.toJSON name}/utf8>>")
-					cfg.anonymousNames}]}${lib.optionalString (cfg.oidc != null) '',
+					cfg.anonymousNames}]},
+				{limit, #{
+					posts => ${toString cfg.limit.posts},
+					seconds => ${toString cfg.limit.seconds},
+					board_posts => ${toString cfg.limit.boardPosts},
+					board_seconds => ${toString cfg.limit.boardSeconds},
+					salt_seconds => ${toString cfg.limit.saltSeconds},
+					v6_prefix => ${toString cfg.limit.v6Prefix},
+					proxies => [${lib.optionalString cfg.caddy.enable
+						"{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}"}]
+				}}${lib.optionalString (cfg.oidc != null) '',
 				{oidc, #{
 					issuer => <<"${cfg.oidc.issuer}">>,
 					client_id => <<"${cfg.oidc.clientId}">>,
@@ -143,6 +153,57 @@ in {
 					was purged from ike lives on in them for `interval` times
 					`keep`, and for as long as copies made elsewhere are kept
 					(hazard D7).
+				'';
+			};
+		};
+
+		limit = {
+			posts = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 4;
+				description = ''
+					How many posts one address may send in `seconds` without
+					an account behind them. An IPv6 address counts as its
+					whole network of `v6Prefix` bits. Counted in memory, under
+					a key that is thrown away every `saltSeconds`, and never
+					written anywhere.
+				'';
+			};
+			seconds = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 60;
+				description = "The stretch of time `posts` is counted over.";
+			};
+			boardPosts = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 10;
+				description = ''
+					How many posts without an account one board takes in
+					`boardSeconds`, from all addresses together: what still
+					holds against someone with many addresses.
+				'';
+			};
+			boardSeconds = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 60;
+				description = "The stretch of time `boardPosts` is counted over.";
+			};
+			saltSeconds = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 3600;
+				description = ''
+					How long the key lives that addresses are hashed with
+					before they are counted. With a new key every count by
+					address starts over.
+				'';
+			};
+			v6Prefix = lib.mkOption {
+				type = lib.types.enum [ 48 56 64 ];
+				default = 64;
+				description = ''
+					The size of the IPv6 network counted as one address. 64
+					is one subscriber at most providers; some hand out a 56
+					or a 48 to each.
 				'';
 			};
 		};

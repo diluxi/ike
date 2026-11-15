@@ -1,6 +1,7 @@
 %% Posting: the forms, made per request because they carry the session's
 %% csrf token, and what they submit. A new thread at /board/B/new, a reply
-%% at /board/B/N/reply. For now only an account may post.
+%% at /board/B/N/reply. An account may post anywhere; nobody may post
+%% where the board is not locked, as often as the limiter lets them.
 -module(ike_http_post).
 -behaviour(cowboy_handler).
 
@@ -30,18 +31,90 @@ init(Req, State) ->
         end,
     {ok, Reply, State}.
 
+%% what ties a form sent by nobody to this site's own page: a cookie no
+%% other site can set or have sent along, holding what the form holds
+%% too. it is made up per browser and kept nowhere (hazard i2)
+-define(FORM, <<"__Host-ike-form">>).
+
 -spec form(place(), cowboy_req:req()) -> cowboy_req:req().
-form(Place, Req) ->
+form({Board, _} = Place, Req) ->
     case exists(Place) of
         true ->
-            Session =
-                case ike_http_login:session(Req) of
-                    {ok, _Id, #{csrf := Csrf, name := Name}} -> {csrf, Csrf, Name};
-                    error -> anonymous
-                end,
-            ike_http:page(200, ike_view:post_form(action(Place), Session), Req);
+            case ike_http_login:session(Req) of
+                {ok, _Id, #{csrf := Csrf, name := Name}} ->
+                    Who = {csrf, Csrf, Name},
+                    ike_http:page(200, ike_view:post_form(action(Place), Who), Req);
+                error ->
+                    case ike_reader:board(Board) of
+                        open ->
+                            {Token, Req1} = form_token(Req),
+                            Html = ike_view:post_form(action(Place), {nobody, Token}),
+                            ike_http:page(200, Html, Req1);
+                        _ ->
+                            ike_http:page(200, ike_view:post_form(action(Place), locked), Req)
+                    end
+            end;
         false ->
             ike_http:not_found(Req)
+    end.
+
+%% the browser's token, or a new one for it
+-spec form_token(cowboy_req:req()) -> {binary(), cowboy_req:req()}.
+form_token(Req) ->
+    case ike_http_login:cookie(?FORM, Req) of
+        {ok, Token} when byte_size(Token) =:= 43 ->
+            {Token, Req};
+        _ ->
+            Token = base64:encode(crypto:strong_rand_bytes(32), #{
+                mode => urlsafe, padding => false
+            }),
+            {Token,
+                cowboy_req:set_resp_cookie(?FORM, Token, Req, #{
+                    path => <<"/">>, secure => true, http_only => true, same_site => strict
+                })}
+    end.
+
+-spec nobody(place(), cowboy_req:req()) -> cowboy_req:req().
+nobody({Board, _} = Place, Req0) ->
+    case ike_reader:board(Board) of
+        open ->
+            case {ike_http_login:cookie(?FORM, Req0), ike_http:form(Req0)} of
+                {{ok, Cookie}, {ok, #{<<"csrf">> := Token} = Form, Req}} when
+                    byte_size(Cookie) =:= 43
+                ->
+                    case
+                        byte_size(Token) =:= byte_size(Cookie) andalso
+                            crypto:hash_equals(Token, Cookie)
+                    of
+                        true ->
+                            case exists(Place) of
+                                true -> unhurried(Place, maps:get(<<"body">>, Form, <<>>), Req);
+                                false -> ike_http:not_found(Req)
+                            end;
+                        false ->
+                            ike_http:forbidden(Req)
+                    end;
+                {_, {error, Status, Req}} ->
+                    ike_http:reply(Status, Req);
+                {_, {ok, _, Req}} ->
+                    ike_http:forbidden(Req)
+            end;
+        _ ->
+            ike_http:forbidden(Req0)
+    end.
+
+%% the board's own pace, counted only for posts that would go through
+-spec unhurried(place(), binary(), cowboy_req:req()) -> cowboy_req:req().
+unhurried({Board, _} = Place, Body, Req) ->
+    case ike_limit:board(Board) of
+        ok ->
+            write(Place, ike_id:anonymous(), Body, Req);
+        limited ->
+            Html = ike_view:message(
+                <<"slow down">>,
+                <<"this board is taking posts without an account only so fast. try again in a while.">>
+            ),
+            ike_http:page(429, Html, Req)
     end.
 
 -spec submit(place(), cowboy_req:req()) -> cowboy_req:req().
@@ -76,7 +149,7 @@ submit(Place, Req0) ->
                     ike_http:reply(Status, Req)
             end;
         error ->
-            ike_http:forbidden(Req0)
+            nobody(Place, Req0)
     end.
 
 -spec write(place(), ike_id:actor(), binary(), cowboy_req:req()) -> cowboy_req:req().
