@@ -98,9 +98,11 @@ handle_call({post, Actor, Home, Body}, _From, Conn) when
         case text(Body) of
             true ->
                 Time = erlang:system_time(second),
-                ike_db:transaction(Conn, fun() ->
-                    post(Conn, Actor, Home, Time, Body)
-                end);
+                committed(
+                    ike_db:transaction(Conn, fun() ->
+                        post(Conn, Actor, Home, Time, Body)
+                    end)
+                );
             false ->
                 {error, bad_text}
         end,
@@ -116,6 +118,14 @@ handle_cast(_Request, Conn) ->
 terminate(_Reason, Conn) ->
     _ = ike_db:close(Conn),
     ok.
+
+%% the renderer follows each commit, never a transaction still open
+-spec committed(Result) -> Result when Result :: {ok, {integer(), integer()}} | term().
+committed({ok, {Id, Thread}}) when is_integer(Id), is_integer(Thread) ->
+    ike_render:dirty(Thread),
+    {ok, Id};
+committed(Other) ->
+    Other.
 
 %% inside a transaction
 
@@ -142,7 +152,7 @@ local_actor(Conn, Issuer, Subject) ->
     end.
 
 -spec post(ike_db:writer(), integer(), term(), integer(), binary()) ->
-    {ok, integer()} | error().
+    {ok, {Id :: integer(), Thread :: integer()}} | error().
 post(Conn, Actor, new, Time, Body) ->
     %% an op's home thread is its own number, which autoincrement will hand
     %% out next; nobody else can take it, since nobody else writes
@@ -172,14 +182,14 @@ post(_Conn, _Actor, _Home, _Time, _Body) ->
     {error, bad_request}.
 
 -spec insert(ike_db:writer(), integer(), integer(), integer(), binary()) ->
-    {ok, integer()} | error().
+    {ok, {Id :: integer(), Thread :: integer()}} | error().
 insert(Conn, Actor, Home, Time, Body) ->
     Insert = <<
         "INSERT INTO post (thread, actor, time, body)"
         " VALUES (?1, ?2, ?3, ?4) RETURNING id"
     >>,
     case ike_db:q(Conn, Insert, [Home, Actor, Time, Body]) of
-        {ok, [[Id]]} when is_integer(Id) -> {ok, Id};
+        {ok, [[Id]]} when is_integer(Id) -> {ok, {Id, Home}};
         {ok, Rows} -> {error, {unexpected, Rows}};
         {error, _} = Error -> Error
     end.

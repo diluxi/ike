@@ -12,4 +12,5 @@ start_link() ->
 init([]) ->
     Writer = #{id => ike_writer, start => {ike_writer, start_link, []}},
     %% everything after the writer reads a schema the writer has migrated
-    {ok, {#{strategy => rest_for_one}, [Writer, ike_http:child_spec()]}}.
+    Render = #{id => ike_render, start => {ike_render, start_link, []}},
+    {ok, {#{strategy => rest_for_one}, [Writer, Render, ike_http:child_spec()]}}.
