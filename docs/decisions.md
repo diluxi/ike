@@ -164,8 +164,30 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **esqlite carries its own SQLite** (3.50.4), pinned by esqlite's Hex
   hash, and builds it with the `pc` rebar3 plugin from nixpkgs. `pc` is a
   build-time dependency esqlite brings with it.
-- **Timeouts (D5), so far:** every esqlite call runs on a dirty I/O
-  scheduler, and the busy timeout bounds waiting for a lock. A bound on a
-  running query (`esqlite3:interrupt/1` from a timer) comes with the
-  writer and the readers in step 4.
+- **Timeouts (D5):** every esqlite call runs on a dirty I/O scheduler, the
+  busy timeout bounds waiting for a lock, and `ike_db:q` arms a timer that
+  calls `sqlite3_interrupt` after 5 s. *Limit:* a timer that fires just as
+  its query returns can interrupt the next one on that connection, which
+  then fails like any timed-out query. `exec` is not bounded: it runs
+  migrations and `COMMIT`.
+
+## Writer
+
+- **The write capability is the connection's type.** `ike_db` hands out
+  `reader()` and `writer()`, both opaque; `exec` and `transaction` take
+  only a writer, and a reader has `PRAGMA query_only` set, so SQLite
+  refuses what the types missed. Only `ike_writer` opens a writer.
+- **The writer migrates.** Bringing the schema up to date is a write, so
+  it happens in the writer's `init`, and the supervisor starts everything
+  else after it (`rest_for_one`).
+- **One message, one transaction.** Callers wait up to 15 s; giving up
+  does not undo a commit.
+- **`ike_id`: post and actor numbers are opaque and tagged,** so one
+  cannot be passed for the other or made from a bare integer elsewhere.
+  No booru id yet: nothing in M0 has one.
+- **A post's text** is UTF-8, at most 16 KiB, not empty, with no control
+  characters but newline and tab. The writer checks it, whoever asks.
+- **The writer does not parse links yet.** The reverse-link table is in
+  the schema and nothing fills it: the link grammar is M1's. It will be
+  filled in the same transaction as the post (D1).
 
