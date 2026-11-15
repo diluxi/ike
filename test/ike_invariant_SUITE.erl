@@ -321,8 +321,10 @@ inv04_text_is_escaped(Config) ->
             %% whatever the text was, the page has the tags of the harmless
             %% one, in the same order, and no others
             Same = tags(HostilePage) =:= tags(BenignPage),
-            %% the text itself is there, escaped
-            Kept = binary:match(HostilePage, escaped(Text)) =/= nomatch,
+            %% the text itself is there, escaped; a link in it is the
+            %% same text between tags, so the tags are read past
+            Bare = re:replace(HostilePage, "<[^>]*>", "", [global, {return, binary}]),
+            Kept = binary:match(Bare, escaped(Text)) =/= nomatch,
             %% and the index, which quotes it, has only the tags ike writes
             Closed = lists:all(fun known_tag/1, tags(HostileIndex)),
             ?WHENFAIL(
@@ -332,6 +334,36 @@ inv04_text_is_escaped(Config) ->
         end
     ),
     true = proper:quickcheck(Prop, [{numtests, 40}, {to_file, user}]),
+    %% links are markup made from text: whatever stands around one, a
+    %% link says only its number, and a board's name only if it is one
+    lists:foreach(
+        fun(Text) ->
+            {Page, Index} = posted(Config, Session, Text),
+            scriptless(Page),
+            true = lists:all(fun known_tag/1, tags(Page) ++ tags(Index)),
+            {match, Hrefs} = re:run(Page, "href=\"([^\"]*)\"", [
+                global, {capture, all_but_first, binary}
+            ]),
+            [] = [H || [H] <- Hrefs, re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match],
+            {match, Classes} = re:run(Page, "class=\"([^\"]*)\"", [
+                global, {capture, all_but_first, binary}
+            ]),
+            [] = [
+                C
+             || [C] <- Classes, not lists:member(C, [<<"name">>, <<"name account">>, <<"gone">>])
+            ]
+        end,
+        [
+            <<">>1\"><script>alert(1)</script>">>,
+            <<">>1<b>bold</b> >>1' onmouseover='alert(1)">>,
+            <<">>>/b\"><script>/1">>,
+            <<">>>/<script>/1 >>>/b/1\" onmouseover=\"alert(1)">>,
+            <<">>>/b/../../login >>>/../1 >>>/b/1/../../../logout">>,
+            <<">>>/b:alert(1)/1 >>1:alert(1) >>>/b/1:alert(1)">>,
+            <<">>999999999<img src=x onerror=alert(1)> >>>/meta/999999999<svg onload=alert(1)>">>,
+            <<"<a href=\"/p/1\">>>1</a> &gt;&gt;1 >>&#49;">>
+        ]
+    ),
     %% per-request pages: what a request says of itself is never echoed
     Attack = uri_string:quote("\"><script>alert(1)</script>"),
     lists:foreach(
@@ -579,6 +611,7 @@ known_routes() ->
         [<<"board">>, board, <<"new">>],
         [<<"board">>, board, thread],
         [<<"board">>, board, thread, <<"reply">>],
+        [<<"p">>, post],
         [<<"login">>],
         [<<"login">>, <<"callback">>],
         [<<"logout">>],
@@ -705,6 +738,9 @@ first_line(Text) ->
     hd(binary:split(Text, <<"\n">>)).
 
 benign($\n) -> $\n;
+%% a link is a link in both, so what makes one stays
+benign($>) -> $>;
+benign(C) when C >= $0, C =< $9 -> C;
 benign(_) -> $x.
 
 %% text that tries: markup, attribute breakouts, entities, comments,
@@ -740,6 +776,9 @@ hostile() ->
         <<"\t">>,
         <<"\n">>,
         <<"\n>>1\n">>,
+        <<">>1">>,
+        <<">>999999999">>,
+        <<">>>">>,
         <<" plain words ">>,
         <<"ü ñ 語 🮲"/utf8>>
     ]),

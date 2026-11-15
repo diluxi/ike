@@ -152,8 +152,17 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
             case ike_db:q(Conn, Sql, [Thread]) of
                 {ok, Rows} ->
                     Names = ike_config:anonymous_names(),
+                    Links = links(Conn, Thread),
+                    Replies = replies(Conn, Thread),
                     Posts = [
-                        #{id => Id, time => Time, body => Body, name => name(Name0, Id, Names)}
+                        #{
+                            id => Id,
+                            time => Time,
+                            body => Body,
+                            name => name(Name0, Id, Names),
+                            links => Links,
+                            replies => maps:get(Id, Replies, [])
+                        }
                      || [Id, Time, Body, Name0] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
@@ -172,6 +181,45 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
         {error, Reason} ->
             error({render, Thread, Reason})
     end.
+
+%% the posts this thread's posts point at, those that are there to be
+%% shown, and the board each is on
+-spec links(ike_db:reader(), integer()) -> #{integer() => binary()}.
+links(Conn, Thread) ->
+    Sql = <<
+        "SELECT DISTINCT l.post, b.name FROM post s"
+        " JOIN link l ON l.source = s.id JOIN post p ON p.id = l.post"
+        " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
+        " WHERE s.thread = ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, Rows} ->
+            #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)};
+        {error, Reason} ->
+            error({render, Thread, Reason})
+    end.
+
+%% who points at each post of this thread, oldest first
+-spec replies(ike_db:reader(), integer()) -> #{integer() => [integer()]}.
+replies(Conn, Thread) ->
+    Sql = <<
+        "SELECT l.post, l.source FROM post p JOIN link l ON l.post = p.id"
+        " WHERE p.thread = ?1 ORDER BY l.source DESC"
+    >>,
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, Rows} ->
+            grouped(Rows, #{});
+        {error, Reason} ->
+            error({render, Thread, Reason})
+    end.
+
+-spec grouped([ike_db:row()], #{integer() => [integer()]}) -> #{integer() => [integer()]}.
+grouped([[Post, Source] | Rows], Acc) when is_integer(Post), is_integer(Source) ->
+    grouped(Rows, Acc#{Post => [Source | maps:get(Post, Acc, [])]});
+grouped([_ | Rows], Acc) ->
+    grouped(Rows, Acc);
+grouped([], Acc) ->
+    Acc.
 
 %% an account's name, or one of the names for nobody: always the same
 %% one for the same post, so that a page rendered again reads the same

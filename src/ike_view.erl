@@ -6,8 +6,15 @@
 -export_type([post/0, summary/0, board/0]).
 
 %% name: an account's, or what stands in for one
+%% links: the posts the text points at that are there, and their boards
+%% replies: the posts that point at this one
 -type post() :: #{
-    id := integer(), time := integer(), body := binary(), name := {account | nobody, binary()}
+    id := integer(),
+    time := integer(),
+    body := binary(),
+    name := {account | nobody, binary()},
+    links := #{integer() => binary()},
+    replies := [integer()]
 }.
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
@@ -27,7 +34,7 @@ thread(#{name := Name} = Board, Root, Posts) ->
     ]).
 
 -spec post(post()) -> ike_html:html().
-post(#{id := Id, time := Time, body := Body, name := {Kind, Name}}) ->
+post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post) ->
     N = integer_to_binary(Id),
     Anchor = <<"p", N/binary>>,
     Stamp = stamp(Time),
@@ -44,8 +51,50 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}}) ->
             ike_html:text(<<" ">>),
             ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
         ]),
-        ike_html:el(p, lines(Body))
+        ike_html:el(p, lines(ike_text:parse(Body), Links))
+        | replies(maps:get(replies, Post))
     ]).
+
+-spec replies([integer()]) -> [ike_html:html()].
+replies([]) ->
+    [];
+replies(Sources) ->
+    [ike_html:el(footer, spaced([permalink(S, <<>>) || S <- Sources]))].
+
+-spec spaced([ike_html:html()]) -> [ike_html:html()].
+spaced([First, Second | Rest]) -> [First, ike_html:text(<<" ">>) | spaced([Second | Rest])];
+spaced(Short) -> Short.
+
+%% a link to a post wherever it is now, written as it was typed
+-spec permalink(integer(), Board :: binary()) -> ike_html:html().
+permalink(Post, Board) ->
+    N = integer_to_binary(Post),
+    Text =
+        case Board of
+            <<>> -> <<">>", N/binary>>;
+            _ -> <<">>>/", Board/binary, "/", N/binary>>
+        end,
+    anchor(<<"/p/", N/binary>>, Text).
+
+%% what a link to nothing leaves: the same whether its target is gone,
+%% was never there or is yet to come (hazard g5)
+-spec gone(binary()) -> ike_html:html().
+gone(Text) ->
+    ike_html:el(span, [{class, <<"gone">>}], [ike_html:text(Text)]).
+
+-spec piece(ike_text:piece(), #{integer() => binary()}) -> ike_html:html().
+piece({text, Text}, _Links) ->
+    ike_html:text(Text);
+piece({post, N}, Links) ->
+    case Links of
+        #{N := _} -> permalink(N, <<>>);
+        _ -> gone(<<">>", (integer_to_binary(N))/binary>>)
+    end;
+piece({post, Board, N}, Links) ->
+    case Links of
+        #{N := Board} -> permalink(N, Board);
+        _ -> gone(<<">>>/", Board/binary, "/", (integer_to_binary(N))/binary>>)
+    end.
 
 -spec board(board(), [summary()]) -> ike_html:html().
 board(#{name := Name, title := Title}, Threads) ->
@@ -175,13 +224,14 @@ layout(Title, Content) ->
 anchor(Href, Text) ->
     ike_html:el(a, [{href, Href}], [ike_html:text(Text)]).
 
-%% text nodes with a br between lines
--spec lines(binary()) -> [ike_html:html()].
-lines(Body) ->
-    case binary:split(Body, <<"\n">>) of
-        [Line] -> [ike_html:text(Line)];
-        [Line, Rest] -> [ike_html:text(Line), ike_html:el(br, []) | lines(Rest)]
-    end.
+%% each line's pieces, with a br between lines
+-spec lines([[ike_text:piece()]], #{integer() => binary()}) -> [ike_html:html()].
+lines([], _Links) ->
+    [];
+lines([Line], Links) ->
+    [piece(P, Links) || P <- Line];
+lines([Line | Rest], Links) ->
+    [piece(P, Links) || P <- Line] ++ [ike_html:el(br, []) | lines(Rest, Links)].
 
 %% the first line, cut at a character boundary
 -spec excerpt(binary()) -> binary().

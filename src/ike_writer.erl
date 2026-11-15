@@ -211,9 +211,9 @@ settled({error, _} = Error) -> Error;
 settled(_) -> ok.
 
 %% the renderer follows each commit, never a transaction still open
--spec committed(Result) -> Result when Result :: {ok, {integer(), integer()}} | term().
-committed({ok, {Id, Thread}}) when is_integer(Id), is_integer(Thread) ->
-    ike_render:dirty(Thread),
+-spec committed(term()) -> term().
+committed({ok, {Id, Threads}}) when is_integer(Id), is_list(Threads) ->
+    [ike_render:dirty(Thread) || Thread <- Threads, is_integer(Thread)],
     {ok, Id};
 committed(Other) ->
     Other.
@@ -303,7 +303,7 @@ rename(Conn, Id, Name) ->
     end.
 
 -spec post(ike_db:writer(), integer(), term(), integer(), binary()) ->
-    {ok, {Id :: integer(), Thread :: integer()}} | error().
+    {ok, {Id :: integer(), Threads :: [term()]}} | error().
 post(Conn, Actor, {new, Name}, Time, Body) when is_binary(Name) ->
     %% an op's home thread is its own number, which autoincrement will hand
     %% out next; nobody else can take it, since nobody else writes
@@ -336,15 +336,48 @@ post(_Conn, _Actor, _Home, _Time, _Body) ->
     {error, bad_request}.
 
 -spec insert(ike_db:writer(), integer(), integer(), integer(), binary()) ->
-    {ok, {Id :: integer(), Thread :: integer()}} | error().
+    {ok, {Id :: integer(), Threads :: [term()]}} | error().
 insert(Conn, Actor, Home, Time, Body) ->
     Insert = <<
         "INSERT INTO post (thread, actor, time, body)"
         " VALUES (?1, ?2, ?3, ?4) RETURNING id"
     >>,
     case ike_db:q(Conn, Insert, [Home, Actor, Time, Body]) of
-        {ok, [[Id]]} when is_integer(Id) -> {ok, {Id, Home}};
-        {ok, Rows} -> {error, {unexpected, Rows}};
+        {ok, [[Id]]} when is_integer(Id) ->
+            case link(Conn, Id, ike_text:targets(Body)) of
+                ok -> touched(Conn, Id, Home);
+                {error, _} = Error -> Error
+            end;
+        {ok, Rows} ->
+            {error, {unexpected, Rows}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% the reverse links, with the post they are read from (hazard d1). a
+%% target need not be there: the link is weak, and waits for it
+-spec link(ike_db:writer(), integer(), [pos_integer()]) -> ok | error().
+link(_Conn, _Source, []) ->
+    ok;
+link(Conn, Source, [Target | Targets]) ->
+    case ike_db:q(Conn, <<"INSERT INTO link (source, post) VALUES (?1, ?2)">>, [Source, Target]) of
+        {ok, _} -> link(Conn, Source, Targets);
+        {error, _} = Error -> Error
+    end.
+
+%% every thread whose page a new post changes: its own, those of the
+%% posts it points at, which now show who points at them, and those of
+%% the posts that pointed at its number before it was there
+-spec touched(ike_db:writer(), integer(), integer()) ->
+    {ok, {Id :: integer(), Threads :: [term()]}} | error().
+touched(Conn, Id, Home) ->
+    Sql = <<
+        "SELECT p.thread FROM link l JOIN post p ON p.id = l.post WHERE l.source = ?1"
+        " UNION"
+        " SELECT p.thread FROM link l JOIN post p ON p.id = l.source WHERE l.post = ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [Id]) of
+        {ok, Rows} -> {ok, {Id, [Home | [Thread || [Thread] <- Rows, Thread =/= Home]]}};
         {error, _} = Error -> Error
     end.
 

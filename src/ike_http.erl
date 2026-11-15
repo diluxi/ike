@@ -37,6 +37,7 @@ dispatch() ->
             {"/board/:board/new", [Board], ike_http_post, []},
             {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
             {"/board/:board/:thread/reply", [Board, Thread], ike_http_post, []},
+            {"/p/:post", [{post, int}], ike_http_permalink, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},

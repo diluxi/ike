@@ -13,8 +13,9 @@ init([]) ->
     Writer = #{id => ike_writer, start => {ike_writer, start_link, []}},
     %% everything after the writer reads a schema the writer has migrated
     Render = #{id => ike_render, start => {ike_render, start_link, []}},
+    Reader = #{id => ike_reader, start => {ike_reader, start_link, []}},
     Session = #{id => ike_session, start => {ike_session, start_link, []}},
     Oidc = #{id => ike_oidc, start => {ike_oidc, start_link, []}},
     Backup = #{id => ike_backup, start => {ike_backup, start_link, []}},
-    Children = [Writer, Render, Session, Oidc, ike_http:child_spec(), Backup],
+    Children = [Writer, Render, Reader, Session, Oidc, ike_http:child_spec(), Backup],
     {ok, {#{strategy => rest_for_one}, Children}}.

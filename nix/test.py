@@ -31,6 +31,8 @@ machine.fail("su -s /bin/sh caddy -c 'test -r /var/lib/ike/ike.db'")
 machine.succeed("curl -fsS http://localhost/board/b/new | grep -q 'log in'")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/login) = 503")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://localhost/board/b/new) = 403")
+# where a post is, is asked of ike each time; there is no post yet
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/p/1) = 404")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -F body=x http://localhost/board/b/new) = 403")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
