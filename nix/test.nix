@@ -20,7 +20,11 @@
 				enable = true;
 				hostName = "http://localhost";
 			};
+			media.origin = "http://media.localhost";
 		};
+		# to ask the stripper's socket directly, with a fixture
+		environment.systemPackages = [ pkgs.socat ];
+		environment.etc."ike-test/base.png".source = ../test/ike_invariant_SUITE_data/base.png;
 	};
 
 	# a file of its own: nix strips spaces from indented strings, not tabs

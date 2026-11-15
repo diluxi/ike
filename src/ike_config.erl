@@ -4,7 +4,19 @@
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0, hold_seconds/0]).
--export_type([oidc/0, limit/0]).
+-export([assets_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
+-export_type([oidc/0, limit/0, strip/0]).
+
+%% the stripper's socket, and the caps it was started with: ike reads no
+%% more than max_bytes of an upload, and believes no answer past them
+-type strip() :: #{
+    socket := binary(),
+    max_bytes := pos_integer(),
+    max_side := pos_integer(),
+    max_pixels := pos_integer(),
+    thumb := pos_integer(),
+    files := pos_integer()
+}.
 
 -type oidc() :: #{
     issuer := binary(),
@@ -149,6 +161,64 @@ pages_dir() ->
     case application:get_env(ike, pages_dir) of
         {ok, Dir} when is_binary(Dir) -> Dir;
         _ -> <<(data_dir())/binary, "/pages">>
+    end.
+
+%% what was uploaded, stripped, and its thumbnails: kept with the state,
+%% where the web server cannot read, since a staged upload is its
+%% uploader's alone (invariant 10)
+-spec assets_dir() -> binary().
+assets_dir() ->
+    <<(data_dir())/binary, "/assets">>.
+
+-spec strip() -> strip().
+strip() ->
+    Given =
+        case application:get_env(ike, strip) of
+            {ok, Map} when is_map(Map) -> Map;
+            _ -> #{}
+        end,
+    Positive = fun(Key, Default) ->
+        case Given of
+            #{Key := N} when is_integer(N), N > 0 -> N;
+            _ -> Default
+        end
+    end,
+    #{
+        socket =>
+            case Given of
+                #{socket := Path} when is_binary(Path) -> Path;
+                _ -> <<"/run/ike-strip/strip.sock">>
+            end,
+        %% stubs for planning's open size caps
+        max_bytes => Positive(max_bytes, 20 * 1024 * 1024),
+        max_side => Positive(max_side, 16384),
+        max_pixels => Positive(max_pixels, 50000000),
+        thumb => Positive(thumb, 256),
+        files => Positive(files, 20)
+    }.
+
+%% where uploads are served from: another origin than ike's own (hazard
+%% p3). one value, so that moving it is a restart
+-spec media_origin() -> binary().
+media_origin() ->
+    case application:get_env(ike, media_origin) of
+        {ok, Origin} when is_binary(Origin) -> Origin;
+        _ -> <<"https://cdn.amartia.online">>
+    end.
+
+-spec media_host() -> binary().
+media_host() ->
+    case uri_string:parse(media_origin()) of
+        #{host := Host} when is_binary(Host) -> Host;
+        _ -> error({badenv, media_origin})
+    end.
+
+%% how long a link to a staged upload works
+-spec staged_seconds() -> pos_integer().
+staged_seconds() ->
+    case application:get_env(ike, staged_seconds) of
+        {ok, Seconds} when is_integer(Seconds), Seconds > 0 -> Seconds;
+        _ -> 600
     end.
 
 %% snapshots of the database. where they go from here is the host's affair

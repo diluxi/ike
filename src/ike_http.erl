@@ -28,7 +28,14 @@ child_spec() ->
 dispatch() ->
     Thread = {thread, int},
     Board = {board, fun board/2},
+    %% the media origin first: what it serves, ike's own host never does
+    Media = binary_to_list(ike_config:media_host()),
     cowboy_router:compile([
+        {Media, [
+            {"/staged/:upload/:expires/:sig/[:part]", [{upload, int}, {expires, int}],
+                ike_http_media, []},
+            {'_', ike_http_media, []}
+        ]},
         {'_', [
             {"/health", ike_http_health, []},
             {"/", ike_http_page, front},
@@ -41,6 +48,7 @@ dispatch() ->
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
+            {"/upload", ike_http_upload, []},
             {"/mod", ike_http_mod, front},
             {"/mod/post/:post", [{post, int}], ike_http_mod, post},
             {"/mod/board/:board", [Board], ike_http_mod, board},
@@ -69,12 +77,17 @@ board(_, _) ->
 -spec headers() -> cowboy:http_headers().
 headers() ->
     #{
-        <<"content-security-policy">> =>
-            <<"default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>,
+        <<"content-security-policy">> => csp(),
         <<"x-content-type-options">> => <<"nosniff">>,
         <<"referrer-policy">> => <<"same-origin">>,
         <<"cache-control">> => <<"no-store">>
     }.
+
+%% images come from the media origin, and from nowhere else
+-spec csp() -> binary().
+csp() ->
+    <<"default-src 'none'; img-src ", (ike_config:media_origin())/binary,
+        "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>.
 
 -spec html(cowboy:http_status(), iodata(), cowboy_req:req()) -> cowboy_req:req().
 html(Status, Body, Req) ->

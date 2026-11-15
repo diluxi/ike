@@ -10,6 +10,9 @@
 -export([login/2, login/3, begin_login/1, expect/3, callback/3, claims/3, id_token/4]).
 -export([post/4, sign/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
 -export([query/3, posts/1, page_file/2, unlock/2, form/3, anonymous/4]).
+-export([upload/3, multipart/1, media/2, media_host/0]).
+
+-define(MEDIA, "media.test").
 
 -define(CLIENT, <<"ike-test">>).
 
@@ -36,7 +39,23 @@ start(Config, Env) ->
     %% the suites all come from one address; only those that are about
     %% the limiter ask to be held to one
     Limit = #{posts => 1000000, board_posts => 1000000},
-    All = [{data_dir, Dir}, {oidc, Oidc}, {boards, Boards}, {limit, Limit} | Env],
+    %% the stripper behind its socket, as the unit would be, with the
+    %% caps ike is told of
+    Caps = #{max_bytes => 2000000, max_side => 4096, max_pixels => 16000000, thumb => 128},
+    Socket = ike_strip_stub:start(
+        filename:join(?config(priv_dir, Config), "strip-" ++ Stamp),
+        [integer_to_list(maps:get(K, Caps)) || K <- [max_bytes, max_side, max_pixels, thumb]]
+    ),
+    Strip = Caps#{socket => Socket, files => 5},
+    All = [
+        {data_dir, Dir},
+        {oidc, Oidc},
+        {boards, Boards},
+        {limit, Limit},
+        {strip, Strip},
+        {media_origin, <<"http://", ?MEDIA>>}
+        | Env
+    ],
     [ok = application:set_env(ike, K, V) || {K, V} <- All],
     persistent_term:put(?MODULE, [K || {K, _} <- All]),
     {ok, _} = application:ensure_all_started(ike),
@@ -44,6 +63,7 @@ start(Config, Env) ->
 
 stop() ->
     _ = application:stop(ike),
+    ok = ike_strip_stub:stop(),
     [ok = application:unset_env(ike, K) || K <- persistent_term:get(?MODULE)],
     ike_mock_idp:stop().
 
@@ -200,6 +220,47 @@ anonymous(Config, Path, Headers, Text) ->
     {Token, Cookie, _} = form(Config, Path, Headers),
     Form = uri_string:compose_query([{<<"csrf">>, list_to_binary(Token)}, {<<"body">>, Text}]),
     request(Config, post, Path, [{"cookie", "__Host-ike-form=" ++ Cookie} | Headers], {form, Form}).
+
+%% files sent as the upload form sends them: its token first, then each
+%% file under the one name
+upload(Config, #{csrf := Csrf} = Session, Files) ->
+    {Type, Body} = multipart(
+        [{field, <<"csrf">>, list_to_binary(Csrf)}] ++ [{file, <<"file">>, F} || F <- Files]
+    ),
+    request(Config, post, "/upload", cookies(Session), {Type, Body}).
+
+multipart(Parts) ->
+    Boundary = <<"ikeboundary", (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+    Body = iolist_to_binary([
+        [
+            ["--", Boundary, "\r\n" | part(P)]
+         || P <- Parts
+        ],
+        "--",
+        Boundary,
+        "--\r\n"
+    ]),
+    {"multipart/form-data; boundary=" ++ binary_to_list(Boundary), Body}.
+
+part({field, Name, Value}) ->
+    ["content-disposition: form-data; name=\"", Name, "\"\r\n\r\n", Value, "\r\n"];
+part({file, Name, {Filename, Bytes}}) ->
+    [
+        "content-disposition: form-data; name=\"",
+        Name,
+        "\"; filename=\"",
+        Filename,
+        "\"\r\ncontent-type: application/octet-stream\r\n\r\n",
+        Bytes,
+        "\r\n"
+    ].
+
+%% a url on the media origin, asked of ike as the proxy in front would
+media(Config, Url) ->
+    "http://" ?MEDIA ++ Path = Url,
+    request(Config, get, Path, [{"host", ?MEDIA}], none).
+
+media_host() -> ?MEDIA.
 
 posts(Config) ->
     query(Config, "SELECT count(*) FROM post", []).

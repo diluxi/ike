@@ -5,6 +5,7 @@
 
 -spec start(application:start_type(), term()) -> {ok, pid()} | {error, term()}.
 start(_Type, _Args) ->
+    ok = ike_staged:start(),
     case ike_sup:start_link() of
         {ok, Pid} ->
             {ok, Pid};

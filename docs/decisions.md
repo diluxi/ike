@@ -604,3 +604,38 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   strips to its base's bytes, exiftool finds only a bare image's tags,
   and each base's stored hash is written in the test (a tool bump that
   changes it is a migration, P7).
+
+## Uploads and staging (M1, step 6)
+
+- **ike speaks to the stripper over a unix socket,** never through a
+  port: `ike_strip` sends the upload, half-closes, and reads the answer.
+  In production a socket-activated template unit runs `ike-strip` once
+  per connection; in the suites a listener of the test's own does. P1
+  says "through an Erlang port"; a socket keeps every process launch
+  out of ike's VM, and invariant 3's "nothing leaves the VM" as it was.
+- **What the stripper says is checked:** the type from a closed set,
+  sizes within the caps ike was given, lengths that add up. The stored
+  hash is computed by the writer.
+- **`upload`** holds the asset, the sha-256 of the bytes as they came
+  (`original`, for matching and bans, not a reference), the actor, the
+  time, and `posted`, null while staged. A staged upload keeps its asset
+  in the reachability view.
+- **Files** live in `assets/` under the state directory, which the web
+  server cannot read: `<hash>` and `<hash>.thumb`. The writer writes
+  them under a temporary name and renames them before the commit; at
+  start it unlinks any with no asset row.
+- **Staged uploads are served by ike on the media host only,** through
+  links signed with a key held in memory (lost at restart) and good for
+  `staged_seconds` (600). The router gives the media host its own
+  routes, so the main origin has no such path.
+- **The form** is multipart and the only one: the token must be the
+  first part, and no file is read before it matches. Up to `files`
+  files at once. A refusal says the stripper's reason, the same words
+  whatever the file (P6).
+- **Images on pages** come from the media origin alone: the main CSP
+  gains `img-src` for it, and invariant 2 now allows `<img>` only with
+  a `src` there.
+- *Simplifications:* staged uploads do not expire yet, and their files
+  stay until the sweeper (M2); anonymous uploads (I4's switch) are not
+  built; a signed link is a bearer credential for its lifetime, as G7
+  accepts.

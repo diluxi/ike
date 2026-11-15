@@ -3,7 +3,7 @@
 -module(ike_view).
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
--export([moderation/3, moderated/3]).
+-export([moderation/3, moderated/3, upload/3, upload_locked/0]).
 -export_type([post/0, summary/0, board/0, held/0]).
 
 %% name: an account's, or what stands in for one
@@ -387,6 +387,75 @@ act(Action, Csrf, Kinds) ->
         ])
      || Kind <- Kinds
     ].
+
+%% the uploads page: the form, what was refused just now, and what waits
+-spec upload(
+    Csrf :: binary(),
+    Refused :: [binary()],
+    [#{atom() => term()}]
+) -> ike_html:html().
+upload(Csrf, Refused, Staged) ->
+    layout(<<"uploads">>, [
+        ike_html:el(h1, [ike_html:text(<<"uploads">>)]),
+        ike_html:el(p, [
+            ike_html:text(
+                <<"images wait here until they are posted, seen by you alone. jpeg, png or",
+                    " webp; what a file says about itself (place, camera, time) is taken out.",
+                    " an upload is tied to your account, which moderators can see; a post that",
+                    " uses it shows no name unless you sign it.">>
+            )
+        ]),
+        ike_html:el(
+            form,
+            [{method, <<"post">>}, {action, <<"/upload">>}, {enctype, <<"multipart/form-data">>}],
+            [
+                ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+                ike_html:el(p, [
+                    ike_html:el(
+                        input,
+                        [
+                            {type, <<"file">>},
+                            {name, <<"file">>},
+                            {accept, <<"image/jpeg,image/png,image/webp">>},
+                            multiple,
+                            required
+                        ],
+                        []
+                    ),
+                    ike_html:text(<<" ">>),
+                    ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"upload">>)])
+                ])
+            ]
+        ),
+        ike_html:el(ul, [ike_html:el(li, [ike_html:text(R)]) || R <- Refused]),
+        ike_html:el(ul, [staged(S) || S <- Staged])
+    ]).
+
+-spec staged(#{atom() => term()}) -> ike_html:html().
+staged(#{id := Id, type := Type, width := W, height := H, file := File, thumb := Thumb}) when
+    is_integer(Id), is_binary(Type), is_integer(W), is_integer(H), is_binary(File), is_binary(Thumb)
+->
+    N = integer_to_binary(Id),
+    ike_html:el(li, [
+        ike_html:el(a, [{href, File}], [
+            ike_html:el(img, [{src, Thumb}, {alt, <<"upload ", N/binary>>}], [])
+        ]),
+        ike_html:text(
+            <<" upload ", N/binary, ", ", Type/binary, ", ", (integer_to_binary(W))/binary, "x",
+                (integer_to_binary(H))/binary>>
+        )
+    ]).
+
+-spec upload_locked() -> ike_html:html().
+upload_locked() ->
+    layout(<<"uploads">>, [
+        ike_html:el(h1, [ike_html:text(<<"uploads">>)]),
+        ike_html:el(p, [
+            ike_html:text(<<"uploading needs an account: ">>),
+            anchor(<<"/login">>, <<"log in">>),
+            ike_html:text(<<".">>)
+        ])
+    ]).
 
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().

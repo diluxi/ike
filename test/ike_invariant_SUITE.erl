@@ -21,11 +21,11 @@
     inv03_one_writer/1,
     inv04_text_is_escaped/1,
     inv05_no_user_bytes_on_the_main_origin/1,
-    inv06_tripwire_no_decoder/1,
+    inv06_no_decoder_in_the_vm/1,
     inv07_tripwire_no_fetcher/1,
     inv08_purge_leaves_nothing/1,
     inv09_reachability_view_is_complete/1,
-    inv10_tripwire_no_staged_uploads/1,
+    inv10_staged_uploads_are_their_uploaders/1,
     inv11_stripping_is_complete_and_deterministic/1
 ]).
 
@@ -36,11 +36,11 @@ all() ->
         inv03_one_writer,
         inv04_text_is_escaped,
         inv05_no_user_bytes_on_the_main_origin,
-        inv06_tripwire_no_decoder,
+        inv06_no_decoder_in_the_vm,
         inv07_tripwire_no_fetcher,
         inv08_purge_leaves_nothing,
         inv09_reachability_view_is_complete,
-        inv10_tripwire_no_staged_uploads,
+        inv10_staged_uploads_are_their_uploaders,
         inv11_stripping_is_complete_and_deterministic
     ].
 
@@ -50,6 +50,8 @@ all() ->
 -define(V6, "2001:db8::77").
 %% posts an address is let, for the limiter to count to and past
 -define(POSTS, 60).
+%% seconds a link to a staged upload works
+-define(STAGED, 2).
 
 init_per_suite(Config0) ->
     %% everything logged from here on, by anything, lands in a file
@@ -62,7 +64,9 @@ init_per_suite(Config0) ->
     %% the limiter is the one thing that looks at an address, so here it
     %% is made to: the loopback is its proxy, and the headers are believed
     Limit = #{posts => ?POSTS, seconds => 3600, proxies => [{127, 0, 0, 1}]},
-    Config = ike_browser:start(Config0, [{backup_seconds, 1}, {limit, Limit}]),
+    Config = ike_browser:start(Config0, [
+        {backup_seconds, 1}, {limit, Limit}, {staged_seconds, ?STAGED}
+    ]),
     [{log, Log}, {level, Level}, {calls, calls()} | Config].
 
 end_per_suite(Config) ->
@@ -232,6 +236,29 @@ inv02_works_without_scripts(Config) ->
     {200, _, Back} = ike_browser:request(Config, get, Thread, [], none),
     {_, _} = binary:match(Back, <<"a reply, by form alone">>),
     [scriptless(H) || H <- [Mod, Held, Held2]],
+    %% an upload is a plain form too: its fields, and a file
+    {200, _, UploadPage} = ike_browser:request(Config, get, "/upload", Cookies, none),
+    {match, [UploadForm]} = re:run(
+        UploadPage,
+        "<form method=\"post\" action=\"/upload\" enctype=\"multipart/form-data\">(.*?)</form>",
+        [dotall, {capture, all_but_first, binary}]
+    ),
+    {match, UploadHidden} = re:run(
+        UploadForm,
+        "<input type=\"hidden\" name=\"([^\"]+)\" value=\"([^\"]*)\"",
+        [global, {capture, all_but_first, binary}]
+    ),
+    {match, [FileField]} = re:run(
+        UploadForm, "<input type=\"file\" name=\"([^\"]+)\"", [{capture, all_but_first, binary}]
+    ),
+    {Multipart, UploadBody} = ike_browser:multipart(
+        [{field, N, V} || [N, V] <- UploadHidden] ++
+            [{file, FileField, {<<"x.png">>, read(?config(data_dir, Config), "base.png")}}]
+    ),
+    {303, _, _} = ike_browser:request(Config, post, "/upload", Cookies, {Multipart, UploadBody}),
+    {200, _, Staged} = ike_browser:request(Config, get, "/upload", Cookies, none),
+    {_, _} = binary:match(Staged, <<"<img src=\"http://media.test/staged/">>),
+    scriptless(Staged),
     %% logged out, the same pages say how to log in, with a link
     {200, _, Anonymous} = ike_browser:request(Config, get, "/board/b/new", [], none),
     {_, _} = binary:match(Anonymous, <<"href=\"/login\"">>),
@@ -246,6 +273,8 @@ inv02_works_without_scripts(Config) ->
         {get, "/board/b/new", []},
         {get, "/board/b/new", Cookies},
         {get, Reply, Cookies},
+        {get, "/upload", Cookies},
+        {get, "/upload", []},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
         {post, "/board/b/new", []}
@@ -300,8 +329,9 @@ inv03_one_writer(Config) ->
     [{ike_writer, {ike_migrate, run}}] =
         Callers(fun(Mod, M, _) -> M =:= ike_migrate andalso Mod =/= ike_migrate end),
     %% files. the writer makes its directories, moves a snapshot into
-    %% place and unlinks old ones, and unlinks the page of a thread that
-    %% was taken down. the renderer writes pages, which are derived from
+    %% place and unlinks old ones, unlinks the page of a thread that was
+    %% taken down, and writes an asset's files under a temporary name
+    %% and renames them into place. the renderer writes pages, which are derived from
     %% the database and replaced whole by rename; it unlinks nothing (see
     %% decisions.md on reading the invariant this way)
     Changing = [
@@ -332,6 +362,7 @@ inv03_one_writer(Config) ->
         {ike_render, {filelib, ensure_path}},
         {ike_writer, {file, delete}},
         {ike_writer, {file, rename}},
+        {ike_writer, {file, write_file}},
         {ike_writer, {filelib, ensure_path}}
     ] = Callers(fun(_, M, F) ->
         (M =:= file orelse M =:= filelib) andalso lists:member(F, Changing)
@@ -348,7 +379,7 @@ inv03_one_writer(Config) ->
     %% and from outside: the database is one file with its wal beside it,
     %% in a directory nothing else of ike's is written to
     Top = lists:sort(element(2, file:list_dir(?config(dir, Config)))),
-    [] = Top -- ["backups", "ike.db", "ike.db-shm", "ike.db-wal", "pages"].
+    [] = Top -- ["assets", "backups", "ike.db", "ike.db-shm", "ike.db-wal", "pages"].
 
 %% 4. Every text node is escaped by construction, in static and
 %% per-request renderers alike.
@@ -464,7 +495,8 @@ inv04_text_is_escaped(Config) ->
             "/board/b/new?" ++ Attack ++ "=" ++ Attack,
             "/login/callback?state=" ++ Attack ++ "&code=" ++ Attack,
             "/board/b/" ++ Attack,
-            "/board/b/1/reply?x=" ++ Attack
+            "/board/b/1/reply?x=" ++ Attack,
+            "/upload?x=" ++ Attack
         ]
     ).
 
@@ -488,6 +520,30 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
     {415, _, _} = ike_browser:request(
         Config, post, "/board/b/new", Cookies, {"multipart/form-data; boundary=b", Multipart}
     ),
+    %% the upload form is the one multipart form, and it reads no file
+    %% that does not come after the form's token
+    Uploads = fun() -> ike_browser:query(Config, "SELECT count(*) FROM upload", []) end,
+    Held = Uploads(),
+    {403, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/upload",
+        Cookies,
+        ike_browser:multipart([
+            {file, <<"file">>, {<<"a.png">>, <<"x">>}}, {field, <<"csrf">>, list_to_binary(Csrf)}
+        ])
+    ),
+    %% and a part that is not a file, after it, ends the form
+    {400, _, _} = ike_browser:request(
+        Config, post, "/upload", Cookies, {"multipart/form-data; boundary=b", Multipart}
+    ),
+    %% (without a session: refused, or held back by the limiter that
+    %% invariant 1 has run to its end; either way nothing is read)
+    {Nobody, _, _} = ike_browser:request(
+        Config, post, "/upload", [], ike_browser:multipart([{field, <<"csrf">>, <<"x">>}])
+    ),
+    true = lists:member(Nobody, [403, 429]),
+    Held = Uploads(),
     lists:foreach(
         fun({Method, Path}) ->
             {Status, _, _} = ike_browser:request(
@@ -509,7 +565,7 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
             true = lists:member(hd(string:split(Type, ";")), ["text/html", "text/plain"]),
             "nosniff" = proplists:get_value("x-content-type-options", Headers)
         end,
-        ["/", "/board/b/new", "/health", "/nothing"]
+        ["/", "/board/b/new", "/health", "/nothing", "/upload"]
     ),
     %% and the tree the web server reads from holds pages, nothing else
     Pages = files(filename:join(?config(dir, Config), "pages")),
@@ -518,11 +574,12 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
 
 %% 6. No decoder or metadata stripper runs inside the BEAM.
 %%
-%% TRIPWIRE. M0 decodes nothing: there is no port, no nif of ike's own and
-%% no image code to run anywhere. When the asset pipeline arrives (M1)
-%% this fails, and is replaced by a test that the decoder is a sandboxed
-%% process outside the vm.
-inv06_tripwire_no_decoder(Config) ->
+%% ike has no port, no nif of its own and no image code: what an upload
+%% becomes is decided by whatever listens on the stripper's socket, a
+%% sandboxed unit in production and the built ike-strip here. Read off
+%% the compiled modules, and then from outside: an upload loaded with
+%% metadata is stored as exactly the bytes ike-strip makes of it.
+inv06_no_decoder_in_the_vm(Config) ->
     [] = outside(Config),
     %% the one nif in the release is sqlite's
     Nifs = [
@@ -536,7 +593,36 @@ inv06_tripwire_no_decoder(Config) ->
         Edge
      || {_, {M, F, _}} = Edge <- ?config(calls, Config),
         {M, F} =:= {erlang, load_nif} orelse lists:member(M, [zlib, egd, wx, erl_ddll])
-    ].
+    ],
+    %% the stripper's client sends bytes over a socket and reads some back
+    [close, connect, recv, send, shutdown] = lists:usort([
+        F
+     || {{ike_strip, _, _}, {gen_tcp, F, _}} <- ?config(calls, Config)
+    ]),
+    %% from outside
+    Data = ?config(data_dir, Config),
+    Work = filename:join(?config(priv_dir, Config), "inv06"),
+    ok = filelib:ensure_path(Work),
+    Laden = filename:join(Work, "laden.jpg"),
+    {ok, _} = file:copy(filename:join(Data, "base.jpg"), Laden),
+    exiftool(["-q", "-overwrite_original", "-GPSLatitude=52.516", "-GPSLatitudeRef=N", Laden]),
+    Session = ike_browser:login(Config, <<"decoder">>),
+    {303, _, _} = ike_browser:upload(Config, Session, [{<<"laden.jpg">>, read(Work, "laden.jpg")}]),
+    [[Hash]] = ike_browser:query(
+        Config,
+        "SELECT u.asset FROM upload u JOIN actor a ON a.id = u.actor"
+        " WHERE a.subject = 'decoder'",
+        []
+    ),
+    Golden = maps:get("base.jpg", golden()),
+    Golden = binary:encode_hex(Hash, lowercase),
+    Stored = read(filename:join(?config(dir, Config), "assets"), binary_to_list(Golden)),
+    Golden = binary:encode_hex(crypto:hash(sha256, Stored), lowercase),
+    %% and the upload as it came is kept as a hash, not as bytes
+    [[Original]] = ike_browser:query(
+        Config, "SELECT original FROM upload WHERE asset = ?", [{blob, Hash}]
+    ),
+    Original = crypto:hash(sha256, read(Work, "laden.jpg")).
 
 %% 7. The fetcher never connects to a non-public address.
 %%
@@ -546,7 +632,9 @@ inv06_tripwire_no_decoder(Config) ->
 %% replaced by a test of its address checks.
 inv07_tripwire_no_fetcher(Config) ->
     Connecting = [httpc, gen_tcp, gen_udp, gen_sctp, ssl, socket, inet_res, ftp, tftp, ssh],
-    [ike_oidc] = lists:usort([
+    %% ike_strip speaks to the stripper's unix socket, named by the
+    %% operator, and to nothing a user wrote
+    [ike_oidc, ike_strip] = lists:usort([
         Mod
      || {{Mod, _, _}, {M, _, _}} <- ?config(calls, Config), lists:member(M, Connecting)
     ]),
@@ -754,20 +842,72 @@ inv09_reachability_view_is_complete(Config) ->
 
 %% 10. A staged upload is served to no one but its uploader.
 %%
-%% TRIPWIRE. Nothing can be uploaded, staged or fetched back. When staging
-%% arrives (M1) this fails, and is replaced by a test with two accounts.
-inv10_tripwire_no_staged_uploads(Config) ->
-    Session = ike_browser:login(Config, <<"stager">>),
-    lists:foreach(
-        fun(Path) ->
-            {404, _, _} = ike_browser:request(
-                Config, get, Path, ike_browser:cookies(Session), none
-            )
-        end,
-        ["/upload", "/uploads", "/staged", "/staged/1", "/media", "/media/1", "/a/1", "/file/1"]
+%% The media origin knows no session, so a link to a staged upload is its
+%% own credential, signed and short-lived (hazard G7), and only the
+%% uploader's own page carries one. Two accounts and nobody: the other
+%% two are shown nothing; a link changed in any part, or past its time,
+%% or asked of the main origin, gets nothing.
+inv10_staged_uploads_are_their_uploaders(Config) ->
+    Png = read(?config(data_dir, Config), "base.png"),
+    Uploader = ike_browser:login(Config, <<"stager">>),
+    Other = ike_browser:login(Config, <<"onlooker">>),
+    {303, Sent, _} = ike_browser:upload(Config, Uploader, [{<<"a.png">>, Png}]),
+    "/upload" = proplists:get_value("location", Sent),
+    {200, _, Mine} = ike_browser:request(
+        Config, get, "/upload", ike_browser:cookies(Uploader), none
     ),
+    {match, [[File, Thumb]]} = re:run(
+        Mine,
+        "<a href=\"(http://media\\.test/staged/[^\"]+)\"><img src=\"(http://media\\.test/staged/[^\"]+)\"",
+        [global, {capture, all_but_first, list}]
+    ),
+    {200, Headers, Stored} = ike_browser:media(Config, File),
+    "image/png" = proplists:get_value("content-type", Headers),
+    "nosniff" = proplists:get_value("x-content-type-options", Headers),
+    "default-src 'none'; sandbox" = proplists:get_value("content-security-policy", Headers),
+    undefined = proplists:get_value("set-cookie", Headers),
+    %% it is what the stripper made of the upload
+    Golden = maps:get("base.png", golden()),
+    Golden = binary:encode_hex(crypto:hash(sha256, Stored), lowercase),
+    {200, ThumbHeaders, _} = ike_browser:media(Config, Thumb),
+    "image/webp" = proplists:get_value("content-type", ThumbHeaders),
+    %% nobody else is given a link
+    [
+        nomatch = binary:match(Page, <<"media.test">>)
+     || Cookies <- [ike_browser:cookies(Other), []],
+        {200, _, Page} <- [ike_browser:request(Config, get, "/upload", Cookies, none)]
+    ],
+    %% a link is good for what it names and no more
+    {match, [Upload, Expires, Sig]} = re:run(
+        File, "/staged/([0-9]+)/([0-9]+)/([^/]+)$", [{capture, all_but_first, list}]
+    ),
+    Base = "http://media.test/staged/",
+    Next = integer_to_list(list_to_integer(Upload) + 1),
+    Later = integer_to_list(list_to_integer(Expires) + 1),
+    Changed = lists:droplast(Sig) ++ [other(lists:last(Sig))],
+    [
+        {404, _, _} = ike_browser:media(Config, Url)
+     || Url <- [
+            Base ++ Upload ++ "/" ++ Expires ++ "/" ++ Changed,
+            Base ++ Next ++ "/" ++ Expires ++ "/" ++ Sig,
+            Base ++ Upload ++ "/" ++ Later ++ "/" ++ Sig,
+            Base ++ Upload ++ "/" ++ Expires ++ "/" ++ Sig ++ "/thumb",
+            lists:sublist(Thumb, length(Thumb) - length("/thumb")),
+            Base ++ Upload,
+            "http://media.test/"
+        ]
+    ],
+    %% the main origin has no such path at all
+    "http://media.test" ++ Path = File,
+    {404, _, _} = ike_browser:request(Config, get, Path, [], none),
+    %% and once its time is up, a link is nothing
+    timer:sleep((?STAGED + 1) * 1000),
+    {404, _, _} = ike_browser:media(Config, File),
     known_routes(),
     known_tables(Config).
+
+other($A) -> $B;
+other(_) -> $A.
 
 %% 11. Stripping leaves no metadata outside the allowlist, and is
 %% deterministic for a given input.
@@ -860,9 +1000,6 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
         end,
         Refused
     ),
-    %% and ike stores no asset yet
-    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM asset", []),
-    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE asset IS NOT NULL", []),
     known_routes().
 
 %% the stored bytes' sha-256 for each base, as this nixpkgs strips them
@@ -985,7 +1122,12 @@ outside(Config) ->
     ].
 
 known_routes() ->
-    [{'_', [], Routes}] = maps:get(dispatch, maps:get(env, ranch:get_protocol_options(ike_http))),
+    [{Media, [], MediaRoutes}, {'_', [], Routes}] =
+        maps:get(dispatch, maps:get(env, ranch:get_protocol_options(ike_http))),
+    %% the media origin answers staged uploads and nothing else
+    [<<"media">>, <<"test">>] = lists:reverse(Media),
+    ['_', [<<"staged">>, upload, expires, sig], [<<"staged">>, upload, expires, sig, part]] =
+        lists:sort([Path || {Path, _, _, _} <- MediaRoutes]),
     Paths = lists:sort([Path || {Path, _, _, _} <- Routes]),
     Paths = lists:sort([
         [<<"health">>],
@@ -1003,6 +1145,7 @@ known_routes() ->
         [<<"mod">>, <<"post">>, post],
         [<<"mod">>, <<"board">>, board],
         [<<"mod">>, <<"account">>, account],
+        [<<"upload">>],
         '_'
     ]).
 
@@ -1024,7 +1167,8 @@ known_tables(Config) ->
         [<<"post">>],
         [<<"session">>],
         [<<"shown">>],
-        [<<"thread">>]
+        [<<"thread">>],
+        [<<"upload">>]
     ] = Tables.
 
 %% the pages
@@ -1088,9 +1232,20 @@ scriptless(Html) ->
     nomatch = binary:match(Lower, <<"javascript:">>),
     %% an attribute named on-something, inside a tag
     nomatch = re:run(Lower, "<[^>]*\\son[a-z]+\\s*=", [{capture, none}]),
-    nomatch = re:run(Lower, "<(iframe|object|embed|link|style|img|svg|math)[\\s>]", [
+    nomatch = re:run(Lower, "<(iframe|object|embed|link|style|svg|math)[\\s>]", [
         {capture, none}
-    ]).
+    ]),
+    %% an image is a plain one, from the media origin
+    Images =
+        case re:run(Lower, "<img[^>]*>", [global, {capture, first, binary}]) of
+            {match, Found} -> [I || [I] <- Found];
+            nomatch -> []
+        end,
+    [] = [
+        I
+     || I <- Images,
+        re:run(I, "^<img src=\"http://media\\.test/[^\"]*\" alt=\"[^\"]*\">$") =:= nomatch
+    ].
 
 %% the names of a page's tags, closing ones included, in order
 tags(Html) ->
@@ -1116,6 +1271,7 @@ known_tag(Name) ->
         <<"form">>,
         <<"h1">>,
         <<"head">>,
+        <<"img">>,
         <<"header">>,
         <<"html">>,
         <<"input">>,

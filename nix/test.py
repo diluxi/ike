@@ -44,6 +44,19 @@ machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-F
 machine.succeed("curl -s -D - -o /dev/null -d body=x http://localhost/board/b/new | grep -i '^retry-after: 60'")
 # reading is never counted
 machine.succeed("curl -fsS http://localhost/board/b/new | grep -q 'log in'")
+# uploads: the stripper answers on its socket, one sandboxed unit per
+# upload, and what it makes of a png is a png of the same size
+machine.wait_for_unit("ike-strip.socket")
+machine.succeed("socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png | head -n1 | grep '^ok png 61 47 '")
+machine.succeed("echo not-an-image | socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock | grep -x 'no not-an-image'")
+for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes", "RestrictAddressFamilies=none"]:
+	machine.succeed(f"systemctl show -p {prop.split('=')[0]} ike-strip@probe.service | grep -x '{prop}'")
+# the upload form says how to log in; the media origin has nothing but
+# what a signed link names, and pages may show images from it only
+machine.succeed("curl -fsS http://localhost/upload | grep -q 'log in'")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/staged/1/9999999999/x) = 404")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/board) = 404")
+machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; img-src http://media.localhost;\"")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
 machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")

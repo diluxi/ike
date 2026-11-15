@@ -16,6 +16,7 @@
     | footer
     | form
     | h1
+    | img
     | head
     | header
     | html
@@ -35,12 +36,16 @@
 
 -type attr() ::
     {
-        action
+        accept
+        | action
+        | alt
         | charset
         | class
         | content
         | datetime
+        | enctype
         | for
+        | height
         | href
         | id
         | lang
@@ -48,11 +53,14 @@
         | method
         | name
         | rows
+        | src
         | type
-        | value,
+        | value
+        | width,
         binary()
     }
-    | required.
+    | required
+    | multiple.
 
 -opaque html() :: {text, binary()} | {el, tag(), [attr()], [html()]}.
 
@@ -104,12 +112,14 @@ render({el, Tag, Attrs, Children}) ->
 
 -spec attr(attr()) -> iodata().
 attr(required) -> <<" required">>;
+attr(multiple) -> <<" multiple">>;
 attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 
 %% void elements have no content and no end tag; children given to one
 %% are dropped
 -spec void(tag()) -> boolean().
 void(br) -> true;
+void(img) -> true;
 void(input) -> true;
 void(meta) -> true;
 void(_) -> false.
@@ -135,6 +145,7 @@ tag(button) -> <<"button">>;
 tag(footer) -> <<"footer">>;
 tag(form) -> <<"form">>;
 tag(h1) -> <<"h1">>;
+tag(img) -> <<"img">>;
 tag(head) -> <<"head">>;
 tag(header) -> <<"header">>;
 tag(html) -> <<"html">>;
@@ -153,12 +164,16 @@ tag(title) -> <<"title">>;
 tag(ul) -> <<"ul">>.
 
 -spec name(atom()) -> binary().
+name(accept) -> <<"accept">>;
 name(action) -> <<"action">>;
+name(alt) -> <<"alt">>;
 name(charset) -> <<"charset">>;
 name(class) -> <<"class">>;
 name(content) -> <<"content">>;
 name(datetime) -> <<"datetime">>;
+name(enctype) -> <<"enctype">>;
 name(for) -> <<"for">>;
+name(height) -> <<"height">>;
 name(href) -> <<"href">>;
 name(id) -> <<"id">>;
 name(lang) -> <<"lang">>;
@@ -166,5 +181,7 @@ name(maxlength) -> <<"maxlength">>;
 name(method) -> <<"method">>;
 name(name) -> <<"name">>;
 name(rows) -> <<"rows">>;
+name(src) -> <<"src">>;
 name(type) -> <<"type">>;
-name(value) -> <<"value">>.
+name(value) -> <<"value">>;
+name(width) -> <<"width">>.

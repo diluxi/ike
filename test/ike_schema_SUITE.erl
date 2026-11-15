@@ -212,12 +212,17 @@ reachability_covers_every_asset_column(Config) ->
     [] = esqlite3:q(
         Conn, "UPDATE post SET asset = ?1 WHERE id = ?2", [{blob, Hash}, Root]
     ),
+    [] = esqlite3:q(
+        Conn,
+        "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, 1, 0)",
+        [{blob, Hash}, {blob, crypto:hash(sha256, <<"as it came">>)}]
+    ),
     Seen = [Via || [Via] <- esqlite3:q(Conn, "SELECT via FROM asset_reference")],
     lists:foreach(
         fun({Table, Column}) ->
             Label = <<Table/binary, ".", Column/binary>>,
             {_, _} = binary:match(View, <<"'", Label/binary, "'">>),
-            %% only post.asset can be planted generically so far; a new
+            %% a row is planted above for each column there is; a new
             %% column has to extend this test with a row of its own
             true = lists:member(Label, Seen)
         end,

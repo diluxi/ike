@@ -5,6 +5,17 @@
 -behaviour(gen_server).
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
+-export([staged/1, staged_file/1]).
+-export_type([staged/0]).
+
+%% a staged upload as its uploader is shown it
+-type staged() :: #{
+    id := pos_integer(),
+    type := binary(),
+    width := pos_integer(),
+    height := pos_integer(),
+    time := integer()
+}.
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 
 -spec start_link() -> gen_server:start_ret().
@@ -107,6 +118,37 @@ post(Post) ->
             none
     end.
 
+%% an account's uploads that are not posted yet, newest first
+-spec staged(Actor :: integer()) -> [staged()].
+staged(Actor) ->
+    case gen_server:call(?MODULE, {staged, Actor}) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                #{id => Id, type => Type, width => W, height => H, time => Time}
+             || [Id, Type, W, H, Time] <- Rows,
+                is_integer(Id),
+                Id > 0,
+                is_binary(Type),
+                is_integer(W),
+                W > 0,
+                is_integer(H),
+                H > 0,
+                is_integer(Time)
+            ];
+        _ ->
+            []
+    end.
+
+%% the file behind a staged upload, by its asset's hash, and its type
+-spec staged_file(Upload :: integer()) -> {ok, Hex :: binary(), Type :: binary()} | none.
+staged_file(Upload) ->
+    case gen_server:call(?MODULE, {staged_file, Upload}) of
+        {ok, [[Hash, Type]]} when is_binary(Hash), byte_size(Hash) =:= 32, is_binary(Type) ->
+            {ok, binary:encode_hex(Hash, lowercase), Type};
+        _ ->
+            none
+    end.
+
 -spec init([]) -> {ok, ike_db:reader()} | {stop, term()}.
 init([]) ->
     case ike_db:open_reader(ike_config:db_path()) of
@@ -137,6 +179,19 @@ handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
             _ -> none
         end,
     {reply, Reply, Conn};
+handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
+    Sql = <<
+        "SELECT u.id, a.type, a.width, a.height, u.time FROM upload u"
+        " JOIN asset a ON a.hash = u.asset"
+        " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->
+    Sql = <<
+        "SELECT a.hash, a.type FROM upload u JOIN asset a ON a.hash = u.asset"
+        " WHERE u.id = ?1 AND u.posted IS NULL"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Upload]), Conn};
 handle_call(boards, _From, Conn) ->
     Sql = <<"SELECT name, title, locked FROM board WHERE log = 0 ORDER BY name">>,
     {reply, ike_db:q(Conn, Sql, []), Conn};

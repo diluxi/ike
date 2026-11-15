@@ -8,7 +8,13 @@
 	pages = "/var/cache/ike/pages";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
-	csp = "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+	csp = "default-src 'none'; img-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+	# the stripper's socket; a unit behind it runs once per upload
+	stripSocket = "/run/ike-strip/strip.sock";
+	strip = cfg.package.strip;
+	# a whole upload form: every file at its cap, and room for the rest
+	uploadBytes = cfg.strip.maxBytes * cfg.strip.files + 1048576;
 
 	# given after the release's own sys.config, whose keys it overrides
 	sysConfig = pkgs.writeText "ike-sys.config" ''
@@ -31,6 +37,16 @@
 					janitor => <<${builtins.toJSON cfg.roles.janitor}/utf8>>
 				}},
 				{hold_seconds, ${toString cfg.holdSeconds}},
+				{strip, #{
+					socket => <<"${stripSocket}">>,
+					max_bytes => ${toString cfg.strip.maxBytes},
+					max_side => ${toString cfg.strip.maxSide},
+					max_pixels => ${toString cfg.strip.maxPixels},
+					thumb => ${toString cfg.strip.thumb},
+					files => ${toString cfg.strip.files}
+				}},
+				{media_origin, <<"${cfg.media.origin}">>},
+				{staged_seconds, ${toString cfg.media.stagedSeconds}},
 				{limit, #{
 					posts => ${toString cfg.limit.posts},
 					seconds => ${toString cfg.limit.seconds},
@@ -240,10 +256,57 @@ in {
 			'';
 		};
 
+		media = {
+			origin = lib.mkOption {
+				type = lib.types.str;
+				example = "https://cdn.example.org";
+				description = ''
+					Where uploads are served from: an origin other than ike's
+					own, ideally a registered domain of its own (hazard P3).
+					Pages name it, so changing it is a restart, which renders
+					them all again.
+				'';
+			};
+			stagedSeconds = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 600;
+				description = "How long a link to a staged upload works, from when its uploader's page was made.";
+			};
+		};
+
+		strip = {
+			maxBytes = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 20 * 1024 * 1024;
+				description = "Largest upload taken, in bytes. A stub: the caps are open in planning.md.";
+			};
+			maxSide = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 16384;
+				description = "Longest side taken, in pixels, read from the header before decoding (hazard P2).";
+			};
+			maxPixels = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 50000000;
+				description = "Most pixels taken, width times height, read from the header.";
+			};
+			thumb = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 256;
+				description = "Longest side of a thumbnail, in pixels.";
+			};
+			files = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 20;
+				description = "Most files in one upload form.";
+			};
+		};
+
 		caddy = {
 			enable = lib.mkEnableOption ''
 				a Caddy virtual host for ike: the rendered pages straight from
-				disk, everything else passed on to Cowboy
+				disk, everything else passed on to Cowboy; and one for the
+				media origin
 			'';
 
 			hostName = lib.mkOption {
@@ -266,6 +329,27 @@ in {
 
 		services.caddy = lib.mkIf cfg.caddy.enable {
 			enable = true;
+			# the media origin: staged uploads through ike, and nothing else yet.
+			# no cookie is ever set here, and nothing it serves may run
+			virtualHosts.${cfg.media.origin} = {
+				logFormat = null;
+				extraConfig = ''
+					header {
+						Content-Security-Policy "default-src 'none'; sandbox"
+						X-Content-Type-Options nosniff
+						Referrer-Policy no-referrer
+					}
+					request_body {
+						max_size 1KB
+					}
+					handle /staged/* {
+						reverse_proxy 127.0.0.1:${toString cfg.port}
+					}
+					handle {
+						respond 404
+					}
+				'';
+			};
 			virtualHosts.${cfg.caddy.hostName} = {
 				# invariant 1: an access log is a list of addresses
 				logFormat = null;
@@ -275,7 +359,12 @@ in {
 						X-Content-Type-Options nosniff
 						Referrer-Policy same-origin
 					}
-					request_body {
+					@upload path /upload
+					request_body @upload {
+						max_size ${toString uploadBytes}
+					}
+					@form not path /upload
+					request_body @form {
 						max_size 64KB
 					}
 					@page {
@@ -297,10 +386,68 @@ in {
 			};
 		};
 
+		# hazard P1: every upload is stripped by a process of its own, one
+		# per connection, that can reach nothing and change nothing but
+		# its scratch directory, within limits; ike only holds the socket
+		systemd.sockets.ike-strip = {
+			description = "ike's stripper";
+			wantedBy = [ "sockets.target" ];
+			listenStreams = [ stripSocket ];
+			socketConfig = {
+				Accept = true;
+				SocketUser = "root";
+				SocketGroup = "ike";
+				SocketMode = "0660";
+				MaxConnections = 4;
+			};
+		};
+
+		systemd.services."ike-strip@" = {
+			description = "ike's stripper, for one upload";
+			serviceConfig = {
+				ExecStart = "${strip}/bin/ike-strip ${toString cfg.strip.maxBytes} ${toString cfg.strip.maxSide} ${toString cfg.strip.maxPixels} ${toString cfg.strip.thumb}";
+				StandardInput = "socket";
+				StandardOutput = "socket";
+				StandardError = "journal";
+				DynamicUser = true;
+				PrivateNetwork = true;
+				IPAddressDeny = "any";
+				RestrictAddressFamilies = "none";
+				PrivateTmp = true;
+				PrivateDevices = true;
+				PrivateUsers = true;
+				ProtectSystem = "strict";
+				ProtectHome = true;
+				ProtectProc = "invisible";
+				ProcSubset = "pid";
+				ProtectClock = true;
+				ProtectHostname = true;
+				ProtectKernelLogs = true;
+				ProtectKernelModules = true;
+				ProtectKernelTunables = true;
+				ProtectControlGroups = true;
+				NoNewPrivileges = true;
+				LockPersonality = true;
+				MemoryDenyWriteExecute = true;
+				RestrictNamespaces = true;
+				RestrictRealtime = true;
+				RestrictSUIDSGID = true;
+				CapabilityBoundingSet = "";
+				SystemCallArchitectures = "native";
+				SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+				UMask = "0077";
+				MemoryMax = "1G";
+				CPUQuota = "100%";
+				TasksMax = 32;
+				RuntimeMaxSec = 60;
+			};
+		};
+
 		systemd.services.ike = {
 			description = "ike";
 			wantedBy = [ "multi-user.target" ];
-			after = [ "network.target" ];
+			after = [ "network.target" "ike-strip.socket" ];
+			wants = [ "ike-strip.socket" ];
 			environment = {
 				HOME = "/var/lib/ike";
 				# a crash dump holds whatever was in memory (hazard N5)

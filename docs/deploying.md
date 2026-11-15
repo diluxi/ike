@@ -109,6 +109,18 @@ fog to an exact tree, so the pin bump is the commit to review.
   in front of Caddy that would have to be set, and nothing else.
   Without the module's Caddy, ike believes no such header and counts
   whoever connects.
+- **Media.** `services.ike.media.origin` is where uploads are served
+  from; with `caddy.enable` the module gives it a site of its own that
+  passes only signed links to staged uploads to ike. It needs DNS like
+  the main host. Changing it is a restart; pages are made again then.
+  For now `https://cdn.amartia.online`, accepted while ike is not public;
+  it belongs on a registered domain of its own (decisions.md).
+- **Stripper.** A socket unit `ike-strip.socket` at
+  `/run/ike-strip/strip.sock`, and `ike-strip@.service`, one sandboxed
+  instance per upload: no network, a dynamic user, no privileges, 1 GB
+  of memory, a minute. `services.ike.strip` holds the caps, stubs for
+  planning's open item. Caddy lets `/upload` bodies through up to every
+  file at its cap, and everything else at 64 KB.
 - **User.** A static system user `ike`. State in `/var/lib/ike` (0700),
   pages in `/var/cache/ike` (0750).
 - **Authelia.** A confidential client `ike` in `lemma/id.nix`:

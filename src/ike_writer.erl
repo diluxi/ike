@@ -5,7 +5,7 @@
 -module(ike_writer).
 -behaviour(gen_server).
 
--export([start_link/0, local_actor/3, post/1, moderate/1, snapshot/0]).
+-export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, snapshot/0]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -81,6 +81,20 @@ post(#{actor := Actor, thread := Thread, body := Body}) ->
         Other -> failed(Other)
     end.
 
+%% an upload, stripped: its asset (once, whoever brought it before) and
+%% the upload itself, staged. Original is the upload as it came
+-spec upload(#{actor := ike_id:actor(), original := binary(), stripped := ike_strip:stripped()}) ->
+    {ok, Upload :: pos_integer()} | error().
+upload(#{actor := Actor, original := Original, stripped := Stripped}) ->
+    #{type := Type, width := W, height := H, stored := Stored, thumb := Thumb} = Stripped,
+    Request =
+        {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
+            H, Stored, Thumb},
+    case call(Request) of
+        {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
+        Other -> failed(Other)
+    end.
+
 %% one rung of the ladder, and its entry in the log, or neither
 -spec moderate(action()) ->
     ok
@@ -150,6 +164,7 @@ init([]) ->
                     case migrated(Conn) of
                         ok ->
                             ok = swept(Conn),
+                            ok = unkept(Conn),
                             _ = erlang:send_after(tick(), self(), held),
                             {ok, Conn};
                         {error, Reason} ->
@@ -230,6 +245,50 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
             {none, _} -> {error, not_allowed};
             {_, error} -> {error, bad_request};
             {Held, {ok, Rung}} -> moderated(Conn, {By, Held}, Rung, Target, Reason)
+        end,
+    {reply, Reply, Conn};
+handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) when
+    is_integer(Actor), is_binary(Original), is_binary(Stored), is_binary(Thumb)
+->
+    %% the name is what the bytes are, worked out here and not taken
+    %% from the stripper's word
+    Hash = crypto:hash(sha256, Stored),
+    Name = binary:encode_hex(Hash, lowercase),
+    Dir = ike_config:assets_dir(),
+    Reply =
+        %% the files first: a row without its file would be a lie, a file
+        %% without its row is swept at the next start
+        case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
+            {ok, ok} ->
+                Insert = <<
+                    "INSERT INTO asset (hash, type, width, height) VALUES (?1, ?2, ?3, ?4)"
+                    " ON CONFLICT (hash) DO NOTHING"
+                >>,
+                Staged = <<
+                    "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
+                    " RETURNING id"
+                >>,
+                Time = erlang:system_time(second),
+                committed(
+                    ike_db:transaction(Conn, fun() ->
+                        case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H]) of
+                            {ok, _} ->
+                                case
+                                    ike_db:q(Conn, Staged, [
+                                        {blob, Hash}, {blob, Original}, Actor, Time
+                                    ])
+                                of
+                                    {ok, [[Id]]} -> {ok, {Id, []}};
+                                    {ok, Other} -> {error, {unexpected, Other}};
+                                    {error, _} = Error -> Error
+                                end;
+                            {error, _} = Error ->
+                                Error
+                        end
+                    end)
+                );
+            _ ->
+                {error, unwritable}
         end,
     {reply, Reply, Conn};
 handle_call({open_session, Hash, Actor, Csrf, Expires, Role0}, _From, Conn) when
@@ -420,6 +479,62 @@ swept(Conn) ->
             ok;
         {error, _} ->
             ok
+    end.
+
+%% an asset's file, written whole under another name and renamed; one
+%% that is there already is the same bytes, since its name is their hash
+-spec kept(binary(), binary(), binary()) -> ok | error().
+kept(Dir, Name, Bytes) ->
+    Path = <<Dir/binary, "/", Name/binary>>,
+    case filelib:is_regular(Path) of
+        true ->
+            ok;
+        false ->
+            Tmp = <<Path/binary, ".tmp">>,
+            case filelib:ensure_path(Dir) of
+                ok ->
+                    case file:write_file(Tmp, Bytes) of
+                        ok ->
+                            file:rename(Tmp, Path);
+                        {error, _} = Error ->
+                            _ = file:delete(Tmp),
+                            Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end
+    end.
+
+%% at start: an asset's files with no row behind them, and any half
+%% written, are unlinked. it is what a stop between rename and commit
+%% leaves
+-spec unkept(ike_db:writer()) -> ok.
+unkept(Conn) ->
+    Dir = ike_config:assets_dir(),
+    case ike_db:q(Conn, <<"SELECT hash FROM asset">>, []) of
+        {ok, Rows} ->
+            Known = #{binary:encode_hex(H, lowercase) => true || [H] <- Rows, is_binary(H)},
+            case file:list_dir(Dir) of
+                {ok, Files} ->
+                    [
+                        file:delete(filename:join(Dir, F))
+                     || F <- Files, not maps:is_key(asset_name(F), Known)
+                    ],
+                    ok;
+                {error, _} ->
+                    ok
+            end;
+        {error, _} ->
+            ok
+    end.
+
+%% whose file a file is: <hash> or <hash>.thumb; anything else is none
+-spec asset_name(file:filename()) -> binary().
+asset_name(File) ->
+    case unicode:characters_to_binary(File) of
+        <<Hex:64/binary>> -> Hex;
+        <<Hex:64/binary, ".thumb">> -> Hex;
+        _ -> <<>>
     end.
 
 %% written under another name and renamed, so that whatever is among the
