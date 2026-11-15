@@ -536,5 +536,6 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   wiki page beside "about", linked from the front page, as chaos.social
   does. Notice and action stays a question for when ike is hosted for
   real.
-- **The media origin** is `cdn.amartia.online` (planning's open item).
+- **The media origin:** lux offered `cdn.amartia.online`; it cannot be
+  that, since P3 asks for another registered domain (Q28).
 - **Audio** with cover art is a later media type to plan for.

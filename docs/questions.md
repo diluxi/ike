@@ -70,16 +70,24 @@ here.
   not run in ike's VM (invariant 6); it could be a small C or Zig
   program in the repo, or an escript run as its own OS process. Which
   of these may be added, and in what for the filter?
-- **Q27 The upload-to-account link (I4), lux's idea.** Let an account
-  see its anonymous posts by keeping the link encrypted to that account,
-  so the server cannot read it. The tension: A1 keeps the link so that
-  whoever uploads illegal material can be banned, and a link only the
-  uploader can open cannot be used for that. Variants: encrypt to the
-  account and to an offline moderation key both (the account sees its
-  posts; a ban needs the offline key, as in I4's second option); or to
-  the account alone, giving up A1's ban for anonymous uploads. Whatever
-  key the account holds needs a secret ike does not keep, and OIDC
-  gives none, so it would be a passphrase typed into a form. Open.
+- **Q27 The upload-to-account link (I4).** lux, 2026-11-15: maybe drop
+  it, since anyone wanting to stay anonymous logs out first. Two things
+  to weigh before deciding: images cannot be posted logged out (A1;
+  planning lines 11, 22 and 177), so logging out only anonymises text;
+  and a staged upload needs its owner while staged (invariant 10), so
+  dropping the link can at most mean erasing it when the upload is
+  posted. The idea of showing an account its own anonymous posts is
+  dropped. Open: keep the link, erase it on posting, or encrypt it.
+- **Q28 The media domain.** P3 asks for a separate *registered* domain.
+  `cdn.amartia.online` is the same site as ike and as Authelia: a cookie
+  set for `amartia.online` reaches it, and SameSite does not separate
+  them, so a polyglot served there acts with the user's session. It needs
+  a domain of its own (any cheap one; plain static serving from Caddy is
+  enough, no special software).
+- **Q29 What admins do beyond moderators.** lux: "access to logs,
+  trigger read-only, etc." Which logs (the `action` rows naming the
+  account, the journal?), and what read-only means (no posts at all, or
+  no posts by nobody)? Not built.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 
