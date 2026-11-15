@@ -42,7 +42,8 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-Step 6. Everything up to `phi/mod` is on origin.
+Nothing that can start without lux: step 6 and step 7 both wait on
+the answers below. Everything up to `phi/mod` is on origin.
 
 ## Blocked on lux
 
@@ -52,12 +53,15 @@ Step 6. Everything up to `phi/mod` is on origin.
   every login breaks until fog's client lists it (deploying.md).
 - **Step 5's stubs:** the hold period (14 days); who may do what (Q20);
   purge and snapshots (Q21, Q8); hashes in purge entries (Q22).
-- **Before step 6:** the upload-to-account link, plaintext or to an
-  offline key (I4, Q3); which registered domain serves media; size
-  caps. Each can be stubbed behind configuration, but I4 decides a
-  table's shape.
-- **Before step 7:** the Impressum address, and the lawyer's answers
-  (L1 to L3).
+- **Before step 6**, which cannot start in pieces: its first commit has
+  to bring the port runner, a stripper, the fixture corpus and the
+  determinism test together, since invariants 3, 5, 6 and 11 all change
+  with it. Needed: the tools (Q23), the sandbox's shape (Q24), staging
+  in M1 or M2 (Q25), the upload-to-account link (I4, Q3), the media
+  domain, size caps.
+- **Before step 7:** the takedown flow and the lawyer's answers (Q26,
+  L2, L3); the Impressum address (L1). An Impressum page from
+  configuration could come first on its own.
 - **Q18:** whether a keyed hash of an address may live in memory at
   all. Step 4's limiter assumes yes.
 - **Q17:** the limiter key's lifetime. (Q19: moderators now lock and

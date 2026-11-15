@@ -67,6 +67,35 @@ here.
 - **Q22 Purge entries and hashes (G5).** Text-only purges log the
   reason and the number. When assets arrive, whether the hash is shown
   is still open; nothing logs one yet.
+- **Q23 Tools for the asset pipeline.** phi.md allows nothing beyond its
+  stack without asking, and step 6 cannot start without: libvips (decode,
+  dimensions, thumbnails), libjpeg-turbo's `jpegtran` (lossless JPEG
+  stripping and orientation), a PNG/WebP chunk filter by allowlist, and
+  exiftool in the tests only (the P7 inspector). The chunk filter may
+  not run in ike's VM (invariant 6); it could be a small C or Zig
+  program in the repo, or an escript run as its own OS process. Which
+  of these may be added, and in what for the filter?
+- **Q24 The sandbox for those tools.** P1 asks for each tool to run as
+  its own process through an Erlang port, in a systemd unit with no
+  network, seccomp, a read-only filesystem but for scratch, and limits.
+  A service cannot start transient units without privilege, so the
+  port's child needs a way in. Either a template unit `ike-strip@`
+  (socket-activated, one instance per job, spool directory in and out),
+  or the port runs each tool under bubblewrap with `prlimit`, which is
+  one more dependency. The suites would run the tools unsandboxed in
+  both cases, and the module test would check the sandbox. Which?
+- **Q25 Staging in M1 or M2.** Planning's M2 row lists staged uploads,
+  invariant 10's tripwire says they arrive in M1. If an M1 image post is
+  uploaded and posted in one request, nothing is staged and invariant 10
+  stays a tripwire until M2. Is that the reading?
+- **Q26 Notice and action.** Planning's open decisions include "the
+  takedown flow under the DSA" and the lawyer's questions (L2, L3).
+  Step 7's shape follows from them: what a notice must carry, what is
+  kept of whoever sends it (a name and an email address under Art. 16
+  DSA, and for how long), whether ike sends a confirmation (an outgoing
+  mail is a new dependency and new egress). Nothing is built until
+  these are answered. An Impressum page fed from configuration does not
+  wait on them, and can be done on its own if wanted.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 
