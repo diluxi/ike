@@ -13,7 +13,11 @@ child_spec() ->
         ranch_tcp,
         #{socket_opts => [{ip, Ip}, {port, Port}]},
         cowboy_clear,
-        #{env => #{dispatch => dispatch()}}
+        #{
+            env => #{dispatch => dispatch()},
+            %% ike_http_anon first: nothing after it knows the peer
+            stream_handlers => [ike_http_anon, cowboy_stream_h]
+        }
     ).
 
 -spec dispatch() -> cowboy_router:dispatch_rules().
