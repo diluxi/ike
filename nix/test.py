@@ -17,17 +17,21 @@ machine.succeed("curl -fsS http://localhost/ | cmp - /var/cache/ike/pages/index.
 machine.succeed("curl -fsSI http://localhost/ | grep -i '^content-security-policy: default-src .none.'")
 machine.succeed("curl -fsSI http://localhost/ | grep -i '^server: caddy'")
 machine.succeed("curl -fsS http://localhost/health | grep -x ok")
-machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/t/1) = 404")
+machine.succeed("curl -fsS http://localhost/board | cmp - /var/cache/ike/pages/board.html")
+machine.succeed("curl -fsSI http://localhost/board/b | grep -i '^server: caddy'")
+machine.succeed("curl -fsS http://localhost/board/b | grep -q random")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/board/nope) = 404")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/board/b/1) = 404")
 # and caddy reads the pages, never the database
 machine.succeed("su -s /bin/sh caddy -c 'test -r /var/cache/ike/pages/index.html'")
 machine.fail("su -s /bin/sh caddy -c 'test -r /var/lib/ike/ike.db'")
 
 # forms and login come from cowboy, through caddy. without a provider
 # that answers, login says so and nothing falls over
-machine.succeed("curl -fsS http://localhost/new | grep -q 'log in'")
+machine.succeed("curl -fsS http://localhost/board/b/new | grep -q 'log in'")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/login) = 503")
-machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://localhost/new) = 403")
-machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -F body=x http://localhost/new) = 403")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://localhost/board/b/new) = 403")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -F body=x http://localhost/board/b/new) = 403")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
 machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")

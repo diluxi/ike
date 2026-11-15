@@ -18,7 +18,10 @@
 				{data_dir, <<"/var/lib/ike">>},
 				{pages_dir, <<"${pages}">>},
 				{backup_seconds, ${toString cfg.backup.interval}},
-				{backup_keep, ${toString cfg.backup.keep}}${lib.optionalString (cfg.oidc != null) '',
+				{backup_keep, ${toString cfg.backup.keep}},
+				{boards, [${lib.concatStringsSep ", " (lib.mapAttrsToList
+					(name: title: ''{<<"${name}">>, <<${builtins.toJSON title}/utf8>>}'')
+					cfg.boards)}]}${lib.optionalString (cfg.oidc != null) '',
 				{oidc, #{
 					issuer => <<"${cfg.oidc.issuer}">>,
 					client_id => <<"${cfg.oidc.clientId}">>,
@@ -33,6 +36,17 @@
 in {
 	options.services.ike = {
 		enable = lib.mkEnableOption "ike, an imageboard, a booru and a wiki";
+
+		boards = lib.mkOption {
+			type = lib.types.attrsOf lib.types.str;
+			default = {};
+			example = { b = "random"; };
+			description = ''
+				The boards there are, as name and title. A name is one to
+				sixteen of a to z and digits. Taking a board out of here
+				does not delete it or its threads.
+			'';
+		};
 
 		package = lib.mkOption {
 			type = lib.types.package;

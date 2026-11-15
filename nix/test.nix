@@ -8,6 +8,7 @@
 		services.ike = {
 			enable = true;
 			package = pkgs.callPackage ./package.nix {};
+			boards.b = "random";
 			# an issuer nobody answers as: the vm has no provider, the
 			# login suite has one
 			oidc = {
