@@ -33,6 +33,14 @@ here.
   recorded (decisions.md). planning.md has user boards in M6; the name
   on a post will link there once they exist, and to nothing before.
   Sooner than M6?
+- **Q16 Unsigned posts by accounts.** While a board is locked, only
+  accounts post on it, and an account that does not tick "post as"
+  leaves a post no moderator or operator can trace to it: an account
+  ban cannot follow from such a post. That is what planning.md says of
+  text posts, and the opposite of what it says of uploads (I4).
+  *Meanwhile:* no link at all. If locked boards should keep one, it is
+  I4's table with posts in it as well, and I4's answer decides its
+  shape.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

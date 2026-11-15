@@ -360,10 +360,36 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   so that a re-upload of purged content is refused before it is
   stored. Upload rows themselves need not live as long as the asset.
 
-## Names (M1, ahead of the code)
+## Names (M1)
 
 - **A nick is the provider's `preferred_username`** (lux, was Q14), for
-  now.
-- **An account may post without it**, as anyone else would. What stands
-  in the name's place then is the server's choice, possibly from a list
-  of names that mean nothing.
+  now. Read at every login and kept in `actor.name`, the one column of
+  an actor that changes; a rename marks every thread the account signed
+  in for rendering again, since the name is the account's and not the
+  post's.
+- **Only from the id token.** *A simplification:* the userinfo endpoint
+  would be the surer place for a `profile` claim, and is not asked, to
+  keep ike at two requests to the provider per login. A provider that
+  leaves the claim out of the id token gives nobody a name
+  (deploying.md says how Authelia is told to put it in).
+- **A nick is 1 to 32 of letters, digits, `_`, `-` and `.`**, not
+  ending in a dot (so never `.` or `..`). Anything else is no name
+  rather than a mangled one, and the login goes through all the same.
+  The limit is there because the nick is to stand in `/user/<nick>`.
+  *A simplification:* ASCII only; names in other scripts wait for
+  someone to have one.
+- **An account may post without it** (lux), and does unless it ticks
+  "post as". An unsigned post is written for the anonymous actor, not
+  for the account: nothing in the database ties the two. Hiding the
+  name at render while keeping the actor would have been a link of the
+  kind I4 is about, made without that decision (Q16).
+- **What stands in the name's place** is `anonymous_names`
+  (`services.ike.anonymousNames`), `anon` alone by default. From a
+  longer list a post takes the name at its id modulo the length:
+  stable across renders, changed for old posts if the list changes
+  length. *A simplification:* not stored per post.
+- **No link on the name yet.** It goes to `/user/<nick>` once user
+  boards exist (Q14).
+- **Two accounts can carry one nick** if two issuers, or one careless
+  one, say so. With a single issuer that is the provider's to prevent;
+  it wants a unique index before a second issuer or `/user/<nick>`.

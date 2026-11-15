@@ -16,8 +16,9 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 1. **Boards and paths** (`phi/board`): done. Boards from configuration,
    locked when new; `/board`, `/board/b`, `/board/b/N`; one host.
-2. **Names:** a nick from `preferred_username`; the name on a post,
-   or none by the poster's choice.
+2. **Names** (`phi/names`): done. A nick from `preferred_username`;
+   the name on a post only when its account ticks "post as", and one of
+   the server's names for nobody otherwise.
 3. **Links:** `>>N` and `>>>/b/N` in text, reverse links, tombstones.
 4. **Anonymous text posts** on unlocked boards, behind the rate limiter
    (N3 to N5); invariant 1's test grows with it.
@@ -30,7 +31,7 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-Step 2.
+Step 3.
 
 ## Blocked on lux
 
@@ -45,6 +46,10 @@ Step 2.
 - **Before step 7:** the Impressum address, and the lawyer's answers
   (L1 to L3).
 - **Q14:** whether user boards come before M6.
+- **Q16:** whether an unsigned post on a locked board may stay
+  untraceable to its account.
+- **Authelia:** a claims policy putting `preferred_username` in the id
+  token (deploying.md), or nobody has a name.
 - **Wording in lux's documents:** invariant 8 and the blocklist, nginx
   and the three host names in planning.md.
 - **Not committed, as asked:** `docs/planning.md`, `docs/hazards.md`,

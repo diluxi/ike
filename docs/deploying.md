@@ -105,8 +105,12 @@ fog to an exact tree, so the pin bump is the commit to review.
 - **User.** A static system user `ike`. State in `/var/lib/ike` (0700),
   pages in `/var/cache/ike` (0750).
 - **Authelia.** A confidential client `ike` in `lemma/id.nix`:
-  authorization code, PKCE with S256, scope `openid`, the redirect URI above, id tokens
-  signed with RS256. The secret, if there is one, is loaded with
+  authorization code, PKCE with S256, scopes `openid profile`, the
+  redirect URI above, id tokens signed with RS256. ike reads the nick
+  from `preferred_username` in the id token and never asks the userinfo
+  endpoint; Authelia from 4.39 on keeps that claim out of the id token
+  unless the client has a claims policy listing it under `id_token`.
+  Without the claim logins work, and nobody has a name to sign with. The secret, if there is one, is loaded with
   `LoadCredential` and need not be readable by ike's user; its first
   line is the secret.
 - **Egress.** ike connects out to the issuer and nowhere else.
