@@ -3,7 +3,10 @@
 -module(ike_http).
 
 -export([child_spec/0]).
--export([html/3, page/3, reply/2, not_found/1, see_other/2]).
+-export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1]).
+
+%% what a form may weigh; caddy caps bodies at the same size
+-define(FORM_BYTES, 65536).
 
 -spec child_spec() -> supervisor:child_spec().
 child_spec() ->
@@ -27,7 +30,12 @@ dispatch() ->
         {'_', [
             {"/health", ike_http_health, []},
             {"/", ike_http_page, []},
-            {"/t/:thread", [Thread], ike_http_page, []}
+            {"/t/:thread", [Thread], ike_http_page, []},
+            {"/new", ike_http_post, []},
+            {"/t/:thread/reply", [Thread], ike_http_post, []},
+            {"/login", ike_http_login, login},
+            {"/login/callback", ike_http_login, callback},
+            {"/logout", ike_http_login, logout}
         ]}
     ]).
 
@@ -67,3 +75,31 @@ not_found(Req) ->
 -spec see_other(Location :: binary(), cowboy_req:req()) -> cowboy_req:req().
 see_other(Location, Req) ->
     cowboy_req:reply(303, (headers())#{<<"location">> => Location}, <<>>, Req).
+
+%% no session, or a form without its token (hazard i2)
+-spec forbidden(cowboy_req:req()) -> cowboy_req:req().
+forbidden(Req) ->
+    Html = ike_view:message(
+        <<"not allowed">>, <<"log in at /login, and send forms from this site's own pages.">>
+    ),
+    page(403, Html, Req).
+
+%% a submitted form. only urlencoded ones are read at all: a multipart
+%% body, which is what carries files, is refused unread (hazard a1)
+-spec form(cowboy_req:req()) ->
+    {ok, #{binary() => binary()}, cowboy_req:req()}
+    | {error, cowboy:http_status(), cowboy_req:req()}.
+form(Req0) ->
+    try cowboy_req:parse_header(<<"content-type">>, Req0) of
+        {<<"application">>, <<"x-www-form-urlencoded">>, _} ->
+            try cowboy_req:read_urlencoded_body(Req0, #{length => ?FORM_BYTES, period => 5000}) of
+                {ok, Pairs, Req} ->
+                    {ok, maps:from_list([{K, V} || {K, V} <- Pairs, is_binary(V)]), Req}
+            catch
+                _:_ -> {error, 400, Req0}
+            end;
+        _ ->
+            {error, 415, Req0}
+    catch
+        _:_ -> {error, 400, Req0}
+    end.

@@ -2,7 +2,7 @@
 %% handlers decide where it goes.
 -module(ike_view).
 
--export([thread/2, index/1, message/2, layout/2]).
+-export([thread/2, index/1, post_form/2, message/2, layout/2]).
 -export_type([post/0, summary/0]).
 
 -type post() :: #{id := integer(), time := integer(), body := binary()}.
@@ -51,6 +51,47 @@ summary(#{root := Root, posts := Posts, body := Body}) ->
         ike_html:text(excerpt(Body)),
         ike_html:text(<<" (", (integer_to_binary(Posts))/binary, ")">>)
     ].
+
+%% the form for a new thread or a reply, for whoever is logged in; anyone
+%% else is shown the way to log in. plain forms: nothing here needs a script
+-spec post_form(Action :: binary(), {csrf, binary()} | anonymous) -> ike_html:html().
+post_form(Action, anonymous) ->
+    layout(<<"post">>, [
+        ike_html:el(h1, [ike_html:text(<<"post">>)]),
+        ike_html:el(p, [
+            ike_html:text(<<"posting needs an account for now: ">>),
+            anchor(<<"/login">>, <<"log in">>),
+            ike_html:text(<<", then come back to ">>),
+            anchor(Action, <<"this page">>),
+            ike_html:text(<<".">>)
+        ])
+    ]);
+post_form(Action, {csrf, Csrf}) ->
+    Token = ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+    layout(<<"post">>, [
+        ike_html:el(h1, [ike_html:text(<<"post">>)]),
+        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
+            Token,
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
+                ike_html:el(br, []),
+                ike_html:el(
+                    textarea,
+                    [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
+                    []
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+            ])
+        ]),
+        ike_html:el(form, [{method, <<"post">>}, {action, <<"/logout">>}], [
+            Token,
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"log out">>)])
+            ])
+        ])
+    ]).
 
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().
