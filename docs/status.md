@@ -1,6 +1,6 @@
 # ike — status
 
-Updated 2026-11-14. Milestone: **M0 Foundation**.
+Updated 2026-11-15. Milestone: **M0 Foundation**.
 
 ## Done
 
@@ -8,19 +8,22 @@ Updated 2026-11-14. Milestone: **M0 Foundation**.
   invariants and the rule that every change keeps them; a readme;
   `questions.md`.
 - **Step 2** (`phi/skeleton`, on `phi/charter`): the rebar3 project with a
-  Cowboy listener answering `/health`; `default.nix` pinned by `pins.json`,
-  an input-less `flake.nix` and the NixOS module; four checks (the release,
-  Common Test with xref and erlfmt, eqWAlizer, the module booted in a VM);
-  the GitHub Actions workflow; `decisions.md`; `deploying.md` for fog's
-  side.
+  Cowboy listener answering `/health`; `default.nix` pinned by `pins.json`
+  and the NixOS module; four checks (the release, Common Test with xref
+  and erlfmt, eqWAlizer, the module booted in a VM); the GitHub Actions
+  workflow; `decisions.md`; `deploying.md` for fog's side.
 - **Step 3** (`phi/schema`, on `phi/skeleton`): esqlite; migrations applied
   at start; migration 0001 with actors, the global post sequence, threads
   keyed by their root, assets as a hash, reverse links and the
   reachability view; a schema suite, which holds the first invariant test
   (9) and the schema's share of 8.
+- **lux's answers** (`phi/answers`, on `phi/schema`): the flake is gone;
+  `LICENSE`; `post.time`; and in `decisions.md`, Caddy in front, OIDC
+  against Authelia rather than LDAP, snapshots into a directory, anonymous
+  as an actor, one global sequence.
 
 All four checks pass locally on each branch tip (`nix-build -A checks`,
-x86_64-linux). The workflow itself has never run: there is no remote.
+x86_64-linux).
 
 ## Next
 
@@ -29,14 +32,14 @@ x86_64-linux). The workflow itself has never run: there is no remote.
 
 ## Blocked on lux
 
-- **A GitHub repository** (Q5), to push the three branches, open their PRs
-  and see CI run for the first time. The order of work wanted CI green
-  before step 3; lux said to go on, so that is still owed.
-- **Assumed, not decided:** Q1 (no post time), Q2 (every post has an
-  actor), Q4 (nullable parent), C4 (one global sequence). All in
-  `questions.md`.
-- **Before later steps:** Q6 licence, Q7 the Authelia client, C1 nginx or
-  Caddy, Q8 backups.
+- **CI has never run.** The workflow triggers on pushes to dev and on pull
+  requests, and dev does not exist on the remote yet. The order of work
+  wanted CI green before step 3; that is still owed.
+- **Wording in lux's documents:** invariant 8 and the blocklist, nginx in
+  planning.md. Both in `questions.md`.
+- **Before later steps:** C3 original hashes (M1), Q5 whether the
+  repository is public (fog's pin), Q7 the Authelia client (step 6), Q8
+  retention (step 7).
 - **Not committed, as asked:** `docs/planning.md`, `docs/hazards.md`,
   `docs/fog.md`. `phi.md` and the readme point at the first two, so until
   they are committed a fresh clone has dangling references.
