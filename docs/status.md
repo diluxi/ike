@@ -43,7 +43,8 @@ Each a branch on the one before, starting from `phi/sessions`.
 ## Next
 
 Nothing that can start without lux: step 6 and step 7 both wait on
-the answers below. Everything up to `phi/mod` is on origin.
+the answers below. Origin has `phi/mod` up to 1945743; the commits
+after it wait on the ssh agent, which refused to sign the push.
 
 ## Blocked on lux
 
