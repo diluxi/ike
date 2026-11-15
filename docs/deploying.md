@@ -72,15 +72,18 @@ fog to an exact tree, so the pin bump is the commit to review.
 { config, ... }: {
 	services.ike = {
 		enable = true;
+		boards = {
+			b = "random";
+			meta = "about ike";
+		};
 		caddy = {
 			enable = true;
-			hostName = "chike.amartia.online";
+			hostName = "ike.amartia.online";
 		};
 		oidc = {
 			issuer = "https://auth.amartia.online";
 			clientId = "ike";
-			redirectUri = "https://chike.amartia.online/login/callback";
-			# only for a confidential client
+			redirectUri = "https://ike.amartia.online/login/callback";
 			clientSecretFile = config.crypt.secrets.ike-oidc.path;
 		};
 		backup = {
@@ -91,8 +94,8 @@ fog to an exact tree, so the pin bump is the commit to review.
 }
 ```
 
-The client id and the kind of client are still open (questions.md, Q7),
-and so is what `ikooru` and `wike` do about login once they exist (Q13).
+- **Boards.** Name to title. A board is created locked, and is never
+  deleted by leaving it out.
 
 - **Caddy.** `caddy.enable` adds a virtual host to fog's Caddy: rendered
   pages straight from `/var/cache/ike/pages`, everything else to Cowboy
@@ -101,8 +104,8 @@ and so is what `ikooru` and `wike` do about login once they exist (Q13).
   to read the pages; it cannot read `/var/lib/ike`.
 - **User.** A static system user `ike`. State in `/var/lib/ike` (0700),
   pages in `/var/cache/ike` (0750).
-- **Authelia.** A client for ike in `lemma/id.nix`: authorization code,
-  PKCE with S256, scope `openid`, the redirect URI above, id tokens
+- **Authelia.** A confidential client `ike` in `lemma/id.nix`:
+  authorization code, PKCE with S256, scope `openid`, the redirect URI above, id tokens
   signed with RS256. The secret, if there is one, is loaded with
   `LoadCredential` and need not be readable by ike's user; its first
   line is the secret.

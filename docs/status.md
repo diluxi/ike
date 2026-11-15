@@ -1,66 +1,53 @@
 # ike — status
 
-Updated 2026-11-15. Milestone: **M0 Foundation**, all eight steps
-written; waiting on lux to merge and to answer.
+Updated 2026-11-15. Milestone: **M1 Board**, started on lux's word.
 
-## Done
+## M0
 
-- **Steps 1 to 3** and lux's answers, merged into dev (`phi/charter`,
-  `phi/skeleton`, `phi/schema`, `phi/answers`, `phi/ci`). CI runs on dev
-  and passes.
-- **Step 4** (`phi/writer`, on dev): `ike_writer`, the one process with
-  a writable connection; `reader()` and `writer()` as types; typed ids;
-  query timeouts.
-- **Step 5** (`phi/render`, on `phi/writer`): HTML as a tree; thread
-  pages and the index as files renamed into place; Cowboy serving them
-  when nothing else does; the Caddy virtual host in the module.
-- **Step 6** (`phi/login`, on `phi/render`): the OIDC client (code flow,
-  PKCE, state, nonce, RS256 against the JWKS); sessions and CSRF tokens;
-  `/login`, `/logout`, `/new`, `/t/N/reply` as plain forms; a handler
-  that forgets every request's address; `ike_login_SUITE` against a mock
-  provider.
-- **Step 7** (`phi/backup`, on `phi/login`): daily snapshots by the
-  writer, seven kept; `ike_backup_SUITE` posts, loses everything,
-  restores and compares rows and page bytes.
-- **Step 8** (`phi/invariants`, on `phi/backup`): `ike_invariant_SUITE`,
-  one case per invariant. Six test what M0 has; five are tripwires for
-  what it lacks (decisions.md, Invariant tests).
+Done, on `phi/writer` → `phi/render` → `phi/login` → `phi/backup` →
+`phi/invariants` → `phi/sessions`, all on origin and waiting to be
+merged in that order. `nix-build -A checks` passes on the tips of the
+last four; the first two were checked with the VM test and the host's
+rebar3 and eqWAlizer as they were written.
 
-- **After lux's answers** (`phi/sessions`, on `phi/invariants`):
-  sessions as rows, so that a restart logs nobody out; snapshots taken
-  without them.
+## M1, in steps
 
-M0's exit sentence, "a logged-in POST writes a row and regenerates a
-page the web server serves, and a restore from backup reproduces it", is
-`ike_login_SUITE` and `ike_backup_SUITE` over HTTP, and the VM test for
-Caddy serving the page files. No test logs in *through Caddy*: the VM
-has no provider.
+Each a branch on the one before, starting from `phi/sessions`.
 
-## Checks
-
-`nix-build -A checks` (release, tests with xref and erlfmt, eqWAlizer,
-the module in a VM) passes on the tips of `phi/login`, `phi/backup`,
-`phi/invariants` and `phi/sessions`. `phi/writer` and `phi/render` were
-checked with the VM test and the host's rebar3 and eqWAlizer as they
-were written, not with the full set at their final tips.
+1. **Boards and paths** (`phi/board`): done. Boards from configuration,
+   locked when new; `/board`, `/board/b`, `/board/b/N`; one host.
+2. **Names:** a nick from `preferred_username`; the name on a post,
+   or none by the poster's choice.
+3. **Links:** `>>N` and `>>>/b/N` in text, reverse links, tombstones.
+4. **Anonymous text posts** on unlocked boards, behind the rate limiter
+   (N3 to N5); invariant 1's test grows with it.
+5. **Roles and moderation:** `groups` claim; hide, delete, purge,
+   account ban, lockdown; the mod log; invariant 8's real test.
+6. **Assets:** the sandboxed pipeline, stripping with its corpus and
+   determinism test, thumbnails, the media origin, uploads, hash dedup
+   and hash bans; invariants 5, 6, 9 and 11 for real.
+7. **Notice and action, Impressum.**
 
 ## Next
 
-Nothing in M0. M1 does not start until lux says so, and its migration
-waits for I4 (Q3) and C3.
+Step 2.
 
 ## Blocked on lux
 
-- **Review and merge** `phi/writer` → `phi/render` → `phi/login` →
-  `phi/backup` → `phi/invariants` → `phi/sessions`, in that order; each
-  is stacked on the one before. All are on origin.
-- **Questions** (`questions.md`): Q7 the client id and kind of client;
-  Q8 retention, before M1's purge; Q13 one login over three hosts; Q14
-  where a nick comes from and when user boards are built; C3 and Q3
-  before M1's migration.
-- **Wording in lux's documents:** invariant 8 and the blocklist, nginx in
-  planning.md.
+- **Merging** the M0 stack, then `phi/board`.
+- **Before step 5:** the hold period between delete and purge; whether
+  purge entries in the mod log show hashes (G5); retention (Q8), since
+  purged content lives on in snapshots that long.
+- **Before step 6:** the upload-to-account link, plaintext or to an
+  offline key (I4, Q3); which registered domain serves media; size
+  caps. Each can be stubbed behind configuration, but I4 decides a
+  table's shape.
+- **Before step 7:** the Impressum address, and the lawyer's answers
+  (L1 to L3).
+- **Q14:** whether user boards come before M6.
+- **Wording in lux's documents:** invariant 8 and the blocklist, nginx
+  and the three host names in planning.md.
 - **Not committed, as asked:** `docs/planning.md`, `docs/hazards.md`,
-  `docs/fog.md`. `phi.md` and the readme point at the first two.
-- **The cert:** as before; fog's `lemma/certs/phi.asc` lacks the signing
-  cert used here, which matters once lemma0 should accept these commits.
+  `docs/fog.md`.
+- **The cert:** fog's `lemma/certs/phi.asc` lacks the signing cert used
+  here.

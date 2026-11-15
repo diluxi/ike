@@ -318,8 +318,52 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 
 - **The repository is public** (lux, was Q5), so fog can pin it without
   credentials.
-- **Three host names:** `chike.amartia.online`, `ikooru.amartia.online`
-  and `wike.amartia.online`, one per view. M0 has only the board, so
-  the module still takes one name. What three names mean for one login
-  is `questions.md`, Q13.
+- **One host, three paths** (lux, was Q13): `ike.amartia.online/board`,
+  `/booru` and `/wiki`, so one login covers all three. Nothing in a
+  page or a redirect names the host, which leaves a view free to move
+  to a host of its own later.
 - **Authelia answers at `auth.amartia.online`**, which is the issuer.
+- **A confidential client** (was Q7; lux left it to phi). ike is a
+  server that can keep a secret, the secret costs one `LoadCredential`,
+  and with it a stolen authorization code is useless even to someone
+  who also has the verifier. PKCE stays on. The public kind keeps
+  working, should that change. Client id `ike`.
+
+## Boards (M1)
+
+- **Which boards exist is configuration** (`services.ike.boards`, name
+  to title), brought into the database by the writer at start. Taking
+  one out of the configuration leaves it and its threads alone.
+  *Simplification:* no page creates a board; M6's user boards will need
+  one.
+- **Whether a board is locked is a row**, since a moderator changes it.
+  A new board is locked (A4).
+- **A board's name** is one to sixteen of a to z and digits, checked by
+  the router, the configuration and the table.
+- **Paths:** `/board` lists boards, `/board/b` a board's threads,
+  `/board/b/12` a thread, with `/new` and `/reply` beneath. Page files
+  are the path plus `.html`, so Caddy needs no rule per kind of page.
+  The file name is put together from what the router bound, never from
+  the path as sent.
+- **A thread has at most one board**, a nullable column: planning.md
+  lets a thread hang off a booru post or a wiki page instead. A thread
+  on no board has no page. A thread is reached through its own board
+  only.
+- **A board is not an actor yet.** The schema's `board` kind of actor
+  waits for federation.
+- **`>>N` stays global**; a post's number says nothing of its board.
+
+## Uploads (M1, ahead of the code)
+
+- **Original hashes are copied out** (lux, was C3) when an upload is
+  collected or its asset purged: a blocklist of hashes outlives both,
+  so that a re-upload of purged content is refused before it is
+  stored. Upload rows themselves need not live as long as the asset.
+
+## Names (M1, ahead of the code)
+
+- **A nick is the provider's `preferred_username`** (lux, was Q14), for
+  now.
+- **An account may post without it**, as anyone else would. What stands
+  in the name's place then is the server's choice, possibly from a list
+  of names that mean nothing.
