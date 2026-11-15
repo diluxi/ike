@@ -575,3 +575,32 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Re-encoding,** for media that will not play as uploaded, needs more
   machine than lemma0: a dedicated transcoding server or rented
   compute. A note for the public launch; M1 strips and never re-encodes.
+
+## The stripper (M1, step 6)
+
+- **`ike-strip`,** a bash driver in `strip/`, built by `nix/strip.nix`
+  with a PATH of its own tools only: upload on stdin, `ok TYPE W H
+  STORED THUMB` and the bytes, or `no REASON`, on stdout. Caps (bytes,
+  side, pixels) and the thumbnail size are its arguments. libvips reads
+  the header first (P2) and runs with `VIPS_BLOCK_UNTRUSTED`.
+- **JPEG** through `jpegtran -copy none`, after the EXIF orientation is
+  applied losslessly; `-perfect`, else `-trim`, which drops a partial
+  block at an edge (fewer than 16 pixels), as P7 allows.
+- **PNG and WebP** through `ike-chunks`, in Zig: PNG keeps `IHDR PLTE
+  IDAT IEND tRNS gAMA cHRM sRGB` and stops at `IEND`; WebP keeps the
+  bitstream (and `ALPH` with an extended header saying only "alpha"),
+  ends at the RIFF length, and refuses animation.
+- **What is stored is decoded whole once,** to make the thumbnail
+  (WebP, 256 pixels, `strip`); a file that does not make one is refused.
+- **M1 takes JPEG, PNG and still WebP.** GIF and animation are M2, as
+  planning's table has them.
+- *Simplifications:* every ICC profile is dropped, not only those that
+  are not a known standard one, accepting the colour shift P7 names. An
+  animated PNG keeps its default image. Chunk CRCs are copied, not
+  checked.
+- **Invariant 11's test** is black-box over the built tool: four base
+  images in the test data, copies loaded by exiftool with EXIF, GPS,
+  XMP, IPTC, an ICC profile, comments and trailing bytes; every copy
+  strips to its base's bytes, exiftool finds only a bare image's tags,
+  and each base's stored hash is written in the test (a tool bump that
+  changes it is a migration, P7).

@@ -3,8 +3,8 @@
 %% logs, and the compiled modules read as data (xref); never a call into
 %% ike.
 %%
-%% Some invariants speak of things ike does not have yet: a decoder, a
-%% fetcher, staged uploads, a stripper. Their cases here are
+%% Some invariants speak of things ike does not have yet: a decoder in
+%% use, a fetcher, staged uploads. Their cases here are
 %% tripwires. They assert that the thing is still absent, and fail the
 %% moment it arrives, so that whoever adds it has to replace the tripwire
 %% with the real test in the same change. A tripwire proves nothing about
@@ -26,7 +26,7 @@
     inv08_purge_leaves_nothing/1,
     inv09_reachability_view_is_complete/1,
     inv10_tripwire_no_staged_uploads/1,
-    inv11_tripwire_no_stripper/1
+    inv11_stripping_is_complete_and_deterministic/1
 ]).
 
 all() ->
@@ -41,7 +41,7 @@ all() ->
         inv08_purge_leaves_nothing,
         inv09_reachability_view_is_complete,
         inv10_tripwire_no_staged_uploads,
-        inv11_tripwire_no_stripper
+        inv11_stripping_is_complete_and_deterministic
     ].
 
 -define(LOG, ike_invariant_log).
@@ -772,15 +772,206 @@ inv10_tripwire_no_staged_uploads(Config) ->
 %% 11. Stripping leaves no metadata outside the allowlist, and is
 %% deterministic for a given input.
 %%
-%% TRIPWIRE. Nothing is stripped, since nothing is accepted. When the
-%% stripper arrives (M1) this fails, and is replaced by hazard p7's
-%% fixture corpus and the same-pixels-same-hash test.
-inv11_tripwire_no_stripper(Config) ->
-    [] = outside(Config),
-    %% no asset has ever been stored
+%% Hazard P7's corpus, black-box over ike-strip as it is built: four base
+%% images in the data directory, and copies of each that exiftool loads
+%% with EXIF and GPS, XMP, IPTC, an ICC profile, comments and trailing
+%% bytes. Every copy strips to the same bytes as its base; nothing of what
+%% was added survives, in the stored file or its thumbnail; exiftool
+%% reports nothing outside the tags a bare image has; and the stored
+%% bytes of each base have the hash written down here, so that a bump of
+%% libvips, jpegtran or Zig that changes them fails (P7: a migration).
+%% Video's GPMF tracks and chapters wait for video (M2).
+inv11_stripping_is_complete_and_deterministic(Config) ->
+    Data = ?config(data_dir, Config),
+    Work = filename:join(?config(priv_dir, Config), "strip"),
+    ok = filelib:ensure_path(Work),
+    Bases = [
+        {"base.jpg", <<"jpeg">>},
+        {"base.png", <<"png">>},
+        {"lossy.webp", <<"webp">>},
+        {"lossless.webp", <<"webp">>}
+    ],
+    Icc = filename:join(Data, "profile.icc"),
+    Laden = [
+        "-EXIF:Artist=SECRET-ARTIST",
+        "-EXIF:Make=SECRET-MAKE",
+        "-EXIF:Model=SECRET-MODEL",
+        "-GPSLatitude=52.516",
+        "-GPSLatitudeRef=N",
+        "-GPSLongitude=13.377",
+        "-GPSLongitudeRef=E",
+        "-XMP:Creator=SECRET-CREATOR",
+        "-XMP:Description=SECRET-DESCRIPTION",
+        "-ICC_Profile<=" ++ Icc
+    ],
+    For = #{
+        <<"jpeg">> => ["-IPTC:By-line=SECRET-BYLINE", "-Comment=SECRET-COMMENT"],
+        <<"png">> => ["-PNG:Comment=SECRET-COMMENT", "-PNG:Title=SECRET-TITLE"],
+        <<"webp">> => []
+    },
+    lists:foreach(
+        fun({Name, Type}) ->
+            Base = filename:join(Data, Name),
+            {ok, Type, W, H, Stored, Thumb} = strip(Work, Base),
+            {61, 47} = {W, H},
+            %% the same input twice is the same output
+            {ok, Type, W, H, Stored, Thumb} = strip(Work, Base),
+            Golden = maps:get(Name, golden()),
+            Golden = binary:encode_hex(crypto:hash(sha256, Stored), lowercase),
+            bare(Work, Stored),
+            bare(Work, Thumb),
+            %% metadata in, the same bytes out
+            Copy = filename:join(Work, "laden-" ++ Name),
+            {ok, _} = file:copy(Base, Copy),
+            exiftool(["-q", "-overwrite_original" | Laden ++ maps:get(Type, For)] ++ [Copy]),
+            {ok, Bytes} = file:read_file(Copy),
+            ok = file:write_file(Copy, [Bytes, <<"TRAILING-SECRET">>]),
+            {ok, Type, W, H, Stored, _} = strip(Work, Copy),
+            %% and the copy really carried it: else this proves nothing
+            {ok, Carried} = file:read_file(Copy),
+            {_, _} = binary:match(Carried, <<"SECRET-CREATOR">>),
+            [] = secrets(Stored)
+        end,
+        Bases
+    ),
+    %% an orientation is applied, losslessly, and then dropped with the rest
+    Turned = filename:join(Work, "turned.jpg"),
+    {ok, _} = file:copy(filename:join(Data, "base.jpg"), Turned),
+    exiftool(["-q", "-overwrite_original", "-Orientation#=6", Turned]),
+    %% (a block that the turn leaves partial at an edge is trimmed: at
+    %% most one less than the 16 pixels of a block, never more)
+    {ok, <<"jpeg">>, Wide, 61, Upright, _} = strip(Work, Turned),
+    true = Wide > 47 - 16 andalso Wide =< 47,
+    bare(Work, Upright),
+    %% what is not taken
+    Refused = [
+        {<<"not an image">>, "not-an-image"},
+        {binary:part(read(Data, "base.png"), 0, 200), "unreadable"},
+        {<<(read(Data, "base.png"))/binary>>, "too-large", ["10000000", "32", "20000000", "128"]},
+        {<<(read(Data, "base.png"))/binary>>, "too-large", ["1000", "4096", "20000000", "128"]},
+        {<<"RIFF", 4:32/little, "WEBP">>, "unreadable"}
+    ],
+    lists:foreach(
+        fun
+            ({Bytes, Reason}) ->
+                {no, Reason} = strip_bytes(Work, Bytes, caps());
+            ({Bytes, Reason, Caps}) ->
+                {no, Reason} = strip_bytes(Work, Bytes, Caps)
+        end,
+        Refused
+    ),
+    %% and ike stores no asset yet
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM asset", []),
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE asset IS NOT NULL", []),
     known_routes().
+
+%% the stored bytes' sha-256 for each base, as this nixpkgs strips them
+golden() ->
+    #{
+        "base.jpg" =>
+            <<"b2df20f1b2948243d6fe136c9e0cab2383a44c3ff08ac99943d26d00ea8058fc">>,
+        "base.png" =>
+            <<"cba5288fc8f5b68745b95ccae1fe01737bd14d3aee4dbf7c5710b02e4717259a">>,
+        "lossy.webp" =>
+            <<"5a4de3595f1d3c5dc1bb846b15661f221f7638852705d4c363c3490ead92376a">>,
+        "lossless.webp" =>
+            <<"12860a83c965555f000702cd5d7c7098662cd8c868a787448e7757f322e0e1d1">>
+    }.
+
+caps() -> ["10000000", "4096", "20000000", "128"].
+
+read(Data, Name) ->
+    {ok, Bytes} = file:read_file(filename:join(Data, Name)),
+    Bytes.
+
+strip(Work, File) ->
+    strip_bytes(Work, read(filename:dirname(File), filename:basename(File)), caps()).
+
+%% ike-strip, as a unit would run it: the upload on stdin
+strip_bytes(Work, Bytes, Caps) ->
+    In = filename:join(Work, "in"),
+    Out = filename:join(Work, "out"),
+    ok = file:write_file(In, Bytes),
+    Exe = os:find_executable("ike-strip"),
+    true = is_list(Exe),
+    _ = os:cmd(
+        lists:flatten([
+            lists:join(" ", [quote(A) || A <- [Exe | Caps]]), " <", quote(In), " >", quote(Out)
+        ])
+    ),
+    {ok, Answer} = file:read_file(Out),
+    [Line, Rest] = binary:split(Answer, <<"\n">>),
+    case binary:split(Line, <<" ">>, [global]) of
+        [<<"ok">>, Type, W, H, L1, L2] ->
+            S = binary_to_integer(L1),
+            T = binary_to_integer(L2),
+            S = byte_size(Rest) - T,
+            <<Stored:S/binary, Thumb:T/binary>> = Rest,
+            {ok, Type, binary_to_integer(W), binary_to_integer(H), Stored, Thumb};
+        [<<"no">>, Reason] ->
+            <<>> = Rest,
+            {no, binary_to_list(Reason)}
+    end.
+
+%% what exiftool finds in Bytes is what a bare image of its type has
+bare(Work, Bytes) ->
+    File = filename:join(Work, "inspect"),
+    ok = file:write_file(File, Bytes),
+    [Found] = json:decode(list_to_binary(exiftool(["-j", "-G1", "-a", "-u", File]))),
+    Tags = [K || K := _ <- Found, not lists:member(K, [<<"SourceFile">>]), not system(K)],
+    [] = Tags -- allowed(),
+    [] = secrets(Bytes).
+
+system(<<"System:", _/binary>>) -> true;
+system(_) -> false.
+
+allowed() ->
+    [
+        <<"Composite:ImageSize">>,
+        <<"Composite:Megapixels">>,
+        <<"ExifTool:ExifToolVersion">>,
+        <<"File:BitsPerSample">>,
+        <<"File:ColorComponents">>,
+        <<"File:EncodingProcess">>,
+        <<"File:FileType">>,
+        <<"File:FileTypeExtension">>,
+        <<"File:ImageHeight">>,
+        <<"File:ImageWidth">>,
+        <<"File:MIMEType">>,
+        <<"File:YCbCrSubSampling">>,
+        <<"JFIF:JFIFVersion">>,
+        <<"JFIF:ResolutionUnit">>,
+        <<"JFIF:XResolution">>,
+        <<"JFIF:YResolution">>,
+        <<"PNG:BitDepth">>,
+        <<"PNG:ColorType">>,
+        <<"PNG:Compression">>,
+        <<"PNG:Filter">>,
+        <<"PNG:ImageHeight">>,
+        <<"PNG:ImageWidth">>,
+        <<"PNG:Interlace">>,
+        <<"RIFF:AlphaCompression">>,
+        <<"RIFF:AlphaFiltering">>,
+        <<"RIFF:AlphaIsUsed">>,
+        <<"RIFF:AlphaPreprocessing">>,
+        <<"RIFF:HorizontalScale">>,
+        <<"RIFF:ImageHeight">>,
+        <<"RIFF:ImageWidth">>,
+        <<"RIFF:VP8Version">>,
+        <<"RIFF:VerticalScale">>,
+        <<"RIFF:WebP_Flags">>
+    ].
+
+secrets(Bytes) ->
+    [M || M <- [<<"SECRET">>, <<"TRAILING">>, <<"ExifTool">>], binary:match(Bytes, M) =/= nomatch].
+
+exiftool(Args) ->
+    Exe = os:find_executable("exiftool"),
+    true = is_list(Exe),
+    os:cmd(lists:flatten(lists:join(" ", [quote(A) || A <- [Exe | Args]]))).
+
+quote(Arg) ->
+    "'" ++ string:replace(Arg, "'", "'\\''", all) ++ "'".
 
 %% what the tripwires share
 

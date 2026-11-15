@@ -27,6 +27,8 @@ in {
 			package.beamPackages.rebar3
 			package.beamPackages.erlfmt
 			package.elp
+			package.strip
+			pkgs.exiftool
 			pkgs.sqlite
 		];
 	};

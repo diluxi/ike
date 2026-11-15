@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# ike-strip MAX_BYTES MAX_SIDE MAX_PIXELS THUMB
+#
+# One upload on stdin, one answer on stdout. Either
+#	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH
+# followed by the stored bytes and then the thumbnail's, or
+#	no REASON
+# and nothing more. The stored bytes are the upload with its metadata
+# stripped losslessly (hazards P4, P7); the thumbnail is made from them.
+# Run in its own unit, never in ike's VM (invariant 6, hazard P1).
+set -euo pipefail
+
+max_bytes=$1
+max_side=$2
+max_pixels=$3
+thumb=$4
+
+# libvips loads nothing it does not trust with hostile input
+export VIPS_BLOCK_UNTRUSTED=1
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+no() {
+	printf 'no %s\n' "$1"
+	exit 0
+}
+
+head -c $((max_bytes + 1)) >"$work/in"
+size=$(stat -c %s "$work/in")
+[ "$size" -le "$max_bytes" ] || no too-large
+[ "$size" -gt 0 ] || no empty
+
+magic=$(head -c 12 "$work/in" | od -An -tx1 | tr -d ' \n')
+case $magic in
+ffd8ff*) type=jpeg ;;
+89504e470d0a1a0a*) type=png ;;
+52494646????????57454250) type=webp ;;
+*) no not-an-image ;;
+esac
+
+# the header's word on size, before anything is decoded (hazard P2)
+dimensions() {
+	w=$(vipsheader -f width "$1" 2>/dev/null) || no unreadable
+	h=$(vipsheader -f height "$1" 2>/dev/null) || no unreadable
+	pages=$(vipsheader -f n-pages "$1" 2>/dev/null) || pages=1
+	[ "$pages" = 1 ] || no animated
+	[ "$w" -le "$max_side" ] && [ "$h" -le "$max_side" ] || no too-large
+	[ $((w * h)) -le "$max_pixels" ] || no too-large
+}
+dimensions "$work/in"
+
+case $type in
+jpeg)
+	# the orientation goes with the rest of the metadata, so it is
+	# applied first, losslessly; -perfect refuses partial blocks at the
+	# edges, which -trim then drops
+	o=$(vipsheader -f orientation "$work/in" 2>/dev/null) || o=1
+	case $o in
+	2) t=(-flip horizontal) ;;
+	3) t=(-rotate 180) ;;
+	4) t=(-flip vertical) ;;
+	5) t=(-transpose) ;;
+	6) t=(-rotate 90) ;;
+	7) t=(-transverse) ;;
+	8) t=(-rotate 270) ;;
+	*) t=() ;;
+	esac
+	if [ ${#t[@]} -eq 0 ]; then
+		jpegtran -copy none "$work/in" >"$work/out" 2>/dev/null || no unreadable
+	else
+		jpegtran -copy none -perfect "${t[@]}" "$work/in" >"$work/out" 2>/dev/null ||
+			jpegtran -copy none -trim "${t[@]}" "$work/in" >"$work/out" 2>/dev/null ||
+			no unreadable
+	fi
+	;;
+png | webp)
+	ike-chunks <"$work/in" >"$work/out" 2>/dev/null || no unreadable
+	;;
+esac
+
+# what is stored is what is measured, and decoded once whole: a file
+# that does not make a thumbnail is not taken
+dimensions "$work/out"
+vipsthumbnail "$work/out" --size "${thumb}x${thumb}" \
+	-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
+
+printf 'ok %s %s %s %s %s\n' "$type" "$w" "$h" \
+	"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")"
+cat "$work/out" "$work/thumb.webp"
