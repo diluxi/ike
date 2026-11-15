@@ -19,7 +19,7 @@
 %% brings the schema up to what priv/migrations holds. a migration is
 %% applied once, in its own transaction, and never edited afterwards: its
 %% hash is kept and compared on every start
--spec run(ike_db:conn()) -> ok | error().
+-spec run(ike_db:writer()) -> ok | error().
 run(Conn) ->
     case read() of
         {ok, Migrations} ->
@@ -36,7 +36,7 @@ run(Conn) ->
             Error
     end.
 
--spec applied(ike_db:conn()) -> {ok, [ike_db:row()]} | error().
+-spec applied(ike_db:writer()) -> {ok, [ike_db:row()]} | error().
 applied(Conn) ->
     Create = <<
         "CREATE TABLE IF NOT EXISTS migration ("
@@ -102,7 +102,7 @@ pending([{Version, _Name, Sql} | Migrations], [[Version, Hash] | Applied]) ->
 pending([{Version, _Name, _Sql} | _], _Applied) ->
     {error, {migration_changed, Version}}.
 
--spec apply_all(ike_db:conn(), [migration()]) -> ok | error().
+-spec apply_all(ike_db:writer(), [migration()]) -> ok | error().
 apply_all(_Conn, []) ->
     ok;
 apply_all(Conn, [{Version, Name, Sql} | Migrations]) ->
@@ -111,7 +111,7 @@ apply_all(Conn, [{Version, Name, Sql} | Migrations]) ->
         _ -> apply_all(Conn, Migrations)
     end.
 
--spec apply_one(ike_db:conn(), version(), binary(), binary()) ->
+-spec apply_one(ike_db:writer(), version(), binary(), binary()) ->
     ok | ike_db:error().
 apply_one(Conn, Version, Name, Sql) ->
     Record = <<"INSERT INTO migration VALUES (?1, ?2, ?3)">>,

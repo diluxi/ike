@@ -1,7 +1,7 @@
 {application, ike, [
     {description, "imageboard, booru and wiki over one store"},
     {vsn, "0.0.0"},
-    {registered, [ike_sup]},
+    {registered, [ike_sup, ike_writer]},
     {mod, {ike_app, []}},
     {applications, [kernel, stdlib, crypto, cowboy, esqlite]},
     {env, [
