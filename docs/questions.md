@@ -62,21 +62,6 @@ here.
 - **Q22 Purge entries and hashes (G5).** Text-only purges log the
   reason and the number. When assets arrive, whether the hash is shown
   is still open; nothing logs one yet.
-- **Q27 The upload-to-account link (I4).** lux, 2026-11-15: uploads
-  belong to their uploader as on Danbooru; posting assets without an
-  account is a switch an admin turns on after deploying (off by
-  default, A1), and such uploads belong to the anonymous actor. Read
-  here as: the link is kept in plaintext on the upload row, and the
-  posts still show nobody. To confirm. Planning lines 22 ("always carry
-  a local account") and 177 say otherwise, line 11 only "at launch".
-  An anonymous staged upload would need a per-browser token to be shown
-  to its uploader alone (invariant 10).
-- **Q28 The media domain.** P3 asks for a separate *registered* domain.
-  `cdn.amartia.online` is the same site as ike and as Authelia: a cookie
-  set for `amartia.online` reaches it, and SameSite does not separate
-  them, so a polyglot served there acts with the user's session. It needs
-  a domain of its own (any cheap one; plain static serving from Caddy is
-  enough, no special software).
 - **Q29 What admins do beyond moderators.** lux: "access to logs,
   trigger read-only, etc." Which logs (the `action` rows naming the
   account, the journal?), and what read-only means (no posts at all, or

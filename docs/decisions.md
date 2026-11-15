@@ -561,3 +561,17 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   xref, the suites touched, eqWAlizer) runs before every commit;
   `nix-build -A checks` once a step is finished, not at every commit.
   This relaxes phi.md's "before committing", on lux's word.
+- **I4 (was Q27).** An upload belongs to whoever uploaded it, as on
+  Danbooru: an account, or the anonymous actor. Uploading without an
+  account is a switch an admin turns on after deploying, off by default
+  (A1). A public launch needs uploads that are properly anonymous, so
+  the switch has to work before then. The link is plaintext on the
+  upload's row; posts show nobody either way.
+- **The media host (was Q28):** `cdn.amartia.online` for now, risk
+  accepted while ike is not public: same-site with ike and Authelia, and
+  sharing `amartia.online`'s reputation. It is one configuration value
+  and one module option, so moving to a domain of its own is a
+  redeploy.
+- **Re-encoding,** for media that will not play as uploaded, needs more
+  machine than lemma0: a dedicated transcoding server or rented
+  compute. A note for the public launch; M1 strips and never re-encodes.
