@@ -62,19 +62,15 @@ here.
 - **Q22 Purge entries and hashes (G5).** Text-only purges log the
   reason and the number. When assets arrive, whether the hash is shown
   is still open; nothing logs one yet.
-- **Q23 Tools for the asset pipeline.** lux: the chunk filter in Zig;
-  tests black-box over the tools and fixtures. Still to confirm: libvips
-  (header checks against bombs, thumbnails), libjpeg-turbo's `jpegtran`
-  (lossless JPEG stripping, orientation), Zig, and exiftool in the tests
-  only. Audio with cover art later brings ffmpeg, as video does.
-- **Q27 The upload-to-account link (I4).** lux, 2026-11-15: maybe drop
-  it, since anyone wanting to stay anonymous logs out first. Two things
-  to weigh before deciding: images cannot be posted logged out (A1;
-  planning lines 11, 22 and 177), so logging out only anonymises text;
-  and a staged upload needs its owner while staged (invariant 10), so
-  dropping the link can at most mean erasing it when the upload is
-  posted. The idea of showing an account its own anonymous posts is
-  dropped. Open: keep the link, erase it on posting, or encrypt it.
+- **Q27 The upload-to-account link (I4).** lux, 2026-11-15: uploads
+  belong to their uploader as on Danbooru; posting assets without an
+  account is a switch an admin turns on after deploying (off by
+  default, A1), and such uploads belong to the anonymous actor. Read
+  here as: the link is kept in plaintext on the upload row, and the
+  posts still show nobody. To confirm. Planning lines 22 ("always carry
+  a local account") and 177 say otherwise, line 11 only "at launch".
+  An anonymous staged upload would need a per-browser token to be shown
+  to its uploader alone (invariant 10).
 - **Q28 The media domain.** P3 asks for a separate *registered* domain.
   `cdn.amartia.online` is the same site as ike and as Authelia: a cookie
   set for `amartia.online` reaches it, and SameSite does not separate

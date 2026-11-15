@@ -553,3 +553,11 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **The media origin:** lux offered `cdn.amartia.online`; it cannot be
   that, since P3 asks for another registered domain (Q28).
 - **Audio** with cover art is a later media type to plan for.
+- **Tools (was Q23):** libvips, libjpeg-turbo's `jpegtran`, exiftool in
+  the tests only, and the PNG/WebP chunk filter written in Zig. Tests
+  stay black-box over the tools and the fixtures.
+- **Full checks less often.** theorem is slow and lemma0 (a ccx13: two
+  cores, no KVM) is no faster for the VM test. The quick loop (erlfmt,
+  xref, the suites touched, eqWAlizer) runs before every commit;
+  `nix-build -A checks` once a step is finished, not at every commit.
+  This relaxes phi.md's "before committing", on lux's word.
