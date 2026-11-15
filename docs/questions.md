@@ -32,9 +32,28 @@ here.
   GitHub's archive without credentials, so fog can pin ike only if it is.
 - **Q7 Authelia client.** Step 6 needs the client id, the redirect URI's
   host (which name ike is served under), and whether the client is public
-  (PKCE only) or confidential. Tests use a mock IdP either way.
+  (PKCE only) or confidential. Both are built; tests use a mock provider.
+  Also: Authelia must sign id tokens with RS256 (its default).
 - **Q8 Retention** (D6, D7). How many snapshots are kept, and for how
-  long. *Meanwhile:* an option, defaulting to seven.
+  long. *Meanwhile:* `services.ike.backup.keep`, defaulting to seven daily
+  ones. Purged content would live that long in them; M1's purge has to
+  know the answer.
+- **Q9 Invariant 3 and the renderer.** "Every write, deletion and file
+  unlink goes through the single writer." The renderer writes page files
+  itself, as planning.md's diagram has it. *Meanwhile:* read as the
+  database, and every deletion and unlink, being the writer's; pages are
+  derived and only replaced. The test lists exactly who changes files,
+  so it says so out loud. If the stricter reading is meant, page writes
+  become messages to the writer.
+- **Q10 How an account's post is shown.** It stores the account's actor
+  and shows nothing. Anonymous to readers, like image posts are planned
+  to be? A name? Not needed before M1.
+- **Q11 Tripwires.** Five of the eleven invariant tests can only assert
+  that their subject does not exist yet (decisions.md). Is that enough
+  for M0's "the 11 invariants as CI tests"?
+- **Q12 Sessions across restarts.** They are in memory, so a deploy logs
+  everyone out. Keeping them needs either a table (then who is logged in
+  is on disk) or signed cookies (then a key to keep).
 
 ## Open decisions in planning.md
 

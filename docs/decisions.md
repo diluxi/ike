@@ -191,3 +191,108 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   the schema and nothing fills it: the link grammar is M1's. It will be
   filled in the same transaction as the post (D1).
 
+
+## Renderer
+
+- **Pages are files, written whole and renamed into place** (D2), by
+  `ike_render`: `t/N.html` per thread and `index.html`. Every page is
+  rendered again at start, so the pages are a cache and a restore need
+  not carry them.
+- **HTML is a tree** (`ike_html`) with a closed set of tag and attribute
+  names; text becomes bytes in one place, escaped there (invariant 4).
+  Per-request pages (forms, refusals) go through the same tree.
+- **The renderer follows commits.** The writer tells it which thread
+  changed after each commit; it keeps a set of dirty threads and renders
+  one per turn. A handler that redirects to a page waits for the set to
+  drain first.
+- **The renderer writes its own files.** Invariant 3 is read as: the
+  database, and every deletion and unlink, belong to the writer; pages
+  are derived and only ever replaced. See `questions.md`.
+- **Nothing shows who posted.** A post made by an account stores that
+  account's actor and displays nothing of it. How posters are shown is
+  not M0's to decide.
+- **Cowboy serves the pages too**, from the same files, so that ike works
+  without a web server in front (development, tests). Caddy answers
+  those paths first where it is there.
+- **Pages live in `/var/cache/ike`** under the module, apart from the
+  state, so that Caddy can be let into them and nothing else. ike runs as
+  a static user `ike`, not `DynamicUser`, whose directories no other
+  user can reach; Caddy's user joins the group.
+- **Caddy writes no access log** for ike's host (`logFormat = null`):
+  an access log is a list of addresses (invariant 1).
+
+## Requests
+
+- **The first stream handler forgets the peer** (`ike_http_anon`): the
+  address is overwritten and the forwarding headers dropped before any
+  handler, or any crash report quoting a request, can see them
+  (invariant 1). M1's rate limiter has to sit there, ahead of the
+  forgetting, and keep what it derives in memory only.
+- **The same handler gives every answer the common headers**, including
+  the ones Cowboy sends by itself. *Simplification:* two concerns in one
+  module, because both have to be first in line.
+- **Only urlencoded forms are read.** Anything else, multipart first of
+  all, is refused with 415 before its body is read (A1, invariant 5).
+  A form is at most 64 KiB, in Cowboy and in Caddy.
+
+## Login, as built
+
+- **OTP only:** `httpc`, `json`, `crypto`, `public_key`. No JOSE or OIDC
+  library was added.
+- **RS256 and nothing else.** The token's header picks a key by `kid`
+  and has no say in the algorithm. Authelia signs with RS256 by default;
+  ES256 would be a second, equally small verifier.
+- **Checked:** state (single use, ten minutes), a cookie binding the
+  callback to the browser that started the login, PKCE with S256, the
+  signature against the issuer's JWKS, `iss`, `aud` (with `azp` when
+  there are several), `nonce`, `exp` and `iat` with a minute's leeway.
+- **Kept of a person:** issuer and subject, as an actor. No name, no
+  email, no token. The `groups` claim (I5) is not read yet: nothing in
+  M0 has roles.
+- **Keys are cached for an hour** and asked for again, at most once a
+  minute, when a token names one that is not known.
+- **Both kinds of client work:** with a secret file the token request
+  authenticates with it, without one it relies on PKCE (Q7).
+- **Sessions live in memory** (ETS), eight hours, with a CSRF token
+  each. *Simplification:* a restart logs everyone out. Nothing about who
+  is logged in reaches the disk, and there is no session key to keep.
+- **Cookies** are `__Host-` prefixed, `Secure`, `HttpOnly`,
+  `SameSite=Lax` (I2).
+- **Every way a login can fail gives the same answer**, a 400 that says
+  to start again.
+- **Only accounts post in M0.** Anonymous posting needs the rate limiter
+  and moderation, which are M1.
+
+## Backups
+
+- **Snapshots through SQLite's backup API** (D6), taken by the writer
+  from its own connection, checked with `integrity_check`, written under
+  a temporary name and renamed. *Simplification:* the writer does not
+  write while it copies; at M0's sizes that is milliseconds. Litestream
+  (Ben Johnson, 2021) stays the alternative should that stop being true.
+- **`<data_dir>/backups/<UTC time>.db`**, one a day and seven kept by
+  default, both options. Seven is a stand-in for the retention window,
+  which is lux's (Q8, D7). Old ones are unlinked by the writer.
+- **A restart takes no snapshot of its own** unless the newest is older
+  than the interval, so that a crash loop cannot push the good ones out.
+- **A restore is a copy:** stop, put a snapshot where `ike.db` was, start.
+  Pages are rendered again from it. `ike_backup_SUITE` does exactly this
+  and compares rows and page bytes.
+- **Taking snapshots off the host is fog's.**
+
+## Invariant tests
+
+- **`ike_invariant_SUITE` has one case per invariant**, in hazards.md's
+  order. 1 to 5 and 9 test what M0 has. 6, 7, 8, 10 and 11 speak of
+  things M0 lacks (decoder, fetcher, purge, staging, stripper); their
+  cases are *tripwires*: they assert the thing is absent, fail when it
+  arrives, and are to be replaced by the real test in the same change.
+  They prove nothing about the thing itself.
+- **Structure is read from the compiled modules** with xref: who calls
+  SQLite, who opens a writer, who changes files, who connects out. The
+  lists are exact, so a new such place fails until it is listed.
+- **Routes and tables are listed exactly** for the same reason.
+- **Invariant 1's log test cannot provoke a crash report** from outside.
+  It checks that nothing is logged for ordinary and refused requests,
+  and structurally that the forgetting handler is first and nothing asks
+  for a peer.

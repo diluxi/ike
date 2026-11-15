@@ -66,26 +66,71 @@ tests a phi-signed tip and lux ratifies, as with any other change. ike's
 own signatures are not checked by fog-deploy; the pinned hash is what binds
 fog to an exact tree, so the pin bump is the commit to review.
 
-## What M0 will add here
+## Options
 
-Not there yet; listed so fog's side can be planned.
+```nix
+{ config, ... }: {
+	services.ike = {
+		enable = true;
+		caddy = {
+			enable = true;
+			hostName = "ike.amartia.online";
+		};
+		oidc = {
+			issuer = "https://id.amartia.online";
+			clientId = "ike";
+			redirectUri = "https://ike.amartia.online/login/callback";
+			# only for a confidential client
+			clientSecretFile = config.crypt.secrets.ike-oidc.path;
+		};
+		backup = {
+			interval = 86400;
+			keep = 7;
+		};
+	};
+}
+```
 
-- **The web server** is fog's Caddy (decisions.md). ike's module will
-  offer a `services.caddy.virtualHosts` entry as a separate option, off by
-  default: `file_server` over ike's page and media directories, and
-  `reverse_proxy` to the loopback port for the rest.
-- **State.** `/var/lib/ike` (database, media, pages), through
-  `StateDirectory` with `DynamicUser`. The server in front needs read
-  access to the pages and media directories, which will mean a static user
-  or a shared group in place of `DynamicUser`.
-- **Secrets.** Paths passed as options and loaded with `LoadCredential`,
-  so they fit `crypt.generated` (a session key) and `crypt.secrets` alike.
-  With PKCE and a public client there is no OIDC client secret.
-- **Authelia.** An OIDC client for ike in `lemma/id.nix`: authorization
-  code, PKCE with S256, the redirect URI under ike's host, the `groups`
-  scope for roles.
-- **Backups.** A timer writing snapshots under the state directory; where
-  they go from there (witness0, say) is fog's, behind one option.
+The names above are examples; which host name and which kind of client
+are open (questions.md, Q7).
+
+- **Caddy.** `caddy.enable` adds a virtual host to fog's Caddy: rendered
+  pages straight from `/var/cache/ike/pages`, everything else to Cowboy
+  on the loopback port. It has no access log, on purpose (invariant 1),
+  and caps request bodies at 64 KiB. Caddy's user joins the group `ike`
+  to read the pages; it cannot read `/var/lib/ike`.
+- **User.** A static system user `ike`. State in `/var/lib/ike` (0700),
+  pages in `/var/cache/ike` (0750).
+- **Authelia.** A client for ike in `lemma/id.nix`: authorization code,
+  PKCE with S256, scope `openid`, the redirect URI above, id tokens
+  signed with RS256. The secret, if there is one, is loaded with
+  `LoadCredential` and need not be readable by ike's user; its first
+  line is the secret.
+- **Egress.** ike connects out to the issuer and nowhere else.
+
+## Backups and restoring
+
+Snapshots land in `/var/lib/ike/backups/<UTC time>.db`, whole SQLite
+databases, never half-written. Copying them elsewhere (witness0, say) is
+fog's; anything that copies files will do.
+
+To restore:
+
+```sh
+systemctl stop ike
+cd /var/lib/ike
+rm -f ike.db ike.db-wal ike.db-shm
+install -o ike -g ike -m 0640 backups/20261115T030000Z.db ike.db
+systemctl start ike
+```
+
+ike migrates the snapshot if it is from an older version and renders
+every page again. Sessions do not survive; accounts do. CI does this on
+every change (`ike_backup_SUITE`).
+
+## Not there
+
 - **A VM of its own** is not planned (decisions.md). Should that change,
   the module assumes nothing about the host: a second host directory in
   fog importing the same module is all it takes on ike's side.
+- **A firewall rule for ike's egress** (N2) would be fog's.

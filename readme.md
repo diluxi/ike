@@ -15,7 +15,7 @@ amartia, from greek _hamartia_: missing the mark.
 # shape
 
 static-first html that works as plain forms with no javascript. login goes
-through oidc. text posts are anonymous and store nothing beyond their
+through oidc. text posts are to be anonymous and store nothing beyond their
 contents; image posts need an account and are shown as anonymous. no ip
 address is ever written anywhere.
 
