@@ -29,8 +29,10 @@ restore_reproduces(Config) ->
         Config, Thread ++ "/reply", Session, <<"and a reply & its <markup>">>
     ),
     Rows = dump(Config),
+    IndexFile = filename:join([Dir, "pages", "board", "b.html"]),
+    ok = appears(IndexFile, 100),
     {ok, Page} = file:read_file(ike_browser:page_file(Config, N)),
-    {ok, Index} = file:read_file(filename:join([Dir, "pages", "board", "b.html"])),
+    {ok, Index} = file:read_file(IndexFile),
     {_, _} = binary:match(Page, <<"what must survive">>),
 
     %% a snapshot taken after the reply, found as a file
@@ -66,8 +68,10 @@ restore_reproduces(Config) ->
 
     %% the rows, and the pages byte for byte, from disk and over http
     Rows = dump(Config),
+    IndexFile = filename:join([Dir, "pages", "board", "b.html"]),
+    ok = appears(IndexFile, 100),
     {ok, Page} = file:read_file(ike_browser:page_file(Config, N)),
-    {ok, Index} = file:read_file(filename:join([Dir, "pages", "board", "b.html"])),
+    {ok, Index} = file:read_file(IndexFile),
     {200, _, Page} = ike_browser:request(Config, get, Thread, [], none),
     {200, _, Index} = ike_browser:request(Config, get, "/board/b", [], none),
     nomatch = binary:match(Index, <<"too late">>),
@@ -128,3 +132,16 @@ wait_for_snapshot(Dir, Rows, Tries) when Tries > 0 ->
 
 dump(Config) ->
     ike_browser:query(Config, "SELECT id, thread, actor, time, body FROM post ORDER BY id", []).
+
+%% pages are made again in the background after a start; the lists come
+%% last
+appears(_File, 0) ->
+    timeout;
+appears(File, Tries) ->
+    case filelib:is_regular(File) of
+        true ->
+            ok;
+        false ->
+            timer:sleep(50),
+            appears(File, Tries - 1)
+    end.
