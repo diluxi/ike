@@ -27,13 +27,16 @@ child_spec() ->
 -spec dispatch() -> cowboy_router:dispatch_rules().
 dispatch() ->
     Thread = {thread, int},
+    Board = {board, fun board/2},
     cowboy_router:compile([
         {'_', [
             {"/health", ike_http_health, []},
-            {"/", ike_http_page, []},
-            {"/t/:thread", [Thread], ike_http_page, []},
-            {"/new", ike_http_post, []},
-            {"/t/:thread/reply", [Thread], ike_http_post, []},
+            {"/", ike_http_page, front},
+            {"/board", ike_http_page, boards},
+            {"/board/:board", [Board], ike_http_page, board},
+            {"/board/:board/new", [Board], ike_http_post, []},
+            {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
+            {"/board/:board/:thread/reply", [Board, Thread], ike_http_post, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
@@ -42,6 +45,19 @@ dispatch() ->
             {'_', ike_http_page, missing}
         ]}
     ]).
+
+%% a path names a file under the pages, so a board's name in one is only
+%% ever what a board may be called
+-spec board(forward | reverse | format_error, term()) -> {ok, term()} | {error, term()} | iodata().
+board(format_error, _) ->
+    <<"not a board's name">>;
+board(_, Name) when is_binary(Name) ->
+    case ike_config:board_name(Name) of
+        true -> {ok, Name};
+        false -> {error, not_a_board}
+    end;
+board(_, _) ->
+    {error, not_a_board}.
 
 %% nothing ike sends may run a script, be framed or be sniffed into
 %% another type. caddy sets the same on the pages it serves from disk

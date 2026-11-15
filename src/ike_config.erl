@@ -2,7 +2,8 @@
 -module(ike_config).
 
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
--export([backup_dir/0, backup_seconds/0, backup_keep/0]).
+-export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
+-export([board_name/1]).
 -export_type([oidc/0]).
 
 -type oidc() :: #{
@@ -12,6 +13,35 @@
     %% absent for a public client
     client_secret => binary()
 }.
+
+%% the boards there are to be, as name and title. one that is no longer
+%% named here stays as it is: threads are not lost to a typo
+-spec boards() -> [{Name :: binary(), Title :: binary()}].
+boards() ->
+    case application:get_env(ike, boards) of
+        {ok, Boards} when is_list(Boards) ->
+            [
+                case board_name(Name) of
+                    true -> {Name, Title};
+                    false -> error({badenv, {boards, Name}})
+                end
+             || {Name, Title} <- Boards, is_binary(Name), is_binary(Title)
+            ];
+        _ ->
+            []
+    end.
+
+%% a to z and digits, at most sixteen
+-spec board_name(binary()) -> boolean().
+board_name(Name) when byte_size(Name) >= 1, byte_size(Name) =< 16 ->
+    lower(Name);
+board_name(_) ->
+    false.
+
+-spec lower(binary()) -> boolean().
+lower(<<C, Rest/binary>>) when C >= $a, C =< $z; C >= $0, C =< $9 -> lower(Rest);
+lower(<<>>) -> true;
+lower(_) -> false.
 
 -spec data_dir() -> binary().
 data_dir() ->

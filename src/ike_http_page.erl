@@ -9,14 +9,26 @@
 init(Req, missing = State) ->
     {ok, ike_http:not_found(Req), State};
 init(Req, State) ->
+    %% from what the route bound, never from the path as it was sent: the
+    %% router resolves dots and escapes, a file name must not have to
     Name =
-        case cowboy_req:binding(thread, Req) of
-            undefined -> <<"index.html">>;
-            N when is_integer(N) -> <<"t/", (integer_to_binary(N))/binary, ".html">>
+        case {cowboy_req:binding(board, Req), cowboy_req:binding(thread, Req), State} of
+            {undefined, undefined, front} ->
+                <<"index">>;
+            {undefined, undefined, boards} ->
+                <<"board">>;
+            {Board, undefined, _} when is_binary(Board) ->
+                <<"board/", Board/binary>>;
+            {Board, N, _} when is_binary(Board), is_integer(N), N > 0 ->
+                <<"board/", Board/binary, "/", (integer_to_binary(N))/binary>>;
+            _ ->
+                none
         end,
-    Path = <<(ike_config:pages_dir())/binary, "/", Name/binary>>,
-    case cowboy_req:method(Req) of
-        Method when Method =:= <<"GET">>; Method =:= <<"HEAD">> ->
+    case {cowboy_req:method(Req), Name} of
+        {_, none} ->
+            {ok, ike_http:not_found(Req), State};
+        {Method, _} when Method =:= <<"GET">>; Method =:= <<"HEAD">> ->
+            Path = <<(ike_config:pages_dir())/binary, "/", Name/binary, ".html">>,
             case file:read_file(Path) of
                 {ok, Page} -> {ok, ike_http:html(200, Page, Req), State};
                 {error, _} -> {ok, ike_http:not_found(Req), State}

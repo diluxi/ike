@@ -12,8 +12,8 @@
 
 -type new_post() :: #{
     actor := ike_id:actor(),
-    %% a reply's thread, or new for an op
-    thread := new | ike_id:post(),
+    %% a reply's thread, or the board an op starts one on
+    thread := {new, Board :: binary()} | ike_id:post(),
     body := binary()
 }.
 
@@ -40,11 +40,11 @@ local_actor(Issuer, Subject) ->
     end.
 
 -spec post(new_post()) ->
-    {ok, ike_id:post()} | {error, bad_text | no_such_thread} | error().
+    {ok, ike_id:post()} | {error, bad_text | no_such_thread | no_such_board} | error().
 post(#{actor := Actor, thread := Thread, body := Body}) ->
     Home =
         case Thread of
-            new -> new;
+            {new, Board} -> {new, Board};
             _ -> ike_id:to_integer(Thread)
         end,
     case call({post, ike_id:to_integer(Actor), Home, Body}) of
@@ -99,7 +99,7 @@ init([]) ->
         ok ->
             case ike_db:open_writer(ike_config:db_path()) of
                 {ok, Conn} ->
-                    case ike_migrate:run(Conn) of
+                    case migrated(Conn) of
                         ok ->
                             {ok, Conn};
                         {error, Reason} ->
@@ -112,6 +112,27 @@ init([]) ->
         {error, Reason} ->
             {stop, {data_dir, Reason}}
     end.
+
+-spec migrated(ike_db:writer()) -> ok | error().
+migrated(Conn) ->
+    case ike_migrate:run(Conn) of
+        ok -> settled(ike_db:transaction(Conn, fun() -> boards(Conn, ike_config:boards()) end));
+        {error, _} = Error -> Error
+    end.
+
+%% the configured boards exist, under the titles given
+-spec boards(ike_db:writer(), [{binary(), binary()}]) -> ok | error().
+boards(Conn, [{Name, Title} | Boards]) ->
+    Upsert = <<
+        "INSERT INTO board (name, title) VALUES (?1, ?2)"
+        " ON CONFLICT (name) DO UPDATE SET title = excluded.title"
+    >>,
+    case ike_db:q(Conn, Upsert, [Name, Title]) of
+        {ok, _} -> boards(Conn, Boards);
+        {error, _} = Error -> Error
+    end;
+boards(_Conn, []) ->
+    ok.
 
 -spec handle_call(term(), gen_server:from(), ike_db:writer()) ->
     {reply, term(), ike_db:writer()}.
@@ -164,16 +185,19 @@ terminate(_Reason, Conn) ->
 %% one statement as one transaction
 -spec change(ike_db:writer(), binary(), [term()]) -> ok | error().
 change(Conn, Sql, Args) ->
-    Result = ike_db:transaction(Conn, fun() ->
-        case ike_db:q(Conn, Sql, Args) of
-            {ok, _} -> ok;
-            {error, _} = Error -> Error
-        end
-    end),
-    case Result of
-        {error, _} = Error -> Error;
-        _ -> ok
-    end.
+    settled(
+        ike_db:transaction(Conn, fun() ->
+            case ike_db:q(Conn, Sql, Args) of
+                {ok, _} -> ok;
+                {error, _} = Error -> Error
+            end
+        end)
+    ).
+
+%% of a transaction that had nothing to say but whether it went through
+-spec settled(term()) -> ok | error().
+settled({error, _} = Error) -> Error;
+settled(_) -> ok.
 
 %% the renderer follows each commit, never a transaction still open
 -spec committed(Result) -> Result when Result :: {ok, {integer(), integer()}} | term().
@@ -249,20 +273,23 @@ local_actor(Conn, Issuer, Subject) ->
 
 -spec post(ike_db:writer(), integer(), term(), integer(), binary()) ->
     {ok, {Id :: integer(), Thread :: integer()}} | error().
-post(Conn, Actor, new, Time, Body) ->
+post(Conn, Actor, {new, Name}, Time, Body) when is_binary(Name) ->
     %% an op's home thread is its own number, which autoincrement will hand
     %% out next; nobody else can take it, since nobody else writes
     Next = <<
         "SELECT coalesce((SELECT seq FROM sqlite_sequence"
-        " WHERE name = 'post'), 0) + 1"
+        " WHERE name = 'post'), 0) + 1,"
+        " (SELECT id FROM board WHERE name = ?1)"
     >>,
-    case ike_db:q(Conn, Next, []) of
-        {ok, [[Id]]} when is_integer(Id) ->
-            Thread = <<"INSERT INTO thread (root) VALUES (?1)">>,
-            case ike_db:q(Conn, Thread, [Id]) of
+    case ike_db:q(Conn, Next, [Name]) of
+        {ok, [[Id, Board]]} when is_integer(Id), is_integer(Board) ->
+            Thread = <<"INSERT INTO thread (root, board) VALUES (?1, ?2)">>,
+            case ike_db:q(Conn, Thread, [Id, Board]) of
                 {ok, _} -> insert(Conn, Actor, Id, Time, Body);
                 {error, _} = Error -> Error
             end;
+        {ok, [[_, _]]} ->
+            {error, no_such_board};
         {ok, Rows} ->
             {error, {unexpected, Rows}};
         {error, _} = Error ->

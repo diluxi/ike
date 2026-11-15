@@ -10,6 +10,8 @@
     login_sends_the_browser_away/1,
     login_then_post/1,
     reply_and_index/1,
+    boards_keep_their_threads/1,
+    only_boards_there_are/1,
     posting_needs_a_session/1,
     posting_needs_the_token/1,
     bad_text_is_refused/1,
@@ -47,6 +49,8 @@ all() ->
         login_sends_the_browser_away,
         login_then_post,
         reply_and_index,
+        boards_keep_their_threads,
+        only_boards_there_are,
         posting_needs_a_session,
         posting_needs_the_token,
         bad_text_is_refused,
@@ -99,8 +103,8 @@ login_sends_the_browser_away(Config) ->
 login_then_post(Config) ->
     Session = login(Config, <<"alice">>),
     Text = <<"hello from a test, with <b>angle</b> & \"quotes\"\nand a second line">>,
-    {303, Headers, _} = post(Config, "/new", Session, Text),
-    "/t/" ++ Rest = proplists:get_value("location", Headers),
+    {303, Headers, _} = post(Config, "/board/b/new", Session, Text),
+    "/board/b/" ++ Rest = proplists:get_value("location", Headers),
     {N, "#p" ++ P} = string:to_integer(Rest),
     N = list_to_integer(P),
     %% a row, written for the account's actor and nobody's address
@@ -112,7 +116,7 @@ login_then_post(Config) ->
     Issuer = ?config(issuer, Config),
     %% a page, which is a file, and the file is what is served
     {ok, File} = file:read_file(page_file(Config, N)),
-    {200, _, Served} = request(Config, get, "/t/" ++ integer_to_list(N), [], none),
+    {200, _, Served} = request(Config, get, "/board/b/" ++ integer_to_list(N), [], none),
     File = Served,
     {_, _} = binary:match(File, <<"&lt;b&gt;angle&lt;/b&gt; &amp; &quot;quotes&quot;">>),
     nomatch = binary:match(File, <<"<b>">>),
@@ -120,9 +124,9 @@ login_then_post(Config) ->
 
 reply_and_index(Config) ->
     Session = login(Config, <<"bob">>),
-    {303, Headers, _} = post(Config, "/new", Session, <<"a thread to reply in">>),
-    {N, _} = string:to_integer(proplists:get_value("location", Headers) -- "/t/"),
-    Thread = "/t/" ++ integer_to_list(N),
+    {303, Headers, _} = post(Config, "/board/b/new", Session, <<"a thread to reply in">>),
+    {N, _} = string:to_integer(proplists:get_value("location", Headers) -- "/board/b/"),
+    Thread = "/board/b/" ++ integer_to_list(N),
     {200, _, Form} = request(Config, get, Thread ++ "/reply", cookies(Session), none),
     {_, _} = binary:match(Form, <<"name=\"csrf\"">>),
     {303, Headers2, _} = post(Config, Thread ++ "/reply", Session, <<"the reply itself">>),
@@ -132,17 +136,81 @@ reply_and_index(Config) ->
     {_, _} = binary:match(Page, <<"a thread to reply in">>),
     {_, _} = binary:match(Page, <<"the reply itself">>),
     [[2]] = query(Config, "SELECT count(*) FROM post WHERE thread = ?", [N]),
-    {200, _, Index} = request(Config, get, "/", [], none),
+    {200, _, Index} = request(Config, get, "/board/b", [], none),
     {_, _} = binary:match(Index, list_to_binary("href=\"" ++ Thread ++ "\"")),
-    {ok, Index} = file:read_file(filename:join([?config(dir, Config), "pages", "index.html"])).
+    {ok, Index} = file:read_file(filename:join([?config(dir, Config), "pages", "board", "b.html"])).
+
+boards_keep_their_threads(Config) ->
+    Session = login(Config, <<"britta">>),
+    {303, Headers, _} = post(Config, "/board/meta/new", Session, <<"only on meta">>),
+    "/board/meta/" ++ Rest =
+        Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
+    {N, _} = string:to_integer(Rest),
+    {200, _, Page} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(Page, <<"only on meta">>),
+    {200, _, Meta} = request(Config, get, "/board/meta", [], none),
+    {_, _} = binary:match(Meta, <<"only on meta">>),
+    {_, _} = binary:match(Meta, <<"about ike">>),
+    {200, _, Other} = request(Config, get, "/board/b", [], none),
+    nomatch = binary:match(Other, <<"only on meta">>),
+    %% a thread is reached through its own board and no other
+    Elsewhere = "/board/b/" ++ integer_to_list(N),
+    {404, _, _} = request(Config, get, Elsewhere, [], none),
+    {404, _, _} = request(Config, get, Elsewhere ++ "/reply", cookies(Session), none),
+    {404, _, _} = post(Config, Elsewhere ++ "/reply", Session, <<"through the wrong door">>),
+    [[1]] = query(Config, "SELECT count(*) FROM post WHERE thread = ?", [N]),
+    %% both are listed, and a new board is locked (hazard a4)
+    {200, _, Boards} = request(Config, get, "/board", [], none),
+    [
+        {_, _} = binary:match(Boards, B)
+     || B <- [<<"href=\"/board/b\"">>, <<"href=\"/board/meta\"">>]
+    ],
+    [[<<"b">>, 1], [<<"meta">>, 1]] = query(
+        Config, "SELECT name, locked FROM board ORDER BY name", []
+    ).
+
+only_boards_there_are(Config) ->
+    Session = login(Config, <<"conrad">>),
+    Before = posts(Config),
+    lists:foreach(
+        fun(Board) ->
+            Path = "/board/" ++ Board,
+            {404, _, _} = request(Config, get, Path, [], none),
+            {404, _, _} = request(Config, get, Path ++ "/new", cookies(Session), none),
+            {404, _, _} = post(Config, Path ++ "/new", Session, <<"nowhere">>),
+            {404, _, _} = request(Config, get, Path ++ "/1", [], none)
+        end,
+        ["nope", "B", "b.html", "aaaaaaaaaaaaaaaaa", "b%2f1"]
+    ),
+    %% a path is not a file name. sent raw, since a client would tidy it
+    #{port := Port} = uri_string:parse(?config(base, Config)),
+    lists:foreach(
+        fun(Path) ->
+            {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+            ok = gen_tcp:send(Socket, [
+                "GET ", Path, " HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n"
+            ]),
+            {ok, <<"HTTP/1.1 404", _/binary>>} = gen_tcp:recv(Socket, 0, 5000),
+            ok = gen_tcp:close(Socket)
+        end,
+        [
+            "/board/%2e%2e%2f%2e%2e%2fike.db",
+            "/board/b/..%2f..%2f..%2fike.db",
+            "/board/b%2f..%2fmeta",
+            "/board/b/1%2f..%2f..%2fb"
+        ]
+    ),
+    Before = posts(Config).
 
 posting_needs_a_session(Config) ->
     Before = posts(Config),
     Body = uri_string:compose_query([{"csrf", "anything"}, {"body", "no session"}]),
-    {403, _, _} = request(Config, post, "/new", [], {form, Body}),
-    {403, _, _} = request(Config, post, "/new", [{"cookie", "__Host-ike=made-up"}], {form, Body}),
+    {403, _, _} = request(Config, post, "/board/b/new", [], {form, Body}),
+    {403, _, _} = request(
+        Config, post, "/board/b/new", [{"cookie", "__Host-ike=made-up"}], {form, Body}
+    ),
     %% the form page shows no form to someone who is not logged in
-    {200, _, Page} = request(Config, get, "/new", [], none),
+    {200, _, Page} = request(Config, get, "/board/b/new", [], none),
     nomatch = binary:match(Page, <<"<form">>),
     Before = posts(Config).
 
@@ -151,25 +219,25 @@ posting_needs_the_token(Config) ->
     #{csrf := Csrf} = Session = login(Config, <<"carol">>),
     Before = posts(Config),
     Without = uri_string:compose_query([{"body", "no token"}]),
-    {403, _, _} = request(Config, post, "/new", cookies(Session), {form, Without}),
+    {403, _, _} = request(Config, post, "/board/b/new", cookies(Session), {form, Without}),
     Wrong = uri_string:compose_query([{"csrf", lists:reverse(Csrf)}, {"body", "wrong token"}]),
-    {403, _, _} = request(Config, post, "/new", cookies(Session), {form, Wrong}),
+    {403, _, _} = request(Config, post, "/board/b/new", cookies(Session), {form, Wrong}),
     %% someone else's token is not this session's
     #{csrf := Theirs} = login(Config, <<"dave">>),
     Stolen = uri_string:compose_query([{"csrf", Theirs}, {"body", "their token"}]),
-    {403, _, _} = request(Config, post, "/new", cookies(Session), {form, Stolen}),
+    {403, _, _} = request(Config, post, "/board/b/new", cookies(Session), {form, Stolen}),
     {403, _, _} = request(Config, post, "/logout", cookies(Session), {form, Without}),
     Before = posts(Config),
-    {303, _, _} = post(Config, "/new", Session, <<"still logged in">>).
+    {303, _, _} = post(Config, "/board/b/new", Session, <<"still logged in">>).
 
 bad_text_is_refused(Config) ->
     Session = login(Config, <<"erin">>),
     Before = posts(Config),
-    {400, _, _} = post(Config, "/new", Session, <<>>),
-    {400, _, _} = post(Config, "/new", Session, <<"   \n ">>),
-    {400, _, _} = post(Config, "/new", Session, <<"a bell: ", 7>>),
-    {400, _, _} = post(Config, "/new", Session, <<"not utf-8: ", 255, 254>>),
-    {400, _, _} = post(Config, "/new", Session, binary:copy(<<"x">>, 16385)),
+    {400, _, _} = post(Config, "/board/b/new", Session, <<>>),
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"   \n ">>),
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"a bell: ", 7>>),
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"not utf-8: ", 255, 254>>),
+    {400, _, _} = post(Config, "/board/b/new", Session, binary:copy(<<"x">>, 16385)),
     Before = posts(Config).
 
 %% hazard a1 for M0: nothing that could carry a file is read
@@ -196,18 +264,18 @@ only_forms_are_read(Config) ->
     ],
     Type = "multipart/form-data; boundary=" ++ Boundary,
     {415, _, _} = request(
-        Config, post, "/new", cookies(Session), {Type, iolist_to_binary(Multipart)}
+        Config, post, "/board/b/new", cookies(Session), {Type, iolist_to_binary(Multipart)}
     ),
     Json = json:encode(#{csrf => list_to_binary(Csrf), body => <<"text">>}),
     {415, _, _} = request(
-        Config, post, "/new", cookies(Session), {"application/json", iolist_to_binary(Json)}
+        Config, post, "/board/b/new", cookies(Session), {"application/json", iolist_to_binary(Json)}
     ),
     Before = posts(Config).
 
 reply_to_nothing(Config) ->
     Session = login(Config, <<"grace">>),
-    {404, _, _} = request(Config, get, "/t/999999/reply", cookies(Session), none),
-    {404, _, _} = post(Config, "/t/999999/reply", Session, <<"into the void">>),
+    {404, _, _} = request(Config, get, "/board/b/999999/reply", cookies(Session), none),
+    {404, _, _} = post(Config, "/board/b/999999/reply", Session, <<"into the void">>),
     [[0]] = query(Config, "SELECT count(*) FROM post WHERE thread = 999999", []).
 
 callback_needs_the_state(Config) ->
@@ -306,12 +374,12 @@ code_must_be_the_issued_one(Config) ->
 
 logout(Config) ->
     #{csrf := Csrf} = Session = login(Config, <<"karl">>),
-    {303, _, _} = post(Config, "/new", Session, <<"before logging out">>),
+    {303, _, _} = post(Config, "/board/b/new", Session, <<"before logging out">>),
     Form = uri_string:compose_query([{"csrf", Csrf}]),
     {303, Headers, _} = request(Config, post, "/logout", cookies(Session), {form, Form}),
     "/" = proplists:get_value("location", Headers),
     "" = set_cookie("__Host-ike", Headers),
-    {403, _, _} = post(Config, "/new", Session, <<"after logging out">>).
+    {403, _, _} = post(Config, "/board/b/new", Session, <<"after logging out">>).
 
 sessions_outlive_a_restart(Config) ->
     Stays = login(Config, <<"mona">>),
@@ -320,9 +388,9 @@ sessions_outlive_a_restart(Config) ->
     {303, _, _} = request(Config, post, "/logout", cookies(Leaves), {form, Form}),
     ok = ike_browser:restart(),
     %% the same cookie and the same form token as before
-    {303, _, _} = post(Config, "/new", Stays, <<"after the restart">>),
+    {303, _, _} = post(Config, "/board/b/new", Stays, <<"after the restart">>),
     %% and a restart undoes no logout
-    {403, _, _} = post(Config, "/new", Leaves, <<"after logging out">>),
+    {403, _, _} = post(Config, "/board/b/new", Leaves, <<"after logging out">>),
     %% what the database holds of a session is not what the cookie holds
     #{id := Id} = Stays,
     Rows = query(Config, "SELECT hash, csrf FROM session", []),
@@ -337,10 +405,10 @@ sessions_outlive_a_restart(Config) ->
 same_subject_same_actor(Config) ->
     S1 = login(Config, <<"lena">>),
     S2 = login(Config, <<"lena">>),
-    {303, H1, _} = post(Config, "/new", S1, <<"first session">>),
-    {303, H2, _} = post(Config, "/new", S2, <<"second session">>),
-    {N1, _} = string:to_integer(proplists:get_value("location", H1) -- "/t/"),
-    {N2, _} = string:to_integer(proplists:get_value("location", H2) -- "/t/"),
+    {303, H1, _} = post(Config, "/board/b/new", S1, <<"first session">>),
+    {303, H2, _} = post(Config, "/board/b/new", S2, <<"second session">>),
+    {N1, _} = string:to_integer(proplists:get_value("location", H1) -- "/board/b/"),
+    {N2, _} = string:to_integer(proplists:get_value("location", H2) -- "/board/b/"),
     [[1]] = query(
         Config, "SELECT count(DISTINCT actor) FROM post WHERE id IN (?, ?)", [N1, N2]
     ),

@@ -82,7 +82,11 @@ inv01_no_address_is_written(Config) ->
     Form = fun(Fields) -> {form, uri_string:compose_query(Fields)} end,
     Csrf = maps:get(csrf, Session),
     {303, Headers, _} = ike_browser:request(
-        Config, post, "/new", With(Cookies), Form([{"csrf", Csrf}, {"body", "from nowhere"}])
+        Config,
+        post,
+        "/board/b/new",
+        With(Cookies),
+        Form([{"csrf", Csrf}, {"body", "from nowhere"}])
     ),
     Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
     Requests = [
@@ -90,14 +94,14 @@ inv01_no_address_is_written(Config) ->
         {get, Thread, [], none},
         {get, "/health", [], none},
         {get, "/nothing/here", [], none},
-        {get, "/new", Cookies, none},
+        {get, "/board/b/new", Cookies, none},
         {get, "/login", [], none},
         {get, "/login/callback?state=x&code=y", [], none},
         {post, Thread ++ "/reply", Cookies, Form([{"csrf", Csrf}, {"body", "a reply"}])},
-        {post, "/new", Cookies, Form([{"csrf", "wrong"}, {"body", "refused"}])},
-        {post, "/new", [], Form([{"body", "refused"}])},
-        {post, "/new", Cookies, {"multipart/form-data; boundary=x", <<"--x--\r\n">>}},
-        {post, "/new", Cookies, {"application/x-www-form-urlencoded", <<"%zz=%">>}},
+        {post, "/board/b/new", Cookies, Form([{"csrf", "wrong"}, {"body", "refused"}])},
+        {post, "/board/b/new", [], Form([{"body", "refused"}])},
+        {post, "/board/b/new", Cookies, {"multipart/form-data; boundary=x", <<"--x--\r\n">>}},
+        {post, "/board/b/new", Cookies, {"application/x-www-form-urlencoded", <<"%zz=%">>}},
         {put, "/", [], {"text/plain", <<"x">>}},
         {delete, Thread, [], none},
         {post, "/logout", Cookies, Form([{"csrf", Csrf}])}
@@ -166,10 +170,15 @@ inv02_works_without_scripts(Config) ->
     %% is given and submits exactly those. log in, start a thread, reply
     Session = ike_browser:login(Config, <<"noscript">>),
     Cookies = ike_browser:cookies(Session),
-    {200, _, Index} = ike_browser:request(Config, get, "/", [], none),
-    {_, _} = binary:match(Index, <<"href=\"/new\"">>),
-    {200, _, New} = ike_browser:request(Config, get, "/new", Cookies, none),
-    {303, H1, _} = submit(Config, Cookies, New, "/new", "a thread, by form alone"),
+    %% from the front page to the board by links alone
+    {200, _, Front} = ike_browser:request(Config, get, "/", [], none),
+    {_, _} = binary:match(Front, <<"href=\"/board\"">>),
+    {200, _, Boards} = ike_browser:request(Config, get, "/board", [], none),
+    {_, _} = binary:match(Boards, <<"href=\"/board/b\"">>),
+    {200, _, Index} = ike_browser:request(Config, get, "/board/b", [], none),
+    {_, _} = binary:match(Index, <<"href=\"/board/b/new\"">>),
+    {200, _, New} = ike_browser:request(Config, get, "/board/b/new", Cookies, none),
+    {303, H1, _} = submit(Config, Cookies, New, "/board/b/new", "a thread, by form alone"),
     Thread = hd(string:split(proplists:get_value("location", H1), "#")),
     {200, _, Page} = ike_browser:request(Config, get, Thread, [], none),
     Reply = Thread ++ "/reply",
@@ -181,20 +190,22 @@ inv02_works_without_scripts(Config) ->
     ),
     {_, _} = binary:match(Page2, <<"a reply, by form alone">>),
     %% logged out, the same pages say how to log in, with a link
-    {200, _, Anonymous} = ike_browser:request(Config, get, "/new", [], none),
+    {200, _, Anonymous} = ike_browser:request(Config, get, "/board/b/new", [], none),
     {_, _} = binary:match(Anonymous, <<"href=\"/login\"">>),
 
     %% no page carries a script, an event handler or a script url, and
     %% every response forbids them outright
     Pages = [
         {get, "/", []},
+        {get, "/board", []},
+        {get, "/board/b", []},
         {get, Thread, []},
-        {get, "/new", []},
-        {get, "/new", Cookies},
+        {get, "/board/b/new", []},
+        {get, "/board/b/new", Cookies},
         {get, Reply, Cookies},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
-        {post, "/new", []}
+        {post, "/board/b/new", []}
     ],
     lists:foreach(
         fun({Method, Path, Extra}) ->
@@ -331,10 +342,10 @@ inv04_text_is_escaped(Config) ->
         end,
         [
             "/" ++ Attack,
-            "/new?" ++ Attack ++ "=" ++ Attack,
+            "/board/b/new?" ++ Attack ++ "=" ++ Attack,
             "/login/callback?state=" ++ Attack ++ "&code=" ++ Attack,
-            "/t/" ++ Attack,
-            "/t/1/reply?x=" ++ Attack
+            "/board/b/" ++ Attack,
+            "/board/b/1/reply?x=" ++ Attack
         ]
     ).
 
@@ -356,7 +367,7 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         "content-type: text/html\r\n\r\n<script>alert(1)</script>\r\n--b--\r\n"
     ]),
     {415, _, _} = ike_browser:request(
-        Config, post, "/new", Cookies, {"multipart/form-data; boundary=b", Multipart}
+        Config, post, "/board/b/new", Cookies, {"multipart/form-data; boundary=b", Multipart}
     ),
     lists:foreach(
         fun({Method, Path}) ->
@@ -365,7 +376,10 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
             ),
             true = lists:member(Status, [404, 405, 415])
         end,
-        [{M, P} || M <- [put, post, patch], P <- ["/", "/t/1", "/new", "/upload", "/media/x"]]
+        [
+            {M, P}
+         || M <- [put, post, patch], P <- ["/", "/board/b/1", "/board/b/new", "/upload", "/media/x"]
+        ]
     ),
     Before = ike_browser:posts(Config),
     %% what is served is html or plain text, typed as such and not sniffed
@@ -376,7 +390,7 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
             true = lists:member(hd(string:split(Type, ";")), ["text/html", "text/plain"]),
             "nosniff" = proplists:get_value("x-content-type-options", Headers)
         end,
-        ["/", "/new", "/health", "/nothing"]
+        ["/", "/board/b/new", "/health", "/nothing"]
     ),
     %% and the tree the web server reads from holds pages, nothing else
     Pages = files(filename:join(?config(dir, Config), "pages")),
@@ -434,7 +448,7 @@ inv07_tripwire_no_fetcher(Config) ->
         "quote\n",
         "http://169.254.169.254/latest/meta-data/ http://[::1]/ http://localhost/"
     >>,
-    {303, Headers, _} = ike_browser:post(Config, "/new", Session, Text),
+    {303, Headers, _} = ike_browser:post(Config, "/board/b/new", Session, Text),
     Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
     {200, _, _} = ike_browser:request(Config, get, Thread, [], none),
     {200, _, _} = ike_browser:request(Config, get, "/", [], none),
@@ -456,7 +470,9 @@ inv07_tripwire_no_fetcher(Config) ->
 %% purges and then searches rows, files, pages and links for the content.
 inv08_tripwire_no_purge(Config) ->
     Session = ike_browser:login(Config, <<"purger">>),
-    {303, Headers, _} = ike_browser:post(Config, "/new", Session, <<"cannot be taken back">>),
+    {303, Headers, _} = ike_browser:post(
+        Config, "/board/b/new", Session, <<"cannot be taken back">>
+    ),
     Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
     #{csrf := Csrf} = Session,
     Form = {form, uri_string:compose_query([{"csrf", Csrf}])},
@@ -558,9 +574,11 @@ known_routes() ->
     Paths = lists:sort([
         [<<"health">>],
         [],
-        [<<"t">>, thread],
-        [<<"new">>],
-        [<<"t">>, thread, <<"reply">>],
+        [<<"board">>],
+        [<<"board">>, board],
+        [<<"board">>, board, <<"new">>],
+        [<<"board">>, board, thread],
+        [<<"board">>, board, thread, <<"reply">>],
         [<<"login">>],
         [<<"login">>, <<"callback">>],
         [<<"logout">>],
@@ -578,6 +596,7 @@ known_tables(Config) ->
         [<<"actor">>],
         [<<"asset">>],
         [<<"asset_reference">>],
+        [<<"board">>],
         [<<"link">>],
         [<<"migration">>],
         [<<"post">>],
@@ -589,10 +608,10 @@ known_tables(Config) ->
 
 %% posts Text as a new thread; the thread's page and the index after it
 posted(Config, Session, Text) ->
-    {303, Headers, _} = ike_browser:post(Config, "/new", Session, Text),
+    {303, Headers, _} = ike_browser:post(Config, "/board/b/new", Session, Text),
     Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
     {200, _, Page} = ike_browser:request(Config, get, Thread, [], none),
-    {200, _, Index} = ike_browser:request(Config, get, "/", [], none),
+    {200, _, Index} = ike_browser:request(Config, get, "/board/b", [], none),
     {Page, Index}.
 
 %% fills in and sends the form on a page whose action is Action, the way

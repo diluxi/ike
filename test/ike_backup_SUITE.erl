@@ -22,15 +22,15 @@ end_per_suite(_Config) ->
 restore_reproduces(Config) ->
     Dir = ?config(dir, Config),
     Session = ike_browser:login(Config, <<"alice">>),
-    {303, Headers, _} = ike_browser:post(Config, "/new", Session, <<"what must survive">>),
-    {N, _} = string:to_integer(proplists:get_value("location", Headers) -- "/t/"),
-    Thread = "/t/" ++ integer_to_list(N),
+    {303, Headers, _} = ike_browser:post(Config, "/board/b/new", Session, <<"what must survive">>),
+    {N, _} = string:to_integer(proplists:get_value("location", Headers) -- "/board/b/"),
+    Thread = "/board/b/" ++ integer_to_list(N),
     {303, _, _} = ike_browser:post(
         Config, Thread ++ "/reply", Session, <<"and a reply & its <markup>">>
     ),
     Rows = dump(Config),
     {ok, Page} = file:read_file(ike_browser:page_file(Config, N)),
-    {ok, Index} = file:read_file(filename:join([Dir, "pages", "index.html"])),
+    {ok, Index} = file:read_file(filename:join([Dir, "pages", "board", "b.html"])),
     {_, _} = binary:match(Page, <<"what must survive">>),
 
     %% a snapshot taken after the reply, found as a file
@@ -49,7 +49,9 @@ restore_reproduces(Config) ->
     [] = filelib:wildcard(binary_to_list(filename:join([Dir, "backups", "*.tmp"]))),
 
     %% posted after the snapshot: the restore will not know of it
-    {303, _, _} = ike_browser:post(Config, "/new", Session, <<"too late for the snapshot">>),
+    {303, _, _} = ike_browser:post(
+        Config, "/board/b/new", Session, <<"too late for the snapshot">>
+    ),
 
     %% lose everything but the snapshot, then restore as deploying.md says
     Kept = filename:join(?config(priv_dir, Config), "kept.db"),
@@ -65,13 +67,13 @@ restore_reproduces(Config) ->
     %% the rows, and the pages byte for byte, from disk and over http
     Rows = dump(Config),
     {ok, Page} = file:read_file(ike_browser:page_file(Config, N)),
-    {ok, Index} = file:read_file(filename:join([Dir, "pages", "index.html"])),
+    {ok, Index} = file:read_file(filename:join([Dir, "pages", "board", "b.html"])),
     {200, _, Page} = ike_browser:request(Config, get, Thread, [], none),
-    {200, _, Index} = ike_browser:request(Config, get, "/", [], none),
+    {200, _, Index} = ike_browser:request(Config, get, "/board/b", [], none),
     nomatch = binary:match(Index, <<"too late">>),
 
     %% and it goes on from there: sessions are gone, accounts are not
-    {403, _, _} = ike_browser:post(Config, "/new", Session, <<"an old session">>),
+    {403, _, _} = ike_browser:post(Config, "/board/b/new", Session, <<"an old session">>),
     Again = ike_browser:login(Config, <<"alice">>),
     {303, Headers2, _} = ike_browser:post(Config, Thread ++ "/reply", Again, <<"after">>),
     true = lists:prefix(Thread ++ "#p", proplists:get_value("location", Headers2)),

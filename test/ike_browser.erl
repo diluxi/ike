@@ -32,7 +32,8 @@ start(Config, Env) ->
         client_id => ?CLIENT,
         redirect_uri => list_to_binary(Base ++ "/login/callback")
     },
-    All = [{data_dir, Dir}, {oidc, Oidc} | Env],
+    Boards = [{<<"b">>, <<"random">>}, {<<"meta">>, <<"about ike">>}],
+    All = [{data_dir, Dir}, {oidc, Oidc}, {boards, Boards} | Env],
     [ok = application:set_env(ike, K, V) || {K, V} <- All],
     persistent_term:put(?MODULE, [K || {K, _} <- All]),
     {ok, _} = application:ensure_all_started(ike),
@@ -62,7 +63,7 @@ login(Config, Subject) ->
     Attributes = string:lowercase(cookie_attributes("__Host-ike", Headers)),
     [true = string:find(Attributes, A) =/= nomatch || A <- ["secure", "httponly", "samesite=lax"]],
     Session = #{id => Id},
-    {200, _, Form} = request(Config, get, "/new", cookies(Session), none),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
     {match, [Csrf]} = re:run(
         Form, "name=\"csrf\" value=\"([^\"]+)\"", [{capture, all_but_first, list}]
     ),
@@ -166,4 +167,4 @@ posts(Config) ->
     query(Config, "SELECT count(*) FROM post", []).
 
 page_file(Config, N) ->
-    filename:join([?config(dir, Config), "pages", "t", integer_to_list(N) ++ ".html"]).
+    filename:join([?config(dir, Config), "pages", "board", "b", integer_to_list(N) ++ ".html"]).
