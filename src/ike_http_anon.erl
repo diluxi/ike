@@ -60,11 +60,16 @@ slow_down() ->
     Html = ike_view:message(
         <<"slow down">>, <<"too many posts from your network just now. try again in a while.">>
     ),
+    Body = ike_html:to_iodata(Html),
+    %% said here because nothing below this says it for us: without a
+    %% length the answer ends only when the connection does, and a proxy
+    %% that keeps its connections waits for that
     Headers = (ike_http:headers())#{
         <<"content-type">> => <<"text/html; charset=utf-8">>,
+        <<"content-length">> => integer_to_binary(iolist_size(Body)),
         <<"retry-after">> => integer_to_binary(Seconds)
     },
-    {response, 429, Headers, ike_html:to_iodata(Html)}.
+    {response, 429, Headers, Body}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), binary(), next()) ->
     {cowboy_stream:commands(), next()}.

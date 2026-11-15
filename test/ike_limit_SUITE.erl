@@ -144,6 +144,10 @@ only_so_often(Config) ->
         {Status, ResponseHeaders, Page} = request(
             Config, post, "/board/b/new", Headers, {form, "body=x"}
         ),
+        %% an answer says how long it is, so that a proxy holding the
+        %% connection open knows where it ends
+        Length = proplists:get_value("content-length", ResponseHeaders),
+        true = Length =:= integer_to_list(byte_size(Page)),
         {Status, proplists:get_value("retry-after", ResponseHeaders), Page}
     end,
     %% every post counts, whatever becomes of it
