@@ -518,3 +518,23 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   are free text up to 1000 bytes, not categories; ban targets an
   account through a post it signed, or by number from `/mod` to undo.
   Invariant 8's test does not search `backups/` (D7, Q8).
+
+## lux's answers, 2026-11-15
+
+- **Ranked roles (was Q20).** janitor < moderator < admin. Janitors are
+  per board, moderators across all of them, admins also read logs and
+  can put ike into read-only. To build: a janitor's group names its
+  board, and nobody acts on an account of their rank or above, which
+  needs the rank an account last logged in with kept on its row.
+- **The sandbox (was Q24):** a template unit, under ike's name
+  (`ike-strip@`). bubblewrap noted as an alternative.
+- **Staging early (was Q25):** uploads that are not yet posted, as on
+  Danbooru, in M1, so that archiving is worth doing before posting.
+  Invariant 10 becomes real with step 6.
+- **No Impressum in ike (was Q26).** ike may be hosted outside Germany;
+  amartia.online is for internal testing. If one is needed it becomes a
+  wiki page beside "about", linked from the front page, as chaos.social
+  does. Notice and action stays a question for when ike is hosted for
+  real.
+- **The media origin** is `cdn.amartia.online` (planning's open item).
+- **Audio** with cover art is a later media type to plan for.
