@@ -3,6 +3,7 @@
 -module(ike_http).
 
 -export([child_spec/0]).
+-export([headers/0]).
 -export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1]).
 
 %% what a form may weigh; caddy caps bodies at the same size
@@ -35,7 +36,10 @@ dispatch() ->
             {"/t/:thread/reply", [Thread], ike_http_post, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
-            {"/logout", ike_http_login, logout}
+            {"/logout", ike_http_login, logout},
+            %% everything else, so that a miss is answered by ike and not
+            %% by cowboy's bare 404
+            {'_', ike_http_page, missing}
         ]}
     ]).
 

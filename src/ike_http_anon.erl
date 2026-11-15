@@ -47,9 +47,22 @@ terminate(StreamID, Reason, Next) ->
     cowboy:opts()
 ) -> Resp when
     Resp :: cowboy_stream:resp_command().
-early_error(StreamID, Reason, PartialReq, Resp, Opts) ->
+early_error(StreamID, Reason, PartialReq, Resp0, Opts) ->
+    %% a request too broken to route is still answered with the headers
+    Resp =
+        case Resp0 of
+            {response, Status, Headers, Body} when is_map(Headers) ->
+                {response, Status, maps:merge(ike_http:headers(), Headers), Body};
+            _ ->
+                Resp0
+        end,
     cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts).
 
+%% the common headers ride along as the response's defaults, so that an
+%% answer cowboy gives by itself carries them too
 -spec forget(cowboy_req:req()) -> cowboy_req:req().
 forget(#{headers := Headers} = Req) ->
-    Req#{peer := ?NOWHERE, headers := maps:without(?FORWARDING, Headers)}.
+    cowboy_req:set_resp_headers(
+        ike_http:headers(),
+        Req#{peer := ?NOWHERE, headers := maps:without(?FORWARDING, Headers)}
+    ).

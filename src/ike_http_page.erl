@@ -6,6 +6,8 @@
 -export([init/2]).
 
 -spec init(cowboy_req:req(), State) -> {ok, cowboy_req:req(), State}.
+init(Req, missing = State) ->
+    {ok, ike_http:not_found(Req), State};
 init(Req, State) ->
     Name =
         case cowboy_req:binding(thread, Req) of
