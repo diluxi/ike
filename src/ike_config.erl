@@ -1,7 +1,16 @@
 %% What the environment says, checked where it is read.
 -module(ike_config).
 
--export([data_dir/0, db_path/0, pages_dir/0]).
+-export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
+-export_type([oidc/0]).
+
+-type oidc() :: #{
+    issuer := binary(),
+    client_id := binary(),
+    redirect_uri := binary(),
+    %% absent for a public client
+    client_secret => binary()
+}.
 
 -spec data_dir() -> binary().
 data_dir() ->
@@ -21,3 +30,38 @@ pages_dir() ->
         {ok, Dir} when is_binary(Dir) -> Dir;
         _ -> <<(data_dir())/binary, "/pages">>
     end.
+
+-spec session_seconds() -> pos_integer().
+session_seconds() ->
+    case application:get_env(ike, session_seconds) of
+        {ok, Seconds} when is_integer(Seconds), Seconds > 0 -> Seconds;
+        _ -> 8 * 3600
+    end.
+
+%% the issuer and this client. without it there is no login. the secret is
+%% read from a file, so that it need not be in the configuration
+-spec oidc() -> {ok, oidc()} | error.
+oidc() ->
+    case application:get_env(ike, oidc) of
+        {ok, #{issuer := Issuer, client_id := ClientId, redirect_uri := RedirectUri} = Env} when
+            is_binary(Issuer), is_binary(ClientId), is_binary(RedirectUri)
+        ->
+            Config = #{issuer => Issuer, client_id => ClientId, redirect_uri => RedirectUri},
+            case Env of
+                #{client_secret_file := File} when is_binary(File) ->
+                    case file:read_file(File) of
+                        {ok, Secret} -> {ok, Config#{client_secret => first_line(Secret)}};
+                        {error, Reason} -> error({badenv, {client_secret_file, Reason}})
+                    end;
+                _ ->
+                    {ok, Config}
+            end;
+        _ ->
+            error
+    end.
+
+%% a secret file usually ends in a newline that is not part of the secret
+-spec first_line(binary()) -> binary().
+first_line(Bin) ->
+    [Line | _] = binary:split(Bin, [<<"\n">>, <<"\r">>]),
+    Line.

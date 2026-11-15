@@ -1,9 +1,9 @@
 {application, ike, [
     {description, "imageboard, booru and wiki over one store"},
     {vsn, "0.0.0"},
-    {registered, [ike_sup, ike_writer, ike_render]},
+    {registered, [ike_sup, ike_writer, ike_render, ike_session, ike_oidc]},
     {mod, {ike_app, []}},
-    {applications, [kernel, stdlib, crypto, cowboy, esqlite]},
+    {applications, [kernel, stdlib, crypto, public_key, ssl, inets, cowboy, esqlite]},
     {env, [
         {listen, #{ip => {127, 0, 0, 1}, port => 8970}},
         {data_dir, <<"data">>}
