@@ -8,6 +8,13 @@
 		services.ike = {
 			enable = true;
 			package = pkgs.callPackage ./package.nix {};
+			# an issuer nobody answers as: the vm has no provider, the
+			# login suite has one
+			oidc = {
+				issuer = "http://127.0.0.1:9";
+				redirectUri = "http://localhost/login/callback";
+				clientSecretFile = pkgs.writeText "oidc-secret" "not-a-secret\n";
+			};
 			caddy = {
 				enable = true;
 				hostName = "http://localhost";

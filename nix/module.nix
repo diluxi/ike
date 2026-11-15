@@ -16,7 +16,15 @@
 			{ike, [
 				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}},
 				{data_dir, <<"/var/lib/ike">>},
-				{pages_dir, <<"${pages}">>}
+				{pages_dir, <<"${pages}">>}${lib.optionalString (cfg.oidc != null) '',
+				{oidc, #{
+					issuer => <<"${cfg.oidc.issuer}">>,
+					client_id => <<"${cfg.oidc.clientId}">>,
+					redirect_uri => <<"${cfg.oidc.redirectUri}">>${
+						lib.optionalString (cfg.oidc.clientSecretFile != null) '',
+					client_secret_file => <<"/run/credentials/ike.service/oidc-secret">>''
+					}
+				}}''}
 			]}
 		].
 	'';
@@ -40,6 +48,50 @@ in {
 			type = lib.types.port;
 			default = 8970;
 			description = "Loopback port Cowboy listens on, for the web server in front.";
+		};
+
+		oidc = lib.mkOption {
+			default = null;
+			description = ''
+				The OpenID provider accounts log in through. Without one ike
+				runs, and nobody can log in.
+			'';
+			type = lib.types.nullOr (lib.types.submodule {
+				options = {
+					issuer = lib.mkOption {
+						type = lib.types.str;
+						example = "https://id.example.org";
+						description = ''
+							The issuer, exactly as its discovery document names
+							it: no trailing slash unless it has one there.
+						'';
+					};
+					clientId = lib.mkOption {
+						type = lib.types.str;
+						default = "ike";
+						description = "The client the provider knows ike as.";
+					};
+					redirectUri = lib.mkOption {
+						type = lib.types.str;
+						example = "https://ike.example.org/login/callback";
+						description = ''
+							Where the provider sends the browser back to: ike's
+							public address, then `/login/callback`.
+						'';
+					};
+					clientSecretFile = lib.mkOption {
+						type = lib.types.nullOr lib.types.path;
+						default = null;
+						description = ''
+							A file holding the client secret, for a confidential
+							client; its first line is the secret. Loaded as a
+							credential, so it need not be readable by ike's
+							user. A public client, which PKCE alone protects,
+							has none.
+						'';
+					};
+				};
+			});
 		};
 
 		caddy = {
@@ -111,6 +163,9 @@ in {
 			serviceConfig = {
 				ExecStart = "${cfg.package}/rel/ike/bin/ike -noinput -config ${sysConfig}";
 				Restart = "on-failure";
+				LoadCredential = lib.optional
+					(cfg.oidc != null && cfg.oidc.clientSecretFile != null)
+					"oidc-secret:${cfg.oidc.clientSecretFile}";
 				User = "ike";
 				Group = "ike";
 				StateDirectory = "ike";

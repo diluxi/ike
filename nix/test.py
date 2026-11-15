@@ -18,10 +18,20 @@ machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/
 machine.succeed("su -s /bin/sh caddy -c 'test -r /var/cache/ike/pages/index.html'")
 machine.fail("su -s /bin/sh caddy -c 'test -r /var/lib/ike/ike.db'")
 
+# forms and login come from cowboy, through caddy. without a provider
+# that answers, login says so and nothing falls over
+machine.succeed("curl -fsS http://localhost/new | grep -q 'log in'")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' http://localhost/login) = 503")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d body=x http://localhost/new) = 403")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -F body=x http://localhost/new) = 403")
+# the secret is a credential of the unit's, not a file ike's user owns
+machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
+machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")
+
 # invariant 1: after all these requests, no address in any log or file
-machine.fail("journalctl -u ike.service -u caddy.service --no-pager | grep -E '127\\.0\\.0\\.1:[0-9]+|::1|remote_ip|client_ip'")
+machine.fail("journalctl -u ike.service -u caddy.service --no-pager | grep -E '127\\.0\\.0\\.1:[0-9]+|::1|203\\.0\\.113|remote_ip|client_ip'")
 machine.fail("ls /var/log/caddy/ | grep access")
-machine.fail("grep -rE '127\\.0\\.0\\.1|::1' /var/lib/ike /var/cache/ike")
+machine.fail("grep -rE '127\\.0\\.0\\.1|::1|203\\.0\\.113' /var/lib/ike /var/cache/ike")
 
 # sigterm is a clean stop, not a failure
 machine.succeed("systemctl stop ike.service")
