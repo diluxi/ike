@@ -581,6 +581,7 @@ known_tables(Config) ->
         [<<"link">>],
         [<<"migration">>],
         [<<"post">>],
+        [<<"session">>],
         [<<"thread">>]
     ] = Tables.
 

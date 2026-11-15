@@ -21,6 +21,7 @@
     token_must_verify/1,
     code_must_be_the_issued_one/1,
     logout/1,
+    sessions_outlive_a_restart/1,
     same_subject_same_actor/1
 ]).
 
@@ -57,6 +58,7 @@ all() ->
         token_must_verify,
         code_must_be_the_issued_one,
         logout,
+        sessions_outlive_a_restart,
         same_subject_same_actor
     ].
 
@@ -310,6 +312,27 @@ logout(Config) ->
     "/" = proplists:get_value("location", Headers),
     "" = set_cookie("__Host-ike", Headers),
     {403, _, _} = post(Config, "/new", Session, <<"after logging out">>).
+
+sessions_outlive_a_restart(Config) ->
+    Stays = login(Config, <<"mona">>),
+    #{csrf := Csrf} = Leaves = login(Config, <<"nils">>),
+    Form = uri_string:compose_query([{"csrf", Csrf}]),
+    {303, _, _} = request(Config, post, "/logout", cookies(Leaves), {form, Form}),
+    ok = ike_browser:restart(),
+    %% the same cookie and the same form token as before
+    {303, _, _} = post(Config, "/new", Stays, <<"after the restart">>),
+    %% and a restart undoes no logout
+    {403, _, _} = post(Config, "/new", Leaves, <<"after logging out">>),
+    %% what the database holds of a session is not what the cookie holds
+    #{id := Id} = Stays,
+    Rows = query(Config, "SELECT hash, csrf FROM session", []),
+    true = length(Rows) >= 1,
+    [] = [R || R <- Rows, binary:match(iolist_to_binary(R), list_to_binary(Id)) =/= nomatch],
+    [[1]] = query(
+        Config, "SELECT count(*) FROM session WHERE hash = ?", [
+            {blob, crypto:hash(sha256, Id)}
+        ]
+    ).
 
 same_subject_same_actor(Config) ->
     S1 = login(Config, <<"lena">>),

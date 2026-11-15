@@ -1,5 +1,8 @@
-%% Sessions and half-finished logins, in memory only: a restart logs
-%% everyone out, and nothing about who is logged in reaches the disk.
+%% Sessions and half-finished logins. A session is also a row, written
+%% by the writer and read back at start, so that a restart logs nobody
+%% out; the table here answers every request without asking the
+%% database. Neither holds what the cookie holds, only its sha-256. A
+%% half-finished login lives in memory only.
 -module(ike_session).
 -behaviour(gen_server).
 
@@ -42,8 +45,8 @@ create(Actor) ->
 
 -spec lookup(Id :: binary()) -> {ok, session()} | error.
 lookup(Id) ->
-    Now = now_s(),
-    case ets:lookup(?SESSIONS, Id) of
+    Now = clock(),
+    case ets:lookup(?SESSIONS, hash(Id)) of
         [{_, Actor, Csrf, Expires}] when
             is_integer(Actor), Actor > 0, is_binary(Csrf), is_integer(Expires), Expires > Now
         ->
@@ -83,19 +86,54 @@ take_login(State) ->
             error
     end.
 
--spec init([]) -> {ok, []}.
+-spec init([]) -> {ok, []} | {stop, term()}.
 init([]) ->
     _ = ets:new(?SESSIONS, [named_table, protected, {read_concurrency, true}]),
     _ = ets:new(?LOGINS, [named_table, private]),
     _ = erlang:send_after(?SWEEP, self(), sweep),
-    {ok, []}.
+    Now = clock(),
+    _ = ike_writer:expire_sessions(Now),
+    case ike_db:open_reader(ike_config:db_path()) of
+        {ok, Conn} ->
+            Select = <<"SELECT hash, actor, csrf, expires FROM session WHERE expires > ?1">>,
+            Result = ike_db:q(Conn, Select, [Now]),
+            _ = ike_db:close(Conn),
+            case Result of
+                {ok, Rows} ->
+                    ok = restore(Rows),
+                    {ok, []};
+                {error, Reason} ->
+                    {stop, Reason}
+            end;
+        {error, Reason} ->
+            {stop, Reason}
+    end.
+
+-spec restore([ike_db:row()]) -> ok.
+restore([[Hash, Actor, Csrf, Expires] | Rows]) when
+    is_binary(Hash), is_integer(Actor), is_binary(Csrf), is_integer(Expires)
+->
+    true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires}),
+    restore(Rows);
+restore([_ | Rows]) ->
+    restore(Rows);
+restore([]) ->
+    ok.
 
 -spec handle_call(term(), gen_server:from(), []) -> {reply, term(), []}.
-handle_call({create, Actor}, _From, []) ->
+handle_call({create, Actor}, _From, []) when is_integer(Actor), Actor > 0 ->
     Id = token(),
     Csrf = token(),
-    true = ets:insert(?SESSIONS, {Id, Actor, Csrf, now_s() + lifetime()}),
-    {reply, {ok, Id, Csrf}, []};
+    Hash = hash(Id),
+    Expires = clock() + lifetime(),
+    %% the row first: a session that would not outlive a restart is none
+    case ike_writer:open_session(Hash, ike_id:actor(Actor), Csrf, Expires) of
+        ok ->
+            true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires}),
+            {reply, {ok, Id, Csrf}, []};
+        {error, Reason} ->
+            {reply, {error, Reason}, []}
+    end;
 handle_call(begin_login, _From, []) ->
     case ets:info(?LOGINS, size) of
         Size when is_integer(Size), Size < ?MAX_LOGINS ->
@@ -120,9 +158,12 @@ handle_call({take_login, State}, _From, []) ->
         _ ->
             {reply, error, []}
     end;
-handle_call({delete, Id}, _From, []) ->
-    true = ets:delete(?SESSIONS, Id),
-    {reply, ok, []};
+handle_call({delete, Id}, _From, []) when is_binary(Id) ->
+    Hash = hash(Id),
+    %% gone from memory whatever the writer says: a restart could bring it
+    %% back then, for what is left of its eight hours
+    true = ets:delete(?SESSIONS, Hash),
+    {reply, ike_writer:close_session(Hash), []};
 handle_call(_Request, _From, []) ->
     {reply, {error, bad_request}, []}.
 
@@ -132,8 +173,13 @@ handle_cast(_Request, []) ->
 
 -spec handle_info(term(), []) -> {noreply, []}.
 handle_info(sweep, []) ->
+    Clock = clock(),
+    Ended = [{{'_', '_', '_', '$1'}, [{'=<', '$1', Clock}], [true]}],
+    case ets:select_delete(?SESSIONS, Ended) of
+        0 -> ok;
+        _ -> ike_writer:expire_sessions(Clock)
+    end,
     Now = now_s(),
-    _ = ets:select_delete(?SESSIONS, [{{'_', '_', '_', '$1'}, [{'=<', '$1', Now}], [true]}]),
     _ = ets:select_delete(?LOGINS, [{{'_', '_', '$1'}, [{'=<', '$1', Now}], [true]}]),
     _ = erlang:send_after(?SWEEP, self(), sweep),
     {noreply, []};
@@ -145,9 +191,19 @@ handle_info(_Info, []) ->
 token() ->
     base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 
+-spec hash(binary()) -> binary().
+hash(Id) ->
+    crypto:hash(sha256, Id).
+
+%% for what lives in memory only
 -spec now_s() -> integer().
 now_s() ->
     erlang:monotonic_time(second).
+
+%% for what outlives a restart
+-spec clock() -> integer().
+clock() ->
+    erlang:system_time(second).
 
 %% hazard i5: short, so that what a login decided does not outlive it long
 -spec lifetime() -> pos_integer().

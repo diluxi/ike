@@ -6,6 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/2, post/1, snapshot/0]).
+-export([open_session/4, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 -export_type([new_post/0]).
 
@@ -50,6 +51,26 @@ post(#{actor := Actor, thread := Thread, body := Body}) ->
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
+
+%% a session is a row, so that it outlives a restart. Hash is the sha-256
+%% of what the cookie holds, Expires in unix seconds
+-spec open_session(Hash :: binary(), ike_id:actor(), Csrf :: binary(), Expires :: integer()) ->
+    ok | error().
+open_session(Hash, Actor, Csrf, Expires) ->
+    done(call({open_session, Hash, ike_id:to_integer(Actor), Csrf, Expires})).
+
+-spec close_session(Hash :: binary()) -> ok | error().
+close_session(Hash) ->
+    done(call({close_session, Hash})).
+
+%% forgets every session that ended at Now or before
+-spec expire_sessions(Now :: integer()) -> ok | error().
+expire_sessions(Now) ->
+    done(call({expire_sessions, Now})).
+
+-spec done(term()) -> ok | error().
+done(ok) -> ok;
+done(Other) -> failed(Other).
 
 %% a snapshot of the database among the backups, and the oldest ones
 %% beyond what is kept unlinked: both here, since nobody else deletes
@@ -117,6 +138,15 @@ handle_call({post, Actor, Home, Body}, _From, Conn) when
                 {error, bad_text}
         end,
     {reply, Reply, Conn};
+handle_call({open_session, Hash, Actor, Csrf, Expires}, _From, Conn) when
+    is_binary(Hash), is_integer(Actor), is_binary(Csrf), is_integer(Expires)
+->
+    Insert = <<"INSERT INTO session (hash, actor, csrf, expires) VALUES (?1, ?2, ?3, ?4)">>,
+    {reply, change(Conn, Insert, [{blob, Hash}, Actor, Csrf, Expires]), Conn};
+handle_call({close_session, Hash}, _From, Conn) when is_binary(Hash) ->
+    {reply, change(Conn, <<"DELETE FROM session WHERE hash = ?1">>, [{blob, Hash}]), Conn};
+handle_call({expire_sessions, Now}, _From, Conn) when is_integer(Now) ->
+    {reply, change(Conn, <<"DELETE FROM session WHERE expires <= ?1">>, [Now]), Conn};
 handle_call(snapshot, _From, Conn) ->
     {reply, snapshot(Conn), Conn};
 handle_call(_Request, _From, Conn) ->
@@ -130,6 +160,20 @@ handle_cast(_Request, Conn) ->
 terminate(_Reason, Conn) ->
     _ = ike_db:close(Conn),
     ok.
+
+%% one statement as one transaction
+-spec change(ike_db:writer(), binary(), [term()]) -> ok | error().
+change(Conn, Sql, Args) ->
+    Result = ike_db:transaction(Conn, fun() ->
+        case ike_db:q(Conn, Sql, Args) of
+            {ok, _} -> ok;
+            {error, _} = Error -> Error
+        end
+    end),
+    case Result of
+        {error, _} = Error -> Error;
+        _ -> ok
+    end.
 
 %% the renderer follows each commit, never a transaction still open
 -spec committed(Result) -> Result when Result :: {ok, {integer(), integer()}} | term().

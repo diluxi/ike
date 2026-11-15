@@ -38,7 +38,14 @@ restore_reproduces(Config) ->
     %% whole, and never a half-written one beside it
     {ok, Conn} = esqlite3:open(Snapshot),
     [[<<"ok">>]] = esqlite3:q(Conn, "PRAGMA integrity_check"),
+    %% and without who was logged in, though the database it was taken
+    %% from knows
+    [[0]] = esqlite3:q(Conn, "SELECT count(*) FROM session"),
     ok = esqlite3:close(Conn),
+    [[Live]] = ike_browser:query(Config, "SELECT count(*) FROM session", []),
+    true = Live >= 1,
+    {ok, Bytes} = file:read_file(Snapshot),
+    nomatch = binary:match(Bytes, list_to_binary(maps:get(csrf, Session))),
     [] = filelib:wildcard(binary_to_list(filename:join([Dir, "backups", "*.tmp"]))),
 
     %% posted after the snapshot: the restore will not know of it

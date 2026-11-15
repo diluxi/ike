@@ -33,6 +33,12 @@
 -define(TIMEOUT, 5000).
 %% pages a snapshot copies between giving the scheduler back
 -define(PAGES, 256).
+%% what a snapshot is taken without: who was logged in is no part of a
+%% backup, and a restore revives no session
+-define(SCRUB, <<
+    "PRAGMA secure_delete = ON;"
+    "DELETE FROM session;"
+>>).
 
 -spec open_reader(binary()) -> {ok, reader()} | error().
 open_reader(Path) ->
@@ -121,7 +127,7 @@ transaction({writer, Raw} = Conn, Fun) ->
 
 %% a consistent copy of the whole database at Path, through sqlite's
 %% backup api (hazard d6). taken from the writer's own connection, so that
-%% no write can land halfway through it
+%% no write can land halfway through it. the copy is scrubbed and checked
 -spec snapshot(writer(), binary()) -> ok | error().
 snapshot({writer, Raw}, Path) ->
     case esqlite3:open(binary_to_list(Path)) of
@@ -130,8 +136,13 @@ snapshot({writer, Raw}, Path) ->
                 case esqlite3:backup_init(Copy, "main", Raw, "main") of
                     {ok, Backup} ->
                         case copy(Backup) of
-                            ok -> sound(Copy);
-                            {error, _} = Error -> Error
+                            ok ->
+                                case esqlite3:exec(Copy, ?SCRUB) of
+                                    ok -> sound(Copy);
+                                    {error, _} = Error -> Error
+                                end;
+                            {error, _} = Error ->
+                                Error
                         end;
                     {error, _} = Error ->
                         Error
