@@ -469,3 +469,49 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   200000 rows everyone without an account waits, instead of the
   oldest rows being dropped. The numbers (4 a minute an address, 10 a
   minute a board, an hour a key) are picked, not measured.
+
+## Roles and moderation (M1)
+
+- **Roles from the `groups` claim,** read at login and kept with the
+  session (row and memory), so a role lives exactly as long as the
+  session (I5): a change at the provider takes effect at next login.
+  Group names are configuration (`roles`; defaults `ike-admin`,
+  `ike-moderator`, `ike-janitor`); the highest one held wins.
+- **Who may do what** (`ike_role:may/2`): janitor hides and unhides;
+  moderator does everything but purge; admin everything; ike itself
+  only purges, when a hold ends. Planning names the rungs, not this
+  table: Q20.
+- **States on the post row:** 0 shown, 1 hidden, 2 deleted with a
+  `purge_at`; purge removes the rows. The view `shown` is a post that
+  is shown on a thread whose first post is shown, and every page, link
+  and `/p/N` reads through it. Hidden, deleted and purged look the
+  same from outside (G5): gone from pages, links to them `gone`, 404.
+  A first post that goes takes its thread's page with it.
+- **One writer call, one transaction:** the log entry and the change
+  are committed together or not at all. After the commit the writer
+  asks the renderer to `settle` the thread (so no render read before
+  the commit lands after the unlink), unlinks the thread's page, marks
+  the pages around it, and after a purge checkpoints the WAL with
+  TRUNCATE. At start it unlinks any thread page no shown thread stands
+  behind, which is what a stop between commit and unlink leaves.
+  The renderer still unlinks nothing (invariant 3).
+- **The log is a board,** `mod`, flagged `log`, taking no posts from
+  anyone and not moderatable. One thread per UTC month (`2026-11`),
+  each action a reply as nobody whose text is `<kind> >>N` (or `ban,
+  for >>N`, `unban`, `lock /b/`), a newline, and the reason. A row in
+  `action` beside it holds the account, the role, and what was acted
+  on; the page shows the role (`system` for ike), never the account.
+  The `>>N` gives the target a backlink until it is purged.
+- **Ban** suspends the local account behind a signed post: its
+  sessions go, and login answers "suspended". Unsigned posts cannot
+  be traced to an account, so cannot ban one (Q16 still stands).
+- **Lock and unlock** are moderator actions now (Q19's answer, as far
+  as this goes).
+- **The hold** between delete and purge is `hold_seconds`, 14 days by
+  default; a timer in the writer purges what is due, at most once a
+  minute.
+- *Simplifications:* the role is not re-read during a session; log
+  threads are monthly rather than one ever-growing thread; reasons
+  are free text up to 1000 bytes, not categories; ban targets an
+  account through a post it signed, or by number from `/mod` to undo.
+  Invariant 8's test does not search `backups/` (D7, Q8).

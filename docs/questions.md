@@ -54,6 +54,17 @@ here.
   goes. A crash dump would hold the table; the module turns dumps off.
 - **Q19 Unlocking a board.** Nothing does it yet. A moderator's
   action in step 5, or the operator's in configuration, or both?
+- **Q20 Who may do what.** Planning names hide, delete, purge, ban and
+  lockdown but not which role does which. Stubbed in `ike_role:may/2`:
+  janitor hides/unhides, moderator all but purge, admin all.
+- **Q21 Purge and the snapshots.** Invariant 8's test leaves `backups/`
+  out, since a snapshot taken before a purge still holds the content
+  until it ages out (D7). Is that the reading wanted, or should purge
+  also rewrite or drop snapshots (or crypto-shredding, planning's open
+  item)?
+- **Q22 Purge entries and hashes (G5).** Text-only purges log the
+  reason and the number. When assets arrive, whether the hash is shown
+  is still open; nothing logs one yet.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

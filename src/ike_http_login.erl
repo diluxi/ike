@@ -74,10 +74,10 @@ callback(Req0) ->
 -spec finish(binary(), ike_session:login(), cowboy_req:req()) -> cowboy_req:req().
 finish(Code, Login, Req) ->
     case ike_oidc:subject(Code, Login) of
-        {ok, Issuer, Subject, Nick} ->
+        {ok, Issuer, Subject, Nick, Groups} ->
             case ike_writer:local_actor(Issuer, Subject, Nick) of
                 {ok, Actor} ->
-                    case ike_session:create(Actor, Nick) of
+                    case ike_session:create(Actor, Nick, ike_role:of_groups(Groups)) of
                         {ok, Id, _Session} ->
                             Lifetime = ike_config:session_seconds(),
                             ike_http:see_other(
@@ -86,6 +86,11 @@ finish(Code, Login, Req) ->
                         {error, _} ->
                             refused(Req)
                     end;
+                {error, suspended} ->
+                    Html = ike_view:message(
+                        <<"suspended">>, <<"this account is suspended; see /board/mod.">>
+                    ),
+                    ike_http:page(403, Html, Req);
                 {error, _} ->
                     refused(Req)
             end;

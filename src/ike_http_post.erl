@@ -21,9 +21,11 @@ init(Req, State) ->
         case cowboy_req:binding(board, Req) of
             Board when is_binary(Board) ->
                 Place = {Board, Thread},
-                case cowboy_req:method(Req) of
-                    <<"GET">> -> form(Place, Req);
-                    <<"POST">> -> submit(Place, Req);
+                %% the log is written by ike alone
+                case {ike_reader:board(Board), cowboy_req:method(Req)} of
+                    {log, _} -> ike_http:not_found(Req);
+                    {_, <<"GET">>} -> form(Place, Req);
+                    {_, <<"POST">>} -> submit(Place, Req);
                     _ -> ike_http:reply(405, Req)
                 end;
             _ ->

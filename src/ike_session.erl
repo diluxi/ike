@@ -7,12 +7,18 @@
 -behaviour(gen_server).
 
 -export([start_link/0]).
--export([create/2, lookup/1, delete/1, begin_login/0, take_login/1]).
+-export([create/3, lookup/1, delete/1, drop/1, begin_login/0, take_login/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 -export_type([session/0, login/0]).
 
 %% name: what the account was called when it logged in, if anything
--type session() :: #{actor := ike_id:actor(), csrf := binary(), name := binary() | none}.
+%% role: what its groups made of it then, for as long as the session lasts
+-type session() :: #{
+    actor := ike_id:actor(),
+    csrf := binary(),
+    name := binary() | none,
+    role := ike_role:role() | none
+}.
 %% what a login needs to remember between the redirect and the callback
 -type login() :: #{
     state := binary(),
@@ -35,12 +41,12 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
--spec create(ike_id:actor(), Name :: binary() | none) ->
+-spec create(ike_id:actor(), Name :: binary() | none, ike_role:role() | none) ->
     {ok, Id :: binary(), session()} | {error, term()}.
-create(Actor, Name) ->
-    case gen_server:call(?MODULE, {create, ike_id:to_integer(Actor), Name}) of
+create(Actor, Name, Role) ->
+    case gen_server:call(?MODULE, {create, ike_id:to_integer(Actor), Name, Role}) of
         {ok, Id, Csrf} when is_binary(Id), is_binary(Csrf) ->
-            {ok, Id, #{actor => Actor, csrf => Csrf, name => Name}};
+            {ok, Id, #{actor => Actor, csrf => Csrf, name => Name, role => Role}};
         Other ->
             {error, Other}
     end.
@@ -49,7 +55,7 @@ create(Actor, Name) ->
 lookup(Id) ->
     Now = clock(),
     case ets:lookup(?SESSIONS, hash(Id)) of
-        [{_, Actor, Csrf, Expires, Name}] when
+        [{_, Actor, Csrf, Expires, Name, Role}] when
             is_integer(Actor),
             Actor > 0,
             is_binary(Csrf),
@@ -57,7 +63,12 @@ lookup(Id) ->
             Expires > Now,
             is_binary(Name) orelse Name =:= none
         ->
-            {ok, #{actor => ike_id:actor(Actor), csrf => Csrf, name => Name}};
+            {ok, #{
+                actor => ike_id:actor(Actor),
+                csrf => Csrf,
+                name => Name,
+                role => ike_role:of_binary(Role)
+            }};
         _ ->
             error
     end.
@@ -67,6 +78,12 @@ delete(Id) ->
     %% a call: the session is gone before logout answers
     _ = gen_server:call(?MODULE, {delete, Id}),
     ok.
+
+%% every session of an account, at once: told by the writer when it
+%% suspends one, after it has deleted their rows
+-spec drop(Actor :: integer()) -> ok.
+drop(Actor) ->
+    gen_server:cast(?MODULE, {drop, Actor}).
 
 -spec begin_login() -> {ok, login()} | {error, term()}.
 begin_login() ->
@@ -103,7 +120,7 @@ init([]) ->
     case ike_db:open_reader(ike_config:db_path()) of
         {ok, Conn} ->
             Select = <<
-                "SELECT s.hash, s.actor, s.csrf, s.expires, a.name"
+                "SELECT s.hash, s.actor, s.csrf, s.expires, a.name, s.role"
                 " FROM session s JOIN actor a ON a.id = s.actor WHERE s.expires > ?1"
             >>,
             Result = ike_db:q(Conn, Select, [Now]),
@@ -120,7 +137,7 @@ init([]) ->
     end.
 
 -spec restore([ike_db:row()]) -> ok.
-restore([[Hash, Actor, Csrf, Expires, Name0] | Rows]) when
+restore([[Hash, Actor, Csrf, Expires, Name0, Role] | Rows]) when
     is_binary(Hash), is_integer(Actor), is_binary(Csrf), is_integer(Expires)
 ->
     Name =
@@ -128,7 +145,7 @@ restore([[Hash, Actor, Csrf, Expires, Name0] | Rows]) when
             _ when is_binary(Name0) -> Name0;
             _ -> none
         end,
-    true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires, Name}),
+    true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires, Name, Role}),
     restore(Rows);
 restore([_ | Rows]) ->
     restore(Rows);
@@ -136,15 +153,21 @@ restore([]) ->
     ok.
 
 -spec handle_call(term(), gen_server:from(), []) -> {reply, term(), []}.
-handle_call({create, Actor, Name}, _From, []) when is_integer(Actor), Actor > 0 ->
+handle_call({create, Actor, Name, Role0}, _From, []) when is_integer(Actor), Actor > 0 ->
+    Role =
+        case Role0 of
+            none -> undefined;
+            _ when is_atom(Role0) -> atom_to_binary(Role0);
+            _ -> undefined
+        end,
     Id = token(),
     Csrf = token(),
     Hash = hash(Id),
     Expires = clock() + lifetime(),
     %% the row first: a session that would not outlive a restart is none
-    case ike_writer:open_session(Hash, ike_id:actor(Actor), Csrf, Expires) of
+    case ike_writer:open_session(Hash, ike_id:actor(Actor), Csrf, Expires, Role) of
         ok ->
-            true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires, Name}),
+            true = ets:insert(?SESSIONS, {Hash, Actor, Csrf, Expires, Name, Role}),
             {reply, {ok, Id, Csrf}, []};
         {error, Reason} ->
             {reply, {error, Reason}, []}
@@ -183,13 +206,16 @@ handle_call(_Request, _From, []) ->
     {reply, {error, bad_request}, []}.
 
 -spec handle_cast(term(), []) -> {noreply, []}.
+handle_cast({drop, Actor}, []) when is_integer(Actor) ->
+    _ = ets:match_delete(?SESSIONS, {'_', Actor, '_', '_', '_', '_'}),
+    {noreply, []};
 handle_cast(_Request, []) ->
     {noreply, []}.
 
 -spec handle_info(term(), []) -> {noreply, []}.
 handle_info(sweep, []) ->
     Clock = clock(),
-    Ended = [{{'_', '_', '_', '$1', '_'}, [{'=<', '$1', Clock}], [true]}],
+    Ended = [{{'_', '_', '_', '$1', '_', '_'}, [{'=<', '$1', Clock}], [true]}],
     case ets:select_delete(?SESSIONS, Ended) of
         0 -> ok;
         _ -> ike_writer:expire_sessions(Clock)

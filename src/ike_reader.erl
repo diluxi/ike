@@ -4,7 +4,7 @@
 -module(ike_reader).
 -behaviour(gen_server).
 
--export([start_link/0, whereabouts/1, board/1]).
+-export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
 
 -spec start_link() -> gen_server:start_ret().
@@ -19,13 +19,81 @@ whereabouts(Post) ->
         _ -> none
     end.
 
-%% whether a board takes posts from nobody, if there is such a board
--spec board(Name :: binary()) -> open | locked | none.
+%% whether a board takes posts from nobody, if there is such a board;
+%% the log takes none from anyone
+-spec board(Name :: binary()) -> open | locked | log | none.
 board(Name) ->
     case gen_server:call(?MODULE, {board, Name}) of
         open -> open;
         locked -> locked;
+        log -> log;
         _ -> none
+    end.
+
+%% the boards that take posts, and whether only from accounts
+-spec boards() -> [{Name :: binary(), Title :: binary(), Locked :: boolean()}].
+boards() ->
+    case gen_server:call(?MODULE, boards) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                {Name, Title, Locked =:= 1}
+             || [Name, Title, Locked] <- Rows, is_binary(Name), is_binary(Title)
+            ];
+        _ ->
+            []
+    end.
+
+%% the accounts that may not log in
+-spec suspended() -> [{Account :: integer(), Name :: binary()}].
+suspended() ->
+    case gen_server:call(?MODULE, suspended) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                {Id,
+                    case Name of
+                        _ when is_binary(Name) -> Name;
+                        _ -> <<"(no name)">>
+                    end}
+             || [Id, Name] <- Rows, is_integer(Id)
+            ];
+        _ ->
+            []
+    end.
+
+%% a post as a moderator sees it: in whatever state, so long as it has
+%% not been purged. nothing on the log is one
+-spec post(Post :: integer()) -> {ok, ike_view:held()} | none.
+post(Post) ->
+    case gen_server:call(?MODULE, {post, Post}) of
+        {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned]]} when
+            is_integer(Thread), is_binary(Board), is_integer(Time), is_binary(Body)
+        ->
+            {ok, #{
+                id => Post,
+                thread => Thread,
+                board => Board,
+                state =>
+                    case State of
+                        0 -> shown;
+                        1 -> hidden;
+                        _ -> deleted
+                    end,
+                time => Time,
+                body => Body,
+                name =>
+                    case Name of
+                        _ when is_binary(Name) -> Name;
+                        _ -> none
+                    end,
+                account =>
+                    case {Local, Banned} of
+                        {1, 0} -> local;
+                        {1, _} -> suspended;
+                        _ -> none
+                    end
+            }};
+        _ ->
+            none
     end.
 
 -spec init([]) -> {ok, ike_db:reader()} | {stop, term()}.
@@ -39,7 +107,7 @@ init([]) ->
     {reply, term(), ike_db:reader()}.
 handle_call({whereabouts, Post}, _From, Conn) when is_integer(Post) ->
     Sql = <<
-        "SELECT b.name, p.thread FROM post p"
+        "SELECT b.name, p.thread FROM shown p"
         " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " WHERE p.id = ?1"
     >>,
@@ -51,12 +119,26 @@ handle_call({whereabouts, Post}, _From, Conn) when is_integer(Post) ->
     {reply, Reply, Conn};
 handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
     Reply =
-        case ike_db:q(Conn, <<"SELECT locked FROM board WHERE name = ?1">>, [Name]) of
-            {ok, [[0]]} -> open;
-            {ok, [[1]]} -> locked;
+        case ike_db:q(Conn, <<"SELECT locked, log FROM board WHERE name = ?1">>, [Name]) of
+            {ok, [[_, 1]]} -> log;
+            {ok, [[0, _]]} -> open;
+            {ok, [[1, _]]} -> locked;
             _ -> none
         end,
     {reply, Reply, Conn};
+handle_call(boards, _From, Conn) ->
+    Sql = <<"SELECT name, title, locked FROM board WHERE log = 0 ORDER BY name">>,
+    {reply, ike_db:q(Conn, Sql, []), Conn};
+handle_call(suspended, _From, Conn) ->
+    Sql = <<"SELECT id, name FROM actor WHERE banned = 1 ORDER BY id">>,
+    {reply, ike_db:q(Conn, Sql, []), Conn};
+handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
+    Sql = <<
+        "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, a.kind = 'local', a.banned"
+        " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
+        " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Post]), Conn};
 handle_call(_Request, _From, Conn) ->
     {reply, {error, bad_request}, Conn}.
 

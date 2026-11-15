@@ -4,7 +4,7 @@
 -module(ike_render).
 -behaviour(gen_server).
 
--export([start_link/0, dirty/1, sync/0]).
+-export([start_link/0, dirty/1, dirty_board/1, settle/1, sync/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -29,6 +29,21 @@ start_link() ->
 -spec dirty(Thread :: integer()) -> ok.
 dirty(Thread) ->
     gen_server:cast(?MODULE, {dirty, Thread}).
+
+%% a board's own page, when no thread's page says it changed
+-spec dirty_board(Name :: binary()) -> ok.
+dirty_board(Name) ->
+    gen_server:cast(?MODULE, {dirty_board, Name}).
+
+%% asked by the writer before it unlinks a thread's page: once this
+%% returns, no page read before the writer's last commit is still to be
+%% written, since the pages are written one at a time, here
+-spec settle(Thread :: integer()) -> ok.
+settle(Thread) ->
+    case gen_server:call(?MODULE, {settle, Thread}, ?SYNC_TIMEOUT) of
+        ok -> ok;
+        _ -> ok
+    end.
 
 %% returns once every page known to be out of date has been written
 -spec sync() -> ok | {error, term()}.
@@ -69,6 +84,10 @@ init([]) ->
 
 -spec handle_call(term(), gen_server:from(), #state{}) ->
     {reply, term(), #state{}}.
+handle_call({settle, Thread}, _From, #state{threads = Threads} = State) when
+    is_integer(Thread)
+->
+    {reply, ok, State#state{threads = ordsets:del_element(Thread, Threads)}};
 handle_call(sync, _From, State) ->
     {reply, ok, drain(State)};
 handle_call(_Request, _From, State) ->
@@ -80,6 +99,9 @@ handle_cast({dirty, Thread}, #state{threads = Threads} = State) when
 ->
     self() ! render,
     {noreply, State#state{threads = ordsets:add_element(Thread, Threads)}};
+handle_cast({dirty_board, Name}, #state{boards = Boards} = State) when is_binary(Name) ->
+    self() ! render,
+    {noreply, State#state{boards = ordsets:add_element(Name, Boards)}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -121,7 +143,7 @@ step(State) ->
 
 -spec everything(ike_db:reader()) -> {ok, [integer()], [binary()]} | ike_db:error().
 everything(Conn) ->
-    case ike_db:q(Conn, <<"SELECT root FROM thread ORDER BY root">>, []) of
+    case ike_db:q(Conn, <<"SELECT id FROM shown WHERE id = thread ORDER BY id">>, []) of
         {ok, Threads} ->
             case ike_db:q(Conn, <<"SELECT name FROM board ORDER BY name">>, []) of
                 {ok, Boards} ->
@@ -136,19 +158,23 @@ everything(Conn) ->
             Error
     end.
 
-%% a thread that is on no board has no page yet
+%% a thread that is on no board has no page yet, and one whose first
+%% post was taken down has none any more: the writer unlinks that
 -spec render_thread(#state{}, integer()) -> {ok, Board :: binary()} | none.
 render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     Where = <<
-        "SELECT b.name, b.title FROM thread t JOIN board b ON b.id = t.board"
-        " WHERE t.root = ?1"
+        "SELECT b.name, b.title, b.log FROM thread t JOIN board b ON b.id = t.board"
+        " JOIN shown s ON s.id = t.root WHERE t.root = ?1"
     >>,
+    %% the role is there on the log's entries, and stands for the name
     Sql = <<
-        "SELECT p.id, p.time, p.body, a.name FROM post p JOIN actor a ON a.id = p.actor"
+        "SELECT p.id, p.time, p.body, a.name, b.log, m.role FROM shown p"
+        " JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
+        " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
         " WHERE p.thread = ?1 ORDER BY p.id"
     >>,
     case ike_db:q(Conn, Where, [Thread]) of
-        {ok, [[Name, Title]]} when is_binary(Name), is_binary(Title) ->
+        {ok, [[Name, Title, Logs]]} when is_binary(Name), is_binary(Title) ->
             case ike_db:q(Conn, Sql, [Thread]) of
                 {ok, Rows} ->
                     Names = ike_config:anonymous_names(),
@@ -159,16 +185,16 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                             id => Id,
                             time => Time,
                             body => Body,
-                            name => name(Name0, Id, Names),
+                            name => name(Name0, Id, Names, Log, Role),
                             links => Links,
                             replies => maps:get(Id, Replies, [])
                         }
-                     || [Id, Time, Body, Name0] <- Rows,
+                     || [Id, Time, Body, Name0, Log, Role] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)
                     ],
-                    Board = #{name => Name, title => Title},
+                    Board = #{name => Name, title => Title, log => Logs =:= 1},
                     File =
                         <<"board/", Name/binary, "/", (integer_to_binary(Thread))/binary, ".html">>,
                     ok = write(Dir, File, ike_view:thread(Board, Thread, Posts)),
@@ -188,7 +214,7 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
 links(Conn, Thread) ->
     Sql = <<
         "SELECT DISTINCT l.post, b.name FROM post s"
-        " JOIN link l ON l.source = s.id JOIN post p ON p.id = l.post"
+        " JOIN link l ON l.source = s.id JOIN shown p ON p.id = l.post"
         " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " WHERE s.thread = ?1"
     >>,
@@ -204,7 +230,7 @@ links(Conn, Thread) ->
 replies(Conn, Thread) ->
     Sql = <<
         "SELECT l.post, l.source FROM post p JOIN link l ON l.post = p.id"
-        " WHERE p.thread = ?1 ORDER BY l.source DESC"
+        " JOIN shown s ON s.id = l.source WHERE p.thread = ?1 ORDER BY l.source DESC"
     >>,
     case ike_db:q(Conn, Sql, [Thread]) of
         {ok, Rows} ->
@@ -223,10 +249,15 @@ grouped([], Acc) ->
 
 %% an account's name, or one of the names for nobody: always the same
 %% one for the same post, so that a page rendered again reads the same
--spec name(term(), integer(), [binary(), ...]) -> {account | nobody, binary()}.
-name(Name, _Id, _Names) when is_binary(Name) ->
+-spec name(term(), integer(), [binary(), ...], Log :: term(), Role :: term()) ->
+    {account | nobody | role, binary()}.
+name(_, _Id, _Names, 1, Role) when is_binary(Role) ->
+    {role, Role};
+name(_, _Id, _Names, 1, _) ->
+    {role, <<"system">>};
+name(Name, _Id, _Names, _, _) when is_binary(Name) ->
     {account, Name};
-name(_, Id, [First | _] = Names) ->
+name(_, Id, [First | _] = Names, _, _) ->
     case lists:nth(Id rem length(Names) + 1, Names) of
         Name when is_binary(Name) -> {nobody, Name};
         _ -> {nobody, First}
@@ -238,7 +269,7 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
     Sql = <<
         "SELECT p.thread, count(*), max(p.id),"
         " (SELECT body FROM post WHERE id = p.thread)"
-        " FROM post p JOIN thread t ON t.root = p.thread"
+        " FROM shown p JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board"
         " WHERE b.name = ?1 GROUP BY p.thread ORDER BY 3 DESC LIMIT ?2"
     >>,
@@ -269,12 +300,12 @@ render_lists(#state{conn = Conn, dir = Dir}) ->
 
 -spec boards(ike_db:reader(), binary(), [term()]) -> {ok, [ike_view:board()]} | ike_db:error().
 boards(Conn, Where, Args) ->
-    Sql = <<"SELECT name, title FROM board", Where/binary, " ORDER BY name">>,
+    Sql = <<"SELECT name, title, log FROM board", Where/binary, " ORDER BY name">>,
     case ike_db:q(Conn, Sql, Args) of
         {ok, Rows} ->
             {ok, [
-                #{name => Name, title => Title}
-             || [Name, Title] <- Rows, is_binary(Name), is_binary(Title)
+                #{name => Name, title => Title, log => Log =:= 1}
+             || [Name, Title, Log] <- Rows, is_binary(Name), is_binary(Title)
             ]};
         {error, _} = Error ->
             Error

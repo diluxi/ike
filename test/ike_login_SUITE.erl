@@ -94,7 +94,7 @@ login_sends_the_browser_away(Config) ->
     #{
         "response_type" := "code",
         "client_id" := "ike-test",
-        "scope" := "openid profile",
+        "scope" := "openid profile groups",
         "code_challenge_method" := "S256",
         "state" := State,
         "nonce" := Nonce,
@@ -180,7 +180,7 @@ boards_keep_their_threads(Config) ->
      || B <- [<<"href=\"/board/b\"">>, <<"href=\"/board/meta\"">>]
     ],
     [[<<"b">>, 1], [<<"meta">>, 1]] = query(
-        Config, "SELECT name, locked FROM board ORDER BY name", []
+        Config, "SELECT name, locked FROM board WHERE log = 0 ORDER BY name", []
     ).
 
 only_boards_there_are(Config) ->
@@ -428,8 +428,8 @@ same_subject_same_actor(Config) ->
     ),
     [[1]] = query(Config, "SELECT count(*) FROM actor WHERE subject = 'lena'", []),
     %% an account is its issuer, its subject and what it is called, and
-    %% that is all there is of it
-    [[<<"id,kind,issuer,subject,name">>]] = query(
+    %% whether it is suspended; that is all there is of it
+    [[<<"id,kind,issuer,subject,name,banned">>]] = query(
         Config, "SELECT group_concat(name) FROM pragma_table_info('actor')", []
     ),
     [] = query(

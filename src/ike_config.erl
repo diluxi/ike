@@ -3,7 +3,7 @@
 
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
--export([board_name/1, anonymous_names/0, limit/0]).
+-export([board_name/1, anonymous_names/0, limit/0, roles/0, hold_seconds/0]).
 -export_type([oidc/0, limit/0]).
 
 -type oidc() :: #{
@@ -102,6 +102,34 @@ limit() ->
                 _ -> []
             end
     }.
+
+%% the provider's group behind each role
+-spec roles() -> #{admin := binary(), moderator := binary(), janitor := binary()}.
+roles() ->
+    Given =
+        case application:get_env(ike, roles) of
+            {ok, Map} when is_map(Map) -> Map;
+            _ -> #{}
+        end,
+    Group = fun(Role, Default) ->
+        case Given of
+            #{Role := Name} when is_binary(Name), byte_size(Name) > 0 -> Name;
+            _ -> Default
+        end
+    end,
+    #{
+        admin => Group(admin, <<"ike-admin">>),
+        moderator => Group(moderator, <<"ike-moderator">>),
+        janitor => Group(janitor, <<"ike-janitor">>)
+    }.
+
+%% how long a deleted post is held before it is purged
+-spec hold_seconds() -> pos_integer().
+hold_seconds() ->
+    case application:get_env(ike, hold_seconds) of
+        {ok, Seconds} when is_integer(Seconds), Seconds > 0 -> Seconds;
+        _ -> 14 * 86400
+    end.
 
 -spec data_dir() -> binary().
 data_dir() ->

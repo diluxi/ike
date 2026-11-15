@@ -3,7 +3,8 @@
 -module(ike_view).
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
--export_type([post/0, summary/0, board/0]).
+-export([moderation/3, moderated/3]).
+-export_type([post/0, summary/0, board/0, held/0]).
 
 %% name: an account's, or what stands in for one
 %% links: the posts the text points at that are there, and their boards
@@ -12,25 +13,42 @@
     id := integer(),
     time := integer(),
     body := binary(),
-    name := {account | nobody, binary()},
+    name := {account | nobody | role, binary()},
     links := #{integer() => binary()},
     replies := [integer()]
 }.
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
--type board() :: #{name := binary(), title := binary()}.
+%% log: the board is the record of what moderators did, and takes no posts
+-type board() :: #{name := binary(), title := binary(), log := boolean()}.
+%% a post as a moderator is shown it, whatever state it is in
+-type held() :: #{
+    id := integer(),
+    thread := integer(),
+    board := binary(),
+    state := shown | hidden | deleted,
+    time := integer(),
+    body := binary(),
+    name := binary() | none,
+    account := local | suspended | none
+}.
 
 -define(EXCERPT, 120).
 
 -spec thread(board(), Root :: integer(), [post()]) -> ike_html:html().
-thread(#{name := Name} = Board, Root, Posts) ->
+thread(#{name := Name, log := Log} = Board, Root, Posts) ->
     N = integer_to_binary(Root),
     Here = <<"/board/", Name/binary, "/", N/binary>>,
+    Reply =
+        case Log of
+            true -> [];
+            false -> [ike_html:el(p, [anchor(<<Here/binary, "/reply">>, <<"reply">>)])]
+        end,
     layout(<<">>", N/binary>>, [
         ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
         ike_html:el(p, [board_link(Board)]),
-        ike_html:el(ol, [ike_html:el(li, [post(P)]) || P <- Posts]),
-        ike_html:el(p, [anchor(<<Here/binary, "/reply">>, <<"reply">>)])
+        ike_html:el(ol, [ike_html:el(li, [post(P)]) || P <- Posts])
+        | Reply
     ]).
 
 -spec post(post()) -> ike_html:html().
@@ -41,6 +59,7 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
     Class =
         case Kind of
             account -> <<"name account">>;
+            role -> <<"name role">>;
             nobody -> <<"name">>
         end,
     ike_html:el(article, [{id, Anchor}], [
@@ -97,14 +116,19 @@ piece({post, Board, N}, Links) ->
     end.
 
 -spec board(board(), [summary()]) -> ike_html:html().
-board(#{name := Name, title := Title}, Threads) ->
+board(#{name := Name, title := Title, log := Log}, Threads) ->
     Here = <<"/board/", Name/binary>>,
     Heading = <<"/", Name/binary, "/ ", Title/binary>>,
-    layout(Heading, [
-        ike_html:el(h1, [ike_html:text(Heading)]),
-        ike_html:el(p, [anchor(<<Here/binary, "/new">>, <<"new thread">>)]),
-        ike_html:el(ul, [ike_html:el(li, summary(Here, T)) || T <- Threads])
-    ]).
+    New =
+        case Log of
+            true -> [];
+            false -> [ike_html:el(p, [anchor(<<Here/binary, "/new">>, <<"new thread">>)])]
+        end,
+    layout(
+        Heading,
+        [ike_html:el(h1, [ike_html:text(Heading)]) | New] ++
+            [ike_html:el(ul, [ike_html:el(li, summary(Here, T)) || T <- Threads])]
+    ).
 
 -spec summary(Board :: binary(), summary()) -> [ike_html:html()].
 summary(Here, #{root := Root, posts := Posts, body := Body}) ->
@@ -231,6 +255,119 @@ post_form(Action, {csrf, Csrf, Name}) ->
             ])
         ])
     ]).
+
+%% what a moderator starts from: a way to a post by its number, the
+%% boards and whether nobody may post on them, and who is suspended
+-spec moderation(
+    {Csrf :: binary(), ike_role:role()},
+    [{Name :: binary(), Title :: binary(), Locked :: boolean()}],
+    [{Account :: integer(), Name :: binary()}]
+) -> ike_html:html().
+moderation({Csrf, Role}, Boards, Suspended) ->
+    layout(<<"moderation">>, [
+        ike_html:el(h1, [ike_html:text(<<"moderation">>)]),
+        ike_html:el(p, [
+            ike_html:text(
+                <<"as ", (ike_role:to_binary(Role))/binary, ". what is done is written to ">>
+            ),
+            anchor(<<"/board/mod">>, <<"/mod/">>),
+            ike_html:text(<<", with the reason given and without your name.">>)
+        ]),
+        ike_html:el(form, [{method, <<"get">>}, {action, <<"/mod">>}], [
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"post">>}], [ike_html:text(<<"post number ">>)]),
+                ike_html:el(input, [{id, <<"post">>}, {name, <<"post">>}, required], []),
+                ike_html:text(<<" ">>),
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"look">>)])
+            ])
+        ]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                ike_html:text(
+                    <<"/", Name/binary, "/ ", Title/binary,
+                        (case Locked of
+                            true -> <<": accounts only">>;
+                            false -> <<": open to anyone">>
+                        end)/binary>>
+                )
+                | act(
+                    <<"/mod/board/", Name/binary>>,
+                    Csrf,
+                    Role,
+                    case Locked of
+                        true -> [unlock];
+                        false -> [lock]
+                    end
+                )
+            ])
+         || {Name, Title, Locked} <- Boards
+        ]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                ike_html:text(<<Name/binary, ": suspended">>)
+                | act(<<"/mod/account/", (integer_to_binary(Account))/binary>>, Csrf, Role, [unban])
+            ])
+         || {Account, Name} <- Suspended
+        ])
+    ]).
+
+%% one post, as it is stored, and what this role may do with it
+-spec moderated({Csrf :: binary(), ike_role:role()}, held(), [ike_role:kind()]) ->
+    ike_html:html().
+moderated({Csrf, Role}, #{id := Id, thread := Thread, board := Board} = Post, Kinds) ->
+    #{state := State, time := Time, body := Body, name := Name} = Post,
+    N = integer_to_binary(Id),
+    Stamp = stamp(Time),
+    Where =
+        case Id of
+            Thread -> <<"/", Board/binary, "/, the first post of its thread">>;
+            _ -> <<"/", Board/binary, "/, in >>", (integer_to_binary(Thread))/binary>>
+        end,
+    layout(<<"moderating >>", N/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
+        ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
+        ike_html:el(p, [
+            ike_html:text(<<(atom_to_binary(State))/binary, ", on ", Where/binary, ", ">>),
+            ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)]),
+            ike_html:text(
+                case Name of
+                    none -> <<", unsigned">>;
+                    _ -> <<", signed ", Name/binary>>
+                end
+            )
+        ]),
+        %% as text and nothing more: no link in it is followed from here
+        ike_html:el(article, [ike_html:el(p, plain(binary:split(Body, <<"\n">>, [global])))])
+        | act(<<"/mod/post/", N/binary>>, Csrf, Role, Kinds)
+    ]).
+
+-spec plain([binary()]) -> [ike_html:html()].
+plain([Line]) -> [ike_html:text(Line)];
+plain([Line | Rest]) -> [ike_html:text(Line), ike_html:el(br, []) | plain(Rest)];
+plain([]) -> [].
+
+%% a form for each thing the role may do, each with its reason
+-spec act(Action :: binary(), Csrf :: binary(), ike_role:role(), [ike_role:kind()]) ->
+    [ike_html:html()].
+act(Action, Csrf, Role, Kinds) ->
+    [
+        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
+            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+            ike_html:el(
+                input, [{type, <<"hidden">>}, {name, <<"kind">>}, {value, atom_to_binary(Kind)}], []
+            ),
+            ike_html:el(p, [
+                ike_html:el(
+                    input,
+                    [{name, <<"reason">>}, {maxlength, <<"200">>}, required],
+                    []
+                ),
+                ike_html:text(<<" ">>),
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(atom_to_binary(Kind))])
+            ])
+        ])
+     || Kind <- Kinds, ike_role:may(Role, Kind)
+    ].
 
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().

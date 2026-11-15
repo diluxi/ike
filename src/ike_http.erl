@@ -41,6 +41,10 @@ dispatch() ->
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
+            {"/mod", ike_http_mod, front},
+            {"/mod/post/:post", [{post, int}], ike_http_mod, post},
+            {"/mod/board/:board", [Board], ike_http_mod, board},
+            {"/mod/account/:account", [{account, int}], ike_http_mod, account},
             %% everything else, so that a miss is answered by ike and not
             %% by cowboy's bare 404
             {'_', ike_http_page, missing}

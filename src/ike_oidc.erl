@@ -49,7 +49,7 @@ authorize_url(#{state := State, nonce := Nonce, verifier := Verifier}) ->
                         {<<"response_type">>, <<"code">>},
                         {<<"client_id">>, ClientId},
                         {<<"redirect_uri">>, RedirectUri},
-                        {<<"scope">>, <<"openid profile">>},
+                        {<<"scope">>, <<"openid profile groups">>},
                         {<<"state">>, State},
                         {<<"nonce">>, Nonce},
                         {<<"code_challenge">>, Challenge},
@@ -68,7 +68,8 @@ authorize_url(#{state := State, nonce := Nonce, verifier := Verifier}) ->
 
 %% trades the code for an id token and returns who it is about
 -spec subject(Code :: binary(), ike_session:login()) ->
-    {ok, Issuer :: binary(), Subject :: binary(), Nick :: binary() | none} | error().
+    {ok, Issuer :: binary(), Subject :: binary(), Nick :: binary() | none, Groups :: [binary()]}
+    | error().
 subject(Code, #{nonce := Nonce, verifier := Verifier}) ->
     case ike_config:oidc() of
         {ok, #{issuer := Issuer, client_id := ClientId} = Config} ->
@@ -77,7 +78,7 @@ subject(Code, #{nonce := Nonce, verifier := Verifier}) ->
                     case token(Endpoint, Code, Verifier, Config) of
                         {ok, IdToken} ->
                             case verify(IdToken, Issuer, ClientId, Nonce) of
-                                {ok, Subject, Nick} -> {ok, Issuer, Subject, Nick};
+                                {ok, Subject, Nick, Groups} -> {ok, Issuer, Subject, Nick, Groups};
                                 {error, _} = Error -> Error
                             end;
                         {error, _} = Error ->
@@ -160,7 +161,7 @@ quote(Value) ->
 %% the id token (a jws in compact form)
 
 -spec verify(binary(), binary(), binary(), binary()) ->
-    {ok, Subject :: binary(), Nick :: binary() | none} | error().
+    {ok, Subject :: binary(), Nick :: binary() | none, Groups :: [binary()]} | error().
 verify(IdToken, Issuer, ClientId, Nonce) ->
     case binary:split(IdToken, <<".">>, [global]) of
         [Header64, Claims64, Signature64] ->
@@ -197,7 +198,7 @@ signed(_Header, _Signed, _Signature) ->
     {error, bad_algorithm}.
 
 -spec claims(map(), binary(), binary(), binary()) ->
-    {ok, Subject :: binary(), Nick :: binary() | none} | error().
+    {ok, Subject :: binary(), Nick :: binary() | none, Groups :: [binary()]} | error().
 claims(Claims, Issuer, ClientId, Nonce) ->
     Now = erlang:system_time(second),
     Checks = [
@@ -219,13 +220,21 @@ claims(Claims, Issuer, ClientId, Nonce) ->
         [] ->
             case maps:get(<<"sub">>, Claims, none) of
                 Subject when is_binary(Subject), byte_size(Subject) > 0 ->
-                    {ok, Subject, nick(maps:get(<<"preferred_username">>, Claims, none))};
+                    {ok, Subject, nick(maps:get(<<"preferred_username">>, Claims, none)),
+                        groups(maps:get(<<"groups">>, Claims, none))};
                 _ ->
                     {error, {bad_claim, subject}}
             end;
         [Name | _] ->
             {error, {bad_claim, Name}}
     end.
+
+%% the groups the provider puts the account in, if it says. they decide
+%% a role for the length of the session and are not kept
+-spec groups(term()) -> [binary()].
+groups([Group | Groups]) when is_binary(Group) -> [Group | groups(Groups)];
+groups([_ | Groups]) -> groups(Groups);
+groups(_) -> [].
 
 %% what the account is called, if the provider says and it is a name
 %% that can stand in a path: letters, digits, dot, dash and underscore.

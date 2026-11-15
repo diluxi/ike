@@ -3,8 +3,8 @@
 %% logs, and the compiled modules read as data (xref); never a call into
 %% ike.
 %%
-%% Some invariants speak of things M0 does not have: a decoder, a
-%% fetcher, purge, staged uploads, a stripper. Their cases here are
+%% Some invariants speak of things ike does not have yet: a decoder, a
+%% fetcher, staged uploads, a stripper. Their cases here are
 %% tripwires. They assert that the thing is still absent, and fail the
 %% moment it arrives, so that whoever adds it has to replace the tripwire
 %% with the real test in the same change. A tripwire proves nothing about
@@ -23,7 +23,7 @@
     inv05_no_user_bytes_on_the_main_origin/1,
     inv06_tripwire_no_decoder/1,
     inv07_tripwire_no_fetcher/1,
-    inv08_tripwire_no_purge/1,
+    inv08_purge_leaves_nothing/1,
     inv09_reachability_view_is_complete/1,
     inv10_tripwire_no_staged_uploads/1,
     inv11_tripwire_no_stripper/1
@@ -38,7 +38,7 @@ all() ->
         inv05_no_user_bytes_on_the_main_origin,
         inv06_tripwire_no_decoder,
         inv07_tripwire_no_fetcher,
-        inv08_tripwire_no_purge,
+        inv08_purge_leaves_nothing,
         inv09_reachability_view_is_complete,
         inv10_tripwire_no_staged_uploads,
         inv11_tripwire_no_stripper
@@ -373,7 +373,8 @@ inv04_text_is_escaped(Config) ->
             ]),
             [] = [
                 C
-             || [C] <- Classes, not lists:member(C, [<<"name">>, <<"name account">>, <<"gone">>])
+             || [C] <- Classes,
+                not lists:member(C, [<<"name">>, <<"name account">>, <<"name role">>, <<"gone">>])
             ]
         end,
         [
@@ -518,44 +519,124 @@ inv07_tripwire_no_fetcher(Config) ->
 %% 8. Purge leaves no row, file, thumbnail, static page or reverse link
 %% referencing the content, except the mod-log entry (see G5).
 %%
-%% TRIPWIRE for the act: M0 cannot purge, hide or delete anything. What
-%% the schema owes the invariant already (a link dies with its source, an
-%% asset cannot be removed while referenced) is tested in ike_schema_SUITE.
-%% When purge arrives (M1) this fails, and is replaced by a test that
-%% purges and then searches rows, files, pages and links for the content.
-inv08_tripwire_no_purge(Config) ->
-    Session = ike_browser:login(Config, <<"purger">>),
-    {303, Headers, _} = ike_browser:post(
-        Config, "/board/b/new", Session, <<"cannot be taken back">>
+%% An admin purges a thread whose first post was quoted from elsewhere.
+%% Then the marker the thread carried is looked for in every file under
+%% the data directory (the database, its write-ahead log, the pages)
+%% and through HTTP; the rows and links are counted; and the log's entry
+%% is read for the reason, which is all of it that stays.
+%%
+%% The backups directory is not searched: a snapshot taken before the
+%% purge holds the content until it ages out (D7, questions.md).
+inv08_purge_leaves_nothing(Config) ->
+    Marker = <<"purge-marker-c4a1f0">>,
+    Writer = ike_browser:login(Config, <<"purgee">>),
+    {303, H1, _} = ike_browser:post(
+        Config, "/board/b/new", Writer, <<Marker/binary, " at the root">>
     ),
-    Thread = hd(string:split(proplists:get_value("location", Headers), "#")),
-    #{csrf := Csrf} = Session,
-    Form = {form, uri_string:compose_query([{"csrf", Csrf}])},
-    lists:foreach(
-        fun({Method, Path}) ->
-            {Status, _, _} = ike_browser:request(
-                Config, Method, Path, ike_browser:cookies(Session), Form
-            ),
-            true = lists:member(Status, [404, 405])
-        end,
+    Thread = hd(string:split(proplists:get_value("location", H1), "#")),
+    {Root, _} = string:to_integer(lists:last(string:split(Thread, "/", all))),
+    R = integer_to_binary(Root),
+    {303, _, _} = ike_browser:post(
+        Config, Thread ++ "/reply", Writer, <<">>", R/binary, " ", Marker/binary, " replied">>
+    ),
+    %% quoted from another thread, so that a page outside it links to it
+    {303, H2, _} = ike_browser:post(
+        Config, "/board/b/new", Writer, <<"see >>", R/binary>>
+    ),
+    Quoting = hd(string:split(proplists:get_value("location", H2), "#")),
+    {200, _, Before} = ike_browser:request(Config, get, Quoting, [], none),
+    {_, _} = binary:match(Before, <<"href=\"/p/", R/binary, "\"">>),
+    %% a janitor may only hide, and nobody else is shown that there is
+    %% anything here at all
+    Janitor = ike_browser:login(Config, <<"janitor8">>, #{groups => [<<"ike-janitor">>]}),
+    Purge = fun(#{csrf := Csrf} = Session) ->
+        Form = uri_string:compose_query([
+            {"csrf", Csrf}, {"kind", "purge"}, {"reason", "rule 1, the reason stays"}
+        ]),
+        ike_browser:request(
+            Config,
+            post,
+            "/mod/post/" ++ integer_to_list(Root),
+            ike_browser:cookies(Session),
+            {form, Form}
+        )
+    end,
+    {404, _, _} = Purge(Writer),
+    {404, _, _} = ike_browser:request(
+        Config, get, "/mod/post/" ++ integer_to_list(Root), ike_browser:cookies(Writer), none
+    ),
+    {403, _, _} = Purge(Janitor),
+    Admin = ike_browser:login(Config, <<"admin8">>, #{groups => [<<"ike-admin">>]}),
+    {200, _, Look} = ike_browser:request(
+        Config, get, "/mod/post/" ++ integer_to_list(Root), ike_browser:cookies(Admin), none
+    ),
+    scriptless(Look),
+    {_, _} = binary:match(Look, <<"value=\"purge\"">>),
+    {303, _, _} = Purge(Admin),
+    %% through HTTP: the thread, the post and its reply are not there
+    {404, _, _} = ike_browser:request(Config, get, Thread, [], none),
+    {404, _, _} = ike_browser:request(Config, get, "/p/" ++ integer_to_list(Root), [], none),
+    {200, _, After} = ike_browser:request(Config, get, Quoting, [], none),
+    nomatch = binary:match(After, <<"href=\"/p/", R/binary, "\"">>),
+    {_, _} = binary:match(After, <<"<span class=\"gone\">&gt;&gt;", R/binary, "</span>">>),
+    {200, _, Index} = ike_browser:request(Config, get, "/board/b", [], none),
+    nomatch = binary:match(Index, Marker),
+    %% the rows, and every link to or from them
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE thread = ?", [Root]),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM thread WHERE root = ?", [Root]),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM link WHERE post = ?", [Root]),
+    [[0]] = ike_browser:query(
+        Config, "SELECT count(*) FROM post WHERE instr(body, ?) > 0", [Marker]
+    ),
+    %% the log keeps who in what role, what, and why; not the content
+    [[<<"admin">>, Entry]] = ike_browser:query(
+        Config, "SELECT role, entry FROM action WHERE kind = 'purge' AND post = ?", [Root]
+    ),
+    [[Logged]] = ike_browser:query(Config, "SELECT body FROM post WHERE id = ?", [Entry]),
+    <<"purge >>", R:(byte_size(R))/binary, "\nrule 1, the reason stays">> = Logged,
+    %% shown on the log's board under the role, never the account
+    {303, LogHeaders, _} = ike_browser:request(
+        Config, get, "/p/" ++ integer_to_list(Entry), [], none
+    ),
+    LogPage = hd(string:split(proplists:get_value("location", LogHeaders), "#")),
+    "/board/mod/" ++ _ = LogPage,
+    {200, _, Log} = ike_browser:request(Config, get, LogPage, [], none),
+    {_, _} = binary:match(Log, <<"<span class=\"name role\">admin</span>">>),
+    nomatch = binary:match(Log, <<"admin8">>),
+    nomatch = binary:match(Log, Marker),
+    %% and every file but the snapshots: the write-ahead log is folded
+    %% back after a purge, and secure_delete overwrote the pages it freed
+    Dir = binary_to_list(?config(dir, Config)),
+    Searched = fun() ->
         [
-            {delete, Thread},
-            {post, Thread},
-            {post, Thread ++ "/delete"},
-            {post, Thread ++ "/purge"},
-            {post, Thread ++ "/hide"},
-            {post, "/purge"},
-            {post, "/mod"},
-            {post, "/mod/purge"}
+            F
+         || F <- files(Dir),
+            not lists:prefix(filename:join(Dir, "backups"), F),
+            holds(F, Marker)
         ]
-    ),
-    {200, _, Page} = ike_browser:request(Config, get, Thread, [], none),
-    {_, _} = binary:match(Page, <<"cannot be taken back">>),
-    %% the routes are these and no others
+    end,
+    [] = eventually(Searched, 50),
+    %% the routes are these and no others, and so are the tables
     known_routes(),
-    %% and the tables: a new one is a new place content can be referenced
-    %% from, which this invariant, 9 and 10 all have to hear about
     known_tables(Config).
+
+holds(File, Marker) ->
+    case file:read_file(File) of
+        {ok, Bytes} -> binary:match(Bytes, Marker) =/= nomatch;
+        {error, _} -> false
+    end.
+
+%% a checkpoint can wait on a reader; it is retried for a few seconds
+eventually(Fun, 0) ->
+    Fun();
+eventually(Fun, N) ->
+    case Fun() of
+        [] ->
+            [];
+        _ ->
+            timer:sleep(100),
+            eventually(Fun, N - 1)
+    end.
 
 %% 9. Every column that references an asset is part of the reachability
 %% view.
@@ -638,6 +719,10 @@ known_routes() ->
         [<<"login">>],
         [<<"login">>, <<"callback">>],
         [<<"logout">>],
+        [<<"mod">>],
+        [<<"mod">>, <<"post">>, post],
+        [<<"mod">>, <<"board">>, board],
+        [<<"mod">>, <<"account">>, account],
         '_'
     ]).
 
@@ -649,6 +734,7 @@ known_tables(Config) ->
         []
     ),
     [
+        [<<"action">>],
         [<<"actor">>],
         [<<"asset">>],
         [<<"asset_reference">>],
@@ -657,6 +743,7 @@ known_tables(Config) ->
         [<<"migration">>],
         [<<"post">>],
         [<<"session">>],
+        [<<"shown">>],
         [<<"thread">>]
     ] = Tables.
 

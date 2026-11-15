@@ -27,8 +27,13 @@ Each a branch on the one before, starting from `phi/sessions`.
    post is counted by address at the door and by board behind it, in
    memory. Invariant 1's test floods the limiter and searches for the
    addresses afterwards.
-5. **Roles and moderation:** `groups` claim; hide, delete, purge,
-   account ban, lockdown; the mod log; invariant 8's real test.
+5. **Roles and moderation** (`phi/mod`): done in the core; see
+   decisions.md. Roles from `groups`; hide, delete with a hold, restore,
+   purge, ban, unban, lock, unlock at `/mod`; the log on `/board/mod`;
+   invariant 8's real test. Still owed: a moderation suite of its own
+   (permissions, hold expiry, ban and login, restore), module options
+   for `roles` and `hold_seconds`, Authelia's `groups` in deploying.md,
+   and replacing `ike_browser:unlock/2`'s SQL with the lock form.
 6. **Assets:** the sandboxed pipeline, stripping with its corpus and
    determinism test, thumbnails, the media origin, uploads, hash dedup
    and hash bans; invariants 5, 6, 9 and 11 for real.
@@ -36,14 +41,14 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-Step 5.
+The rest of step 5 (above), then step 6. `phi/board` to `phi/mod`
+are not on origin: the ssh agent refused to sign the push.
 
 ## Blocked on lux
 
 - **Merging** the M0 stack, then `phi/board`.
-- **Before step 5:** the hold period between delete and purge; whether
-  purge entries in the mod log show hashes (G5); retention (Q8), since
-  purged content lives on in snapshots that long.
+- **Step 5's stubs:** the hold period (14 days); who may do what (Q20);
+  purge and snapshots (Q21, Q8); hashes in purge entries (Q22).
 - **Before step 6:** the upload-to-account link, plaintext or to an
   offline key (I4, Q3); which registered domain serves media; size
   caps. Each can be stubbed behind configuration, but I4 decides a
@@ -52,7 +57,8 @@ Step 5.
   (L1 to L3).
 - **Q18:** whether a keyed hash of an address may live in memory at
   all. Step 4's limiter assumes yes.
-- **Q17, Q19:** the limiter key's lifetime; who unlocks a board.
+- **Q17:** the limiter key's lifetime. (Q19: moderators now lock and
+  unlock.)
 - **Q14:** whether user boards come before M6.
 - **Q16:** whether an unsigned post on a locked board may stay
   untraceable to its account.
