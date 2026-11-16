@@ -79,6 +79,16 @@ nobody_else_sees_it(Config) ->
     [{404, _, _} = request(Config, get, P, cookies(Writer), none) || P <- Paths],
     [{404, _, _} = request(Config, get, P, [], none) || P <- Paths],
     [{404, _, _} = act(Config, Writer, P, "hide", "x") || P <- Paths],
+    %% the account page says who has which role, and links moderation
+    %% only for those who have one
+    {200, _, Plain} = request(Config, get, "/account", cookies(Writer), none),
+    {_, _} = binary:match(Plain, <<"no role">>),
+    nomatch = binary:match(Plain, <<"href=\"/mod\"">>),
+    {200, _, Mine} = request(
+        Config, get, "/account", cookies(janitor(Config, <<"seen-janitor">>)), none
+    ),
+    {_, _} = binary:match(Mine, <<"role: janitor of /b/">>),
+    {_, _} = binary:match(Mine, <<"href=\"/mod\"">>),
     %% a role from a group the provider made up is no role
     Stranger = login(Config, <<"stranger">>, #{groups => [<<"ike-admins">>, 7, <<"wheel">>]}),
     {404, _, _} = request(Config, get, "/mod", cookies(Stranger), none),

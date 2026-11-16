@@ -101,7 +101,11 @@ fog to an exact tree, so the pin bump is the commit to review.
   pages straight from `/var/cache/ike/pages`, everything else to Cowboy
   on the loopback port. It has no access log, on purpose (invariant 1),
   and caps request bodies at 64 KiB. Caddy's user joins the group `ike`
-  to read the pages; it cannot read `/var/lib/ike`.
+  to read the pages; it cannot read `/var/lib/ike`. The group is also
+  named in Caddy's unit, so that the switch which adds it restarts Caddy:
+  a reload keeps the groups it started with, and then every media file
+  answers 403 while pages still work (ike serves what Caddy cannot read).
+  If that is seen anyway, `systemctl restart caddy`.
 - **Limits.** `services.ike.limit` says how often an address and a
   board take posts without an account. With `caddy.enable` ike believes
   the loopback's `X-Forwarded-For`, which Caddy overwrites with the

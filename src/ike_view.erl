@@ -3,7 +3,7 @@
 -module(ike_view).
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
--export([moderation/3, moderated/3, upload/3, upload_locked/0]).
+-export([moderation/3, moderated/3, upload/4, upload_locked/0, account/1]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -518,9 +518,10 @@ act(Action, Csrf, Kinds, Fields) ->
 -spec upload(
     Csrf :: binary(),
     Refused :: [binary()],
-    [#{atom() => term()}]
+    [#{atom() => term()}],
+    [{pos_integer(), pos_integer()}]
 ) -> ike_html:html().
-upload(Csrf, Refused, Staged) ->
+upload(Csrf, Refused, Staged, Posted) ->
     layout(<<"uploads">>, [
         ike_html:el(h1, [ike_html:text(<<"uploads">>)]),
         ike_html:el(p, [
@@ -555,7 +556,15 @@ upload(Csrf, Refused, Staged) ->
             ]
         ),
         ike_html:el(ul, [ike_html:el(li, [ike_html:text(R)]) || R <- Refused]),
-        ike_html:el(ul, [staged(S) || S <- Staged])
+        ike_html:el(ul, [staged(S) || S <- Staged]),
+        %% and those posted, wherever their posts are now
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                ike_html:text(<<"upload ", (integer_to_binary(U))/binary, ", posted in ">>),
+                permalink(P, <<>>)
+            ])
+         || {U, P} <- Posted
+        ])
     ]).
 
 -spec staged(#{atom() => term()}) -> ike_html:html().
@@ -584,6 +593,49 @@ upload_locked() ->
         ])
     ]).
 
+%% who you are here: the name posts may carry, the role the provider's
+%% groups gave, and the way out
+-spec account(
+    {Csrf :: binary(), Name :: binary() | none, ike_role:role() | none} | nobody
+) -> ike_html:html().
+account(nobody) ->
+    layout(<<"account">>, [
+        ike_html:el(h1, [ike_html:text(<<"account">>)]),
+        ike_html:el(p, [
+            ike_html:text(<<"not logged in. ">>),
+            anchor(<<"/login">>, <<"log in">>)
+        ])
+    ]);
+account({Csrf, Name, Role}) ->
+    Called =
+        case Name of
+            none -> <<"logged in, without a name to sign with">>;
+            _ -> <<"logged in as ", Name/binary>>
+        end,
+    Is =
+        case Role of
+            none -> <<"no role">>;
+            _ -> <<"role: ", (as(Role))/binary>>
+        end,
+    layout(<<"account">>, [
+        ike_html:el(h1, [ike_html:text(<<"account">>)]),
+        ike_html:el(p, [ike_html:text(Called)]),
+        ike_html:el(p, [ike_html:text(Is)]),
+        ike_html:el(ul, [
+            ike_html:el(li, [anchor(<<"/upload">>, <<"your uploads">>)])
+            | case Role of
+                none -> [];
+                _ -> [ike_html:el(li, [anchor(<<"/mod">>, <<"moderation">>)])]
+            end
+        ]),
+        ike_html:el(form, [{method, <<"post">>}, {action, <<"/logout">>}], [
+            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"log out">>)])
+            ])
+        ])
+    ]).
+
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().
 message(Title, Text) ->
@@ -595,7 +647,11 @@ message(Title, Text) ->
 -spec layout(Title :: binary(), [ike_html:html()]) -> ike_html:html().
 layout(Title, Content) ->
     ike_html:document(Title, [
-        ike_html:el(nav, [anchor(<<"/">>, <<"ike">>)]),
+        ike_html:el(nav, [
+            anchor(<<"/">>, <<"ike">>),
+            ike_html:text(<<" ">>),
+            anchor(<<"/account">>, <<"account">>)
+        ]),
         ike_html:el(main, Content)
     ]).
 

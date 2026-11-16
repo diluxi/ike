@@ -717,3 +717,13 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   post takes them all with it, as before.
 - **A ban through an unsigned post reaches the account behind its
   images,** which is one account: whoever attached them.
+
+## After the first deploy (2026-11-16)
+
+- **`/account`,** made per request and linked from every page: the name,
+  the role (or "no role", which is why `/mod` is a 404), links to
+  uploads and moderation, and a log-out form.
+- **`/upload` lists posted uploads too,** each with the post it went into.
+- **Caddy's unit names the `ike` group** (`SupplementaryGroups`), so
+  the switch that adds it restarts Caddy; a reload had kept the old
+  groups, and media answered 403 while pages fell through to ike.

@@ -283,6 +283,28 @@ inv02_works_without_scripts(Config) ->
     ),
     scriptless(Pictured),
     {200, _, _} = ike_browser:media(Config, Shown),
+    %% and every page leads to the account page, which logs out by form
+    {_, _} = binary:match(Page, <<"href=\"/account\"">>),
+    Leaving = ike_browser:login(Config, <<"noscript-leaving">>),
+    {200, _, Account} = ike_browser:request(
+        Config, get, "/account", ike_browser:cookies(Leaving), none
+    ),
+    {match, [Out]} = re:run(
+        Account,
+        "<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"([^\"]+)\">",
+        [{capture, all_but_first, binary}]
+    ),
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/logout",
+        ike_browser:cookies(Leaving),
+        {form, uri_string:compose_query([{<<"csrf">>, Out}])}
+    ),
+    {200, _, Gone} = ike_browser:request(
+        Config, get, "/account", ike_browser:cookies(Leaving), none
+    ),
+    {_, _} = binary:match(Gone, <<"not logged in">>),
     %% logged out, the same pages say how to log in, with a link
     {200, _, Anonymous} = ike_browser:request(Config, get, "/board/b/new", [], none),
     {_, _} = binary:match(Anonymous, <<"href=\"/login\"">>),
@@ -299,6 +321,8 @@ inv02_works_without_scripts(Config) ->
         {get, Reply, Cookies},
         {get, "/upload", Cookies},
         {get, "/upload", []},
+        {get, "/account", Cookies},
+        {get, "/account", []},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
         {post, "/board/b/new", []}
@@ -521,7 +545,8 @@ inv04_text_is_escaped(Config) ->
             "/login/callback?state=" ++ Attack ++ "&code=" ++ Attack,
             "/board/b/" ++ Attack,
             "/board/b/1/reply?x=" ++ Attack,
-            "/upload?x=" ++ Attack
+            "/upload?x=" ++ Attack,
+            "/account?x=" ++ Attack
         ]
     ).
 
@@ -1407,6 +1432,7 @@ known_routes() ->
         [<<"mod">>, <<"board">>, board],
         [<<"mod">>, <<"account">>, account],
         [<<"upload">>],
+        [<<"account">>],
         '_'
     ]).
 

@@ -123,7 +123,14 @@ a_post_shows_an_upload(Config) ->
     "image/webp" = proplists:get_value("content-type", ThumbHeaders),
     %% posted, it waits no more, and nothing names its account
     {200, _, Staged} = request(Config, get, "/upload", cookies(Session), none),
-    nomatch = binary:match(Staged, <<"upload ", (integer_to_binary(Upload))/binary>>),
+    %% no longer waiting, and listed with where it went
+    "#p" ++ Into = string:find(proplists:get_value("location", H), "#"),
+    {_, _} = binary:match(
+        Staged,
+        <<"upload ", (integer_to_binary(Upload))/binary, ", posted in <a href=\"/p/",
+            (list_to_binary(Into))/binary, "\">">>
+    ),
+    nomatch = binary:match(Staged, <<"alt=\"upload ", (integer_to_binary(Upload))/binary>>),
     {200, _, Page} = request(Config, get, page(H), [], none),
     nomatch = binary:match(Page, <<"poster">>),
     %% and without one, empty text is still nothing to post

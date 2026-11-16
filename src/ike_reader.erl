@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
--export([staged/1, staged_file/1]).
+-export([staged/1, staged_file/1, posted/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -131,6 +131,16 @@ post(Post) ->
             none
     end.
 
+%% an account's uploads that went into posts, newest first, and where
+-spec posted(Actor :: integer()) -> [{Upload :: pos_integer(), Post :: pos_integer()}].
+posted(Actor) ->
+    case gen_server:call(?MODULE, {posted, Actor}) of
+        {ok, Rows} when is_list(Rows) ->
+            [{U, P} || [U, P] <- Rows, is_integer(U), U > 0, is_integer(P), P > 0];
+        _ ->
+            []
+    end.
+
 %% an account's uploads that are not posted yet, newest first
 -spec staged(Actor :: integer()) -> [staged()].
 staged(Actor) ->
@@ -197,6 +207,12 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         "SELECT u.id, a.type, a.width, a.height, u.time FROM upload u"
         " JOIN asset a ON a.hash = u.asset"
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({posted, Actor}, _From, Conn) when is_integer(Actor) ->
+    Sql = <<
+        "SELECT id, post FROM upload WHERE actor = ?1 AND post IS NOT NULL"
+        " ORDER BY id DESC LIMIT 200"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
 handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->

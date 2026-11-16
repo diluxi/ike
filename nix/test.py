@@ -64,6 +64,10 @@ machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.l
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/board) = 404")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/" + "0" * 64 + ".png) = 404")
 machine.succeed("su -s /bin/sh caddy -c 'test -d /var/cache/ike/media'")
+# caddy reads ike's files through the group, which its own unit names, so
+# that the switch that brings it restarts caddy rather than reloading it
+machine.succeed("systemctl show -p SupplementaryGroups caddy.service | grep -w ike")
+machine.succeed("grep '^Groups:' /proc/$(systemctl show -p MainPID --value caddy.service)/status | grep -qw $(getent group ike | cut -d: -f3)")
 # (a file put where ike would put one is served, typed by its name; the
 # writer would take it away again at the next start)
 machine.succeed("install -m 0640 -o ike -g ike /etc/ike-test/base.png /var/cache/ike/media/" + "a" * 64 + ".png")

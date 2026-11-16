@@ -41,7 +41,8 @@ page(Status, Actor, Csrf, Refused, Req) ->
         }
      || #{id := Id} = S <- ike_reader:staged(ike_id:to_integer(Actor))
     ],
-    ike_http:page(Status, ike_view:upload(Csrf, Refused, Staged), Req).
+    Posted = ike_reader:posted(ike_id:to_integer(Actor)),
+    ike_http:page(Status, ike_view:upload(Csrf, Refused, Staged, Posted), Req).
 
 -spec submit(ike_id:actor(), binary(), cowboy_req:req()) -> cowboy_req:req().
 submit(Actor, Csrf, Req0) ->

@@ -336,6 +336,11 @@ in {
 		};
 		users.groups.ike = {};
 		users.users.caddy = lib.mkIf cfg.caddy.enable { extraGroups = [ "ike" ]; };
+		# and in caddy's own unit, so that the switch that adds it restarts
+		# caddy: a reload keeps the groups the process started with, and
+		# then the media files answer 403 (the pages hide it, since what
+		# caddy cannot read falls through to ike)
+		systemd.services.caddy.serviceConfig.SupplementaryGroups = lib.mkIf cfg.caddy.enable [ "ike" ];
 
 		services.caddy = lib.mkIf cfg.caddy.enable {
 			enable = true;
