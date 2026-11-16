@@ -66,10 +66,16 @@ look({Actor, Csrf, Role}, Req) ->
 %% what this role can do to a post as it now is: the forms that would
 %% go through, and no others
 -spec kinds(ike_view:held(), ike_role:role(), integer()) -> [ike_role:kind()].
-kinds(#{state := State, account := Account} = Post, Role, Actor) ->
+kinds(#{state := State, account := Account, image := Image} = Post, Role, Actor) ->
     #{board := Board, author := Author, rank := Rank, undo := Undo} = Post,
     Facts = #{board => Board, self => Author =:= Actor, account => Rank, undo => Undo},
-    [K || K <- ladder(State, Account), ike_role:permits(Role, K, Facts)].
+    Pictured =
+        case Image of
+            none -> [];
+            shown -> [block, purge_image];
+            blocked -> [unblock, purge_image]
+        end,
+    [K || K <- ladder(State, Account) ++ Pictured, ike_role:permits(Role, K, Facts)].
 
 -spec ladder(shown | hidden | deleted, local | suspended | none) -> [ike_role:kind()].
 ladder(State, Account) ->
@@ -151,10 +157,14 @@ target(front, _Req) ->
     none.
 
 -spec fits(what(), ike_role:kind()) -> boolean().
-fits(post, Kind) -> lists:member(Kind, [hide, unhide, delete, restore, purge, ban]);
-fits(board, Kind) -> Kind =:= lock orelse Kind =:= unlock;
-fits(account, Kind) -> Kind =:= unban;
-fits(front, _) -> false.
+fits(post, Kind) ->
+    lists:member(Kind, [hide, unhide, delete, restore, purge, ban, block, unblock, purge_image]);
+fits(board, Kind) ->
+    Kind =:= lock orelse Kind =:= unlock;
+fits(account, Kind) ->
+    Kind =:= unban;
+fits(front, _) ->
+    false.
 
 -spec done(ok | {error, term()}, ike_role:kind(), binary(), cowboy_req:req()) -> cowboy_req:req().
 done(ok, Kind, Back, Req) ->

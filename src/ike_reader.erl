@@ -77,7 +77,7 @@ suspended() ->
 -spec post(Post :: integer()) -> {ok, ike_view:held()} | none.
 post(Post) ->
     case gen_server:call(?MODULE, {post, Post}) of
-        {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned, Author, Rank, Undo]]} when
+        {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned, Author, Rank, Undo, Image]]} when
             is_integer(Thread),
             is_binary(Board),
             is_integer(Time),
@@ -111,6 +111,12 @@ post(Post) ->
                         _ -> none
                     end,
                 author => Author,
+                image =>
+                    case Image of
+                        0 -> shown;
+                        1 -> blocked;
+                        _ -> none
+                    end,
                 rank => Rank,
                 undo => ike_role:rank_of(Undo)
             }};
@@ -202,7 +208,9 @@ handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
     Sql = <<
         "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, a.kind = 'local', a.banned,"
         " p.actor, a.rank, (SELECT role FROM action WHERE post = p.id"
-        " AND kind IN ('hide', 'delete') ORDER BY entry DESC LIMIT 1)"
+        " AND kind IN ('hide', 'delete') ORDER BY entry DESC LIMIT 1),"
+        " CASE WHEN p.asset IS NULL THEN NULL"
+        " ELSE EXISTS (SELECT 1 FROM blocklist WHERE hash = p.asset) END"
         " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
     >>,

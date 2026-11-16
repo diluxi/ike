@@ -42,7 +42,9 @@
     drop := [integer()],
     scrub := boolean(),
     %% assets whose being shown may have changed
-    assets := [binary()]
+    assets := [binary()],
+    %% assets purged, by hex: their files go
+    unlinked := [binary()]
 }.
 
 %% long enough for a write queued behind a few others; a caller that gives
@@ -285,40 +287,47 @@ handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) w
     Hash = crypto:hash(sha256, Stored),
     Name = binary:encode_hex(Hash, lowercase),
     Dir = ike_config:assets_dir(),
+    Blocked = <<"SELECT 1 FROM blocklist WHERE hash IN (?1, ?2)">>,
     Reply =
         %% the files first: a row without its file would be a lie, a file
-        %% without its row is swept at the next start
-        case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
-            {ok, ok} ->
-                Insert = <<
-                    "INSERT INTO asset (hash, type, width, height) VALUES (?1, ?2, ?3, ?4)"
-                    " ON CONFLICT (hash) DO NOTHING"
-                >>,
-                Staged = <<
-                    "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
-                    " RETURNING id"
-                >>,
-                Time = erlang:system_time(second),
-                committed(
-                    ike_db:transaction(Conn, fun() ->
-                        case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H]) of
-                            {ok, _} ->
-                                case
-                                    ike_db:q(Conn, Staged, [
-                                        {blob, Hash}, {blob, Original}, Actor, Time
-                                    ])
-                                of
-                                    {ok, [[Id]]} -> {ok, {Id, []}};
-                                    {ok, Other} -> {error, {unexpected, Other}};
-                                    {error, _} = Error -> Error
-                                end;
-                            {error, _} = Error ->
-                                Error
-                        end
-                    end)
-                );
+        %% without its row is swept at the next start. but nothing at all
+        %% of what is blocked, as it came or as it was stripped
+        case ike_db:q(Conn, Blocked, [{blob, Hash}, {blob, Original}]) of
+            {ok, [_ | _]} ->
+                {error, refused};
             _ ->
-                {error, unwritable}
+                case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
+                    {ok, ok} ->
+                        Insert = <<
+                            "INSERT INTO asset (hash, type, width, height) VALUES (?1, ?2, ?3, ?4)"
+                            " ON CONFLICT (hash) DO NOTHING"
+                        >>,
+                        Staged = <<
+                            "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
+                            " RETURNING id"
+                        >>,
+                        Time = erlang:system_time(second),
+                        committed(
+                            ike_db:transaction(Conn, fun() ->
+                                case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H]) of
+                                    {ok, _} ->
+                                        case
+                                            ike_db:q(Conn, Staged, [
+                                                {blob, Hash}, {blob, Original}, Actor, Time
+                                            ])
+                                        of
+                                            {ok, [[Id]]} -> {ok, {Id, []}};
+                                            {ok, Other} -> {error, {unexpected, Other}};
+                                            {error, _} = Error -> Error
+                                        end;
+                                    {error, _} = Error ->
+                                        Error
+                                end
+                            end)
+                        );
+                    _ ->
+                        {error, unwritable}
+                end
         end,
     {reply, Reply, Conn};
 handle_call({open_session, Hash, Actor, Csrf, Expires, Role0}, _From, Conn) when
@@ -443,10 +452,25 @@ moderated(Conn, Who, Kind, Target, Reason) ->
                     act(Conn, Who, Kind, Target, Reason, Time)
                 end)
             of
-                {ok, #{threads := T, gone := G, boards := B, drop := D, scrub := S, assets := A}} when
-                    is_list(T), is_list(G), is_list(B), is_list(D), is_boolean(S), is_list(A)
+                {ok, #{
+                    threads := T,
+                    gone := G,
+                    boards := B,
+                    drop := D,
+                    scrub := S,
+                    assets := A,
+                    unlinked := U
+                }} when
+                    is_list(T),
+                    is_list(G),
+                    is_list(B),
+                    is_list(D),
+                    is_boolean(S),
+                    is_list(A),
+                    is_list(U)
                 ->
                     ok = published(Conn, [H || H <- A, is_binary(H)]),
+                    ok = unlinked([X || X <- U, is_binary(X)]),
                     followed(Conn, T, G, B, D, S);
                 {error, _} = Error ->
                     Error;
@@ -678,20 +702,29 @@ act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     Sql = <<
         "SELECT p.thread, p.state, p.actor, a.kind = 'local', a.banned, b.name, a.rank,"
         " (SELECT role FROM action WHERE post = p.id AND kind IN ('hide', 'delete')"
-        " ORDER BY entry DESC LIMIT 1)"
+        " ORDER BY entry DESC LIMIT 1),"
+        " (SELECT role FROM action WHERE post = p.id AND kind = 'block'"
+        " ORDER BY entry DESC LIMIT 1), p.asset"
         " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
     >>,
     case ike_db:q(Conn, Sql, [Post]) of
-        {ok, [[Thread, State, Actor, Local, Banned, Board, Rank, Undo]]} when
+        {ok, [[Thread, State, Actor, Local, Banned, Board, Rank, Undo0, Blocker, Asset]]} when
             is_integer(Thread),
             is_integer(State),
             is_integer(Actor),
             is_binary(Board),
             is_integer(Rank)
         ->
+            Undo =
+                case Kind of
+                    unblock -> Blocker;
+                    _ -> Undo0
+                end,
             Facts = #{board => Board, account => Rank, undo => ike_role:rank_of(Undo)},
             case permits(Who, Kind, Facts, Actor) of
+                true when Kind =:= block; Kind =:= unblock; Kind =:= purge_image ->
+                    image(Conn, Who, Kind, {Post, Thread, Asset}, {Reason, Time});
                 true ->
                     ladder(Conn, Who, Kind, {Post, Thread, Board, Actor}, {State, Local, Banned}, {
                         Reason, Time
@@ -772,6 +805,106 @@ ladder(Conn, Who, Kind, {Post, Thread, Board, Actor}, {State, Local, Banned}, {R
             {error, not_now}
     end.
 
+%% a post's image: its hashes blocked, unblocked, or the image purged
+%% wherever it is used (hazard G3). nothing but the hashes is kept: the
+%% stored one and every one it came as, so that it is refused when it
+%% comes again, whatever metadata it brings
+-spec image(ike_db:writer(), who(), ike_role:kind(), {integer(), integer(), term()}, {
+    binary(), integer()
+}) ->
+    {ok, effects()} | error().
+image(Conn, Who, Kind, {Post, Thread, Hash}, {Reason, Time}) when is_binary(Hash) ->
+    Text = <<(words(Kind))/binary, " >>", (integer_to_binary(Post))/binary>>,
+    Hashes =
+        case
+            ike_db:q(Conn, <<"SELECT DISTINCT original FROM upload WHERE asset = ?1">>, [
+                {blob, Hash}
+            ])
+        of
+            {ok, Rows} -> [Hash | [O || [O] <- Rows, is_binary(O)]];
+            {error, _} -> [Hash]
+        end,
+    Blocked =
+        case ike_db:q(Conn, <<"SELECT 1 FROM blocklist WHERE hash = ?1">>, [{blob, Hash}]) of
+            {ok, [_]} -> true;
+            _ -> false
+        end,
+    case {Kind, Blocked} of
+        {block, true} ->
+            {error, not_now};
+        {unblock, false} ->
+            {error, not_now};
+        _ ->
+            case log(Conn, Who, Kind, Text, Reason, Time, {Post, undefined, undefined}) of
+                {ok, Logged} ->
+                    case imaged(Conn, Kind, Hash, Hashes, Time) of
+                        {ok, Threads} ->
+                            Purged = Kind =:= purge_image,
+                            {ok, (effects())#{
+                                threads := [Thread | Logged] ++ Threads,
+                                scrub := Purged,
+                                unlinked := [binary:encode_hex(Hash, lowercase) || Purged]
+                            }};
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end
+    end;
+image(_Conn, _Who, _Kind, _Post, _Why) ->
+    {error, not_now}.
+
+-spec words(ike_role:kind()) -> binary().
+words(block) -> <<"block the image of">>;
+words(unblock) -> <<"unblock the image of">>;
+words(_) -> <<"purge the image of">>.
+
+-spec imaged(ike_db:writer(), ike_role:kind(), binary(), [binary()], integer()) ->
+    {ok, [term()]} | error().
+imaged(Conn, block, _Hash, Hashes, Time) ->
+    Insert = <<"INSERT INTO blocklist (hash, time) VALUES (?1, ?2) ON CONFLICT DO NOTHING">>,
+    case each_hash(Conn, Insert, Hashes, [Time]) of
+        ok -> {ok, []};
+        {error, _} = Error -> Error
+    end;
+imaged(Conn, unblock, _Hash, Hashes, _Time) ->
+    case each_hash(Conn, <<"DELETE FROM blocklist WHERE hash = ?1">>, Hashes, []) of
+        ok -> {ok, []};
+        {error, _} = Error -> Error
+    end;
+imaged(Conn, purge_image, Hash, Hashes, Time) ->
+    %% every post that showed it keeps its text and says the image is
+    %% gone; every upload of it goes, staged or not; then the asset
+    Using = <<"SELECT DISTINCT thread FROM post WHERE asset = ?1">>,
+    case {imaged(Conn, block, Hash, Hashes, Time), ike_db:q(Conn, Using, [{blob, Hash}])} of
+        {{ok, _}, {ok, Rows}} ->
+            Steps = [
+                <<"UPDATE post SET asset = NULL, asset_gone = 1 WHERE asset = ?1">>,
+                <<"DELETE FROM upload WHERE asset = ?1">>,
+                <<"DELETE FROM asset WHERE hash = ?1">>
+            ],
+            case each(Conn, [{blob, Hash}], Steps) of
+                ok -> {ok, [T || [T] <- Rows]};
+                {error, _} = Error -> Error
+            end;
+        {{error, _} = Error, _} ->
+            Error;
+        {_, {error, _} = Error} ->
+            Error
+    end;
+imaged(_Conn, _Kind, _Hash, _Hashes, _Time) ->
+    {error, bad_request}.
+
+-spec each_hash(ike_db:writer(), binary(), [binary()], [term()]) -> ok | error().
+each_hash(Conn, Sql, [Hash | Hashes], More) ->
+    case ike_db:q(Conn, Sql, [{blob, Hash} | More]) of
+        {ok, _} -> each_hash(Conn, Sql, Hashes, More);
+        {error, _} = Error -> Error
+    end;
+each_hash(_Conn, _Sql, [], _More) ->
+    ok.
+
 %% whether a thing that is not in the state asked of it is there at all
 -spec there(ike_db:writer(), binary(), term(), atom()) -> error().
 there(Conn, Sql, Key, Missing) ->
@@ -783,7 +916,15 @@ there(Conn, Sql, Key, Missing) ->
 
 -spec effects() -> effects().
 effects() ->
-    #{threads => [], gone => [], boards => [], drop => [], scrub => false, assets => []}.
+    #{
+        threads => [],
+        gone => [],
+        boards => [],
+        drop => [],
+        scrub => false,
+        assets => [],
+        unlinked => []
+    }.
 
 -spec logged({ok, [term()]} | error(), effects()) -> {ok, effects()} | error().
 logged({ok, Threads}, #{threads := Others} = Effects) ->
@@ -854,7 +995,8 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                                 boards => [Board],
                                 drop => [],
                                 scrub => To =:= purge,
-                                assets => [A || [A] <- Assets, is_binary(A)]
+                                assets => [A || [A] <- Assets, is_binary(A)],
+                                unlinked => []
                             }};
                         {error, _} = Error ->
                             Error
@@ -949,6 +1091,24 @@ kept_name(Name, Keep) when is_binary(Name) ->
     end;
 kept_name(_, _) ->
     false.
+
+%% a purged asset's files, wherever ike put them (invariant 8)
+-spec unlinked([binary()]) -> ok.
+unlinked([Hex | Rest]) ->
+    Assets = ike_config:assets_dir(),
+    Media = ike_config:media_dir(),
+    _ = file:delete(<<Assets/binary, "/", Hex/binary>>),
+    _ = file:delete(<<Assets/binary, "/", Hex/binary, ".thumb">>),
+    [
+        file:delete(<<Media/binary, "/", Name/binary>>)
+     || Name <- [
+            ike_media:thumb(Hex)
+            | [ike_media:file(Hex, T) || T <- [<<"jpeg">>, <<"png">>, <<"webp">>]]
+        ]
+    ],
+    unlinked(Rest);
+unlinked([]) ->
+    ok.
 
 %% at start: the media origin's files made to match what is shown
 -spec republished(ike_db:writer()) -> ok.

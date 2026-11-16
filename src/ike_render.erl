@@ -168,7 +168,8 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     >>,
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
-        "SELECT p.id, p.time, p.body, a.name, b.log, m.role, x.hash, x.type, x.width, x.height"
+        "SELECT p.id, p.time, p.body, a.name, b.log, m.role, x.hash, x.type, x.width, x.height,"
+        " p.asset_gone"
         " FROM shown p JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
         " LEFT JOIN asset x ON x.hash = p.asset"
@@ -189,9 +190,13 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                             name => name(Name0, Id, Names, Log, Role),
                             links => Links,
                             replies => maps:get(Id, Replies, []),
-                            image => image(Hash, Type, W, H)
+                            image =>
+                                case Gone of
+                                    1 -> gone;
+                                    _ -> image(Hash, Type, W, H)
+                                end
                         }
-                     || [Id, Time, Body, Name0, Log, Role, Hash, Type, W, H] <- Rows,
+                     || [Id, Time, Body, Name0, Log, Role, Hash, Type, W, H, Gone] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)

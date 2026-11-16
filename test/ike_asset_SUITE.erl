@@ -13,7 +13,8 @@
     a_post_shows_an_upload/1,
     only_ones_own_once/1,
     the_media_follow_what_is_shown/1,
-    a_restart_makes_them_again/1
+    a_restart_makes_them_again/1,
+    a_blocked_image_does_not_come_back/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/5, request/5, query/3, cookies/1, upload/3, media/2]).
@@ -24,7 +25,8 @@ all() ->
         a_post_shows_an_upload,
         only_ones_own_once,
         the_media_follow_what_is_shown,
-        a_restart_makes_them_again
+        a_restart_makes_them_again,
+        a_blocked_image_does_not_come_back
     ].
 
 init_per_suite(Config) ->
@@ -99,7 +101,7 @@ the_same_bytes_are_one_asset(Config) ->
     {422, _, Refused} = upload(Config, A, [
         {<<"a.jpg">>, read(Config, "base.jpg")}, {<<"b.txt">>, <<"plain text">>}
     ]),
-    {_, _} = binary:match(Refused, <<"file 2: not taken (not-an-image)">>),
+    {_, _} = binary:match(Refused, <<"file 2: not taken<">>),
     {200, _, Staged} = request(Config, get, "/upload", cookies(A), none),
     {match, _} = re:run(Staged, "jpeg, 61x47").
 
@@ -192,3 +194,56 @@ a_restart_makes_them_again(Config) ->
     ok = ike_browser:restart(),
     {200, _, _} = media(Config, File),
     false = filelib:is_regular(Stray).
+
+a_blocked_image_does_not_come_back(Config) ->
+    Session = login(Config, <<"blocked">>),
+    Other = login(Config, <<"blocked-too">>),
+    Janitor = login(Config, <<"blocked-jan">>, #{groups => [<<"ike-janitor-b">>]}),
+    Moderator = login(Config, <<"blocked-mod">>, #{groups => [<<"ike-moderator">>]}),
+    Admin = login(Config, <<"blocked-admin">>, #{groups => [<<"ike-admin">>]}),
+    Jpg = read(Config, "base.jpg"),
+    {303, _, _} = upload(Config, Session, [{<<"b.jpg">>, Jpg}]),
+    {303, H, _} = with(
+        Config, Session, "/board/b/new", <<"blockable">>, latest(Config, <<"blocked">>)
+    ),
+    "#p" ++ N = string:find(proplists:get_value("location", H), "#"),
+    Path = "/mod/post/" ++ N,
+    Act = fun(#{csrf := Csrf} = Who, Kind) ->
+        Form = uri_string:compose_query([{"csrf", Csrf}, {"kind", Kind}, {"reason", "x"}]),
+        element(1, request(Config, post, Path, cookies(Who), {form, Form}))
+    end,
+    %% offered as each role may
+    Offered = fun(Who) ->
+        {200, _, Look} = request(Config, get, Path, cookies(Who), none),
+        {match, Kinds} = re:run(Look, "name=\"kind\" value=\"([a-z_]+)\"", [
+            global, {capture, all_but_first, binary}
+        ]),
+        [K || [K] <- Kinds]
+    end,
+    [<<"hide">>] = Offered(Janitor),
+    %% (unsigned: no account to ban)
+    [<<"hide">>, <<"delete">>, <<"block">>] = Offered(Moderator),
+    403 = Act(Janitor, "block"),
+    403 = Act(Moderator, "purge_image"),
+    303 = Act(Moderator, "block"),
+    409 = Act(Moderator, "block"),
+    %% the same image, with whatever metadata, from anyone: not taken,
+    %% in the same words as a file that is no image
+    {422, _, Refused} = upload(Config, Other, [{<<"c.jpg">>, Jpg}]),
+    {_, _} = binary:match(Refused, <<"file 1: not taken<">>),
+    %% and the post that shows it still does: a block is of what comes
+    {File, _} = image(Config, page(H)),
+    {200, _, _} = media(Config, File),
+    303 = Act(Moderator, "unblock"),
+    {303, _, _} = upload(Config, Other, [{<<"d.jpg">>, Jpg}]),
+    %% purged: gone from both posts, and from the other's staged upload
+    303 = Act(Admin, "purge_image"),
+    {404, _, _} = media(Config, File),
+    [[0]] = query(
+        Config,
+        "SELECT count(*) FROM upload u JOIN actor a ON a.id = u.actor WHERE a.subject = 'blocked-too'",
+        []
+    ),
+    {200, _, Page} = request(Config, get, page(H), [], none),
+    {_, _} = binary:match(Page, <<"<span class=\"gone\">image</span>">>),
+    {422, _, _} = upload(Config, Other, [{<<"e.jpg">>, Jpg}]).

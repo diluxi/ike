@@ -16,7 +16,7 @@
     name := {account | nobody | role, binary()},
     links := #{integer() => binary()},
     replies := [integer()],
-    image => image() | none
+    image => image() | gone | none
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -40,6 +40,8 @@
     body := binary(),
     name := binary() | none,
     account := local | suspended | none,
+    %% whether it shows an image, and whether that image's hash is blocked
+    image := none | shown | blocked,
     %% who signed it, their rank, and the rank that put it in its state
     author := integer(),
     rank := 0..3,
@@ -94,7 +96,7 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
     ).
 
 %% the thumbnail, a link to the whole, and what it is
--spec figure(image() | none) -> [ike_html:html()].
+-spec figure(image() | gone | none) -> [ike_html:html()].
 figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) ->
     Size = <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>,
     [
@@ -104,6 +106,9 @@ figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) -
             ])
         ])
     ];
+figure(gone) ->
+    %% the words of every link to something taken down (hazard G5)
+    [ike_html:el(p, [gone(<<"image">>)])];
 figure(none) ->
     [].
 
@@ -417,6 +422,13 @@ moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, K
                 case Name of
                     none -> <<", unsigned">>;
                     _ -> <<", signed ", Name/binary>>
+                end
+            ),
+            ike_html:text(
+                case maps:get(image, Post) of
+                    none -> <<"">>;
+                    shown -> <<"; with an image">>;
+                    blocked -> <<"; with an image whose hash is blocked">>
                 end
             )
         ]),

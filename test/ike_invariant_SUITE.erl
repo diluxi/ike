@@ -833,6 +833,73 @@ inv08_purge_leaves_nothing(Config) ->
     {_, _} = binary:match(Log, <<"<span class=\"name role\">admin</span>">>),
     nomatch = binary:match(Log, <<"admin8">>),
     nomatch = binary:match(Log, Marker),
+    %% an image, purged wherever it is shown (hazard G3): the posts keep
+    %% their text and say the image is gone, every upload of it goes, and
+    %% what is left is its hashes on the blocklist, which lux kept on
+    %% purpose (the exception beside the log)
+    Webp = read(?config(data_dir, Config), "lossless.webp"),
+    {303, _, _} = ike_browser:upload(Config, Writer, [{<<"i.webp">>, Webp}]),
+    [[Staged]] = ike_browser:query(
+        Config,
+        "SELECT max(u.id) FROM upload u JOIN actor a ON a.id = u.actor"
+        " WHERE a.subject = 'purgee' AND u.posted IS NULL",
+        []
+    ),
+    {303, H5, _} = ike_browser:post(
+        Config,
+        "/board/b/new",
+        Writer,
+        <<"an image to purge">>,
+        [{<<"upload">>, integer_to_binary(Staged)}]
+    ),
+    Imaged = hd(string:split(proplists:get_value("location", H5), "#")),
+    "#p" ++ Image = string:find(proplists:get_value("location", H5), "#"),
+    {200, _, WithImage} = ike_browser:request(Config, get, Imaged, [], none),
+    {match, [Full, Small]} = re:run(
+        WithImage,
+        "<a href=\"(http://media\\.test/[^\"]+)\"><img src=\"(http://media\\.test/[^\"]+)\"",
+        [{capture, all_but_first, list}]
+    ),
+    {200, _, StoredImage} = ike_browser:media(Config, Full),
+    %% (its thumbnail's bytes are not looked for: another image of the
+    %% same pixels has the same thumbnail. its files are, by name)
+    {200, _, _} = ike_browser:media(Config, Small),
+    [[ImageHash]] = ike_browser:query(Config, "SELECT asset FROM post WHERE id = ?", [
+        list_to_integer(Image)
+    ]),
+    ImageHex = binary_to_list(binary:encode_hex(ImageHash, lowercase)),
+    #{csrf := ImageCsrf} = Admin,
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/mod/post/" ++ Image,
+        ike_browser:cookies(Admin),
+        {form,
+            uri_string:compose_query([
+                {"csrf", ImageCsrf}, {"kind", "purge_image"}, {"reason", "rule 1"}
+            ])}
+    ),
+    {200, _, Tombstoned} = ike_browser:request(Config, get, Imaged, [], none),
+    {_, _} = binary:match(Tombstoned, <<"an image to purge">>),
+    {_, _} = binary:match(Tombstoned, <<"<span class=\"gone\">image</span>">>),
+    nomatch = binary:match(Tombstoned, <<"<img">>),
+    {404, _, _} = ike_browser:media(Config, Full),
+    {404, _, _} = ike_browser:media(Config, Small),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [
+        {blob, ImageHash}
+    ]),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM upload WHERE asset = ?", [
+        {blob, ImageHash}
+    ]),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE asset = ?", [
+        {blob, ImageHash}
+    ]),
+    [[1]] = ike_browser:query(Config, "SELECT count(*) FROM blocklist WHERE hash = ?", [
+        {blob, ImageHash}
+    ]),
+    %% and it does not come back
+    {422, _, Again} = ike_browser:upload(Config, Writer, [{<<"again.webp">>, Webp}]),
+    {_, _} = binary:match(Again, <<"file 1: not taken">>),
     %% and every file but the snapshots: the write-ahead log is folded
     %% back after a purge, and secure_delete overwrote the pages it freed
     Dir = binary_to_list(?config(dir, Config)),
@@ -841,7 +908,8 @@ inv08_purge_leaves_nothing(Config) ->
             F
          || F <- files(Dir),
             not lists:prefix(filename:join(Dir, "backups"), F),
-            holds(F, Marker) orelse holds(F, Kept)
+            holds(F, Marker) orelse holds(F, Kept) orelse holds(F, StoredImage) orelse
+                string:find(F, ImageHex) =/= nomatch
         ]
     end,
     [] = eventually(Searched, 50),
@@ -1214,6 +1282,7 @@ known_tables(Config) ->
         [<<"actor">>],
         [<<"asset">>],
         [<<"asset_reference">>],
+        [<<"blocklist">>],
         [<<"board">>],
         [<<"link">>],
         [<<"migration">>],

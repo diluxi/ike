@@ -11,7 +11,21 @@
 
 -type role() :: admin | moderator | {janitor, [binary()]}.
 %% the rungs of the ladder, and their way back down
--type kind() :: hide | unhide | delete | restore | purge | ban | unban | lock | unlock.
+-type kind() ::
+    hide
+    | unhide
+    | delete
+    | restore
+    | purge
+    | ban
+    | unban
+    | lock
+    | unlock
+    %% a post's image: its hashes refused from now on, or that undone;
+    %% or destroyed wherever it is used, and refused for good
+    | block
+    | unblock
+    | purge_image.
 %% what is known of the target: the board it is on (any for an account
 %% or a board), whether the account is the actor's own, the account's
 %% rank, and the rank of whoever put it in the state it is in
@@ -59,6 +73,7 @@ boards(_, []) ->
 -spec may(role() | system, kind()) -> boolean().
 may(admin, _) -> true;
 may(moderator, purge) -> false;
+may(moderator, purge_image) -> false;
 may(moderator, _) -> true;
 may({janitor, _}, Kind) -> Kind =:= hide orelse Kind =:= unhide;
 may(system, Kind) -> Kind =:= purge.
@@ -73,7 +88,7 @@ permits(Role, Kind, #{board := Board, self := Self, account := Account, undo := 
     may(Role, Kind) andalso covers(Role, Board) andalso
         case Kind of
             _ when Kind =:= ban; Kind =:= unban -> not Self andalso rank(Role) > Account;
-            _ when Kind =:= unhide; Kind =:= restore -> rank(Role) >= Undo;
+            _ when Kind =:= unhide; Kind =:= restore; Kind =:= unblock -> rank(Role) >= Undo;
             _ -> true
         end.
 
@@ -96,7 +111,8 @@ rank_of(<<"janitor">>) -> 1;
 rank_of(_) -> 0.
 
 -spec kinds() -> [kind()].
-kinds() -> [hide, unhide, delete, restore, purge, ban, unban, lock, unlock].
+kinds() ->
+    [hide, unhide, delete, restore, purge, ban, unban, lock, unlock, block, unblock, purge_image].
 
 -spec kind(binary()) -> {ok, kind()} | error.
 kind(<<"hide">>) -> {ok, hide};
@@ -108,6 +124,9 @@ kind(<<"ban">>) -> {ok, ban};
 kind(<<"unban">>) -> {ok, unban};
 kind(<<"lock">>) -> {ok, lock};
 kind(<<"unlock">>) -> {ok, unlock};
+kind(<<"block">>) -> {ok, block};
+kind(<<"unblock">>) -> {ok, unblock};
+kind(<<"purge_image">>) -> {ok, purge_image};
 kind(_) -> error.
 
 %% a role's name, and a kind's, as the log stores them

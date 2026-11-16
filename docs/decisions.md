@@ -658,3 +658,29 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   media origin, with the type and size as the image's text.
 - *Simplifications:* one image per post; the board index shows no
   thumbnails; the anonymous post form offers no uploads (I4's switch).
+
+## Blocking and purging images (M1, step 6)
+
+- **Three rungs for a post's image,** on its moderation page: `block`
+  puts the stored hash and every hash it came as on the blocklist,
+  `unblock` takes them off (by no lower rank than blocked), and
+  `purge_image` (admins) blocks for good and destroys it wherever it is:
+  every post that showed it keeps its text and says `image` in the words
+  of every other gone thing (G5), every upload of it goes, staged or
+  not, the asset row goes, and its files under assets and media are
+  unlinked after the commit, which folds back the write-ahead log.
+- **An upload whose stored or original hash is blocked is refused**
+  before any file is written, and every refusal now reads "not taken",
+  whatever the reason, so that a refused hash reads like a file that is
+  no image (P6).
+- **The log says "purge the image of >>N"** and no hash (Q22 still open);
+  the `action` row names the post.
+- *Simplifications:* a block is reached through a post that shows the
+  image; a hash from elsewhere cannot be blocked yet. Unblocking weighs
+  the rank of whoever blocked through that same post only. The
+  moderator's page says a post has an image but does not show it.
+- **Invariant 8** purges an image too: its bytes are in no file outside
+  the snapshots, its files are gone by name, no asset, upload or post
+  row has its hash, and the blocklist does, which lux kept on purpose
+  (C3). Its thumbnail's bytes are not searched for, since another image
+  of the same pixels has the same thumbnail.

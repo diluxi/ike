@@ -147,8 +147,9 @@ body(Req0, Left, Acc) ->
             body(Req, Left - byte_size(Data), <<Acc/binary, Data/binary>>)
     end.
 
-%% one file: what the stripper made of it, kept; or why not, said the
-%% same way whatever the reason (hazard P6)
+%% one file: what the stripper made of it, kept; or not taken, said the
+%% same way whatever the reason, so that a refused hash reads like a
+%% file that is no image (hazard P6)
 -spec kept(ike_id:actor(), pos_integer(), binary()) -> [binary()].
 kept(Actor, N, Bytes) ->
     Which = <<"file ", (integer_to_binary(N))/binary, ": ">>,
@@ -156,10 +157,11 @@ kept(Actor, N, Bytes) ->
         {ok, Stripped} ->
             case ike_writer:upload(#{actor => Actor, original => Bytes, stripped => Stripped}) of
                 {ok, _} -> [];
+                {error, refused} -> [<<Which/binary, "not taken">>];
                 {error, _} -> [<<Which/binary, "not kept, try again">>]
             end;
-        {no, Reason} ->
-            [<<Which/binary, "not taken (", Reason/binary, ")">>];
+        {no, _Reason} ->
+            [<<Which/binary, "not taken">>];
         {error, unavailable} ->
             [<<Which/binary, "not kept, try again">>]
     end.
