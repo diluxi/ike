@@ -47,7 +47,9 @@ machine.succeed("curl -fsS http://localhost/board/b/new | grep -q 'log in'")
 # uploads: the stripper answers on its socket, one sandboxed unit per
 # upload, and what it makes of a png is a png of the same size
 machine.wait_for_unit("ike-strip.socket")
-machine.succeed("socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png | head -n1 | grep '^ok png 61 47 '")
+# (the answer whole into a file first: head would cut the pipe short)
+machine.succeed("socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png >/tmp/stripped")
+machine.succeed("head -n1 /tmp/stripped | grep '^ok png 61 47 '")
 machine.succeed("echo not-an-image | socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock | grep -x 'no not-an-image'")
 for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes", "RestrictAddressFamilies=none"]:
 	machine.succeed(f"systemctl show -p {prop.split('=')[0]} ike-strip@probe.service | grep -x '{prop}'")
