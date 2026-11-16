@@ -5,7 +5,7 @@
 -module(ike_http_post).
 -behaviour(cowboy_handler).
 
--export([init/2]).
+-export([init/2, kept_password/1]).
 
 %% where a post is going: a board, and a thread on it unless it starts one
 -type place() :: {Board :: binary(), new | ike_id:post()}.

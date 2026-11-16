@@ -66,16 +66,17 @@ here.
   trigger read-only, etc." Which logs (the `action` rows naming the
   account, the journal?), and what read-only means (no posts at all, or
   no posts by nobody)? Not built.
-- **Q31 Who sees staged uploads.** lux, 2026-11-16: moderators should
-  see and search everyone's uploads, as on Danbooru, where all uploads
-  are public with their metadata; private ones may make sense later,
-  with ActivityPub. Invariant 10 says a staged upload is served to no one
-  but its uploader, and phi.md forbids a change that cannot keep an
-  invariant, so nothing is built until hazards.md says which: staged
-  uploads public to everyone (invariant 10 dropped or turned around),
-  visible to moderators as well (its wording widened), or private by
-  default with a public switch per upload. Recognition tags (Danbooru's
-  AI tags, hidden while tagging) belong with tags, in M2.
+- **Q31 Who sees staged uploads.** Answered by lux, 2026-11-16
+  (decisions.md, "Asset, meta, tack, curation"): public by default and
+  listed in `/trunk`; private on an account's word, seen by its owner and
+  moderators and up. Blocked on invariant 10, which says otherwise. A
+  wording for hazards.md, if lux wants it:
+  - invariant 10: "A private asset is served to no one but its owner
+    and moderators. A staged asset is listed in the trunk, where
+    moderators see it."
+  - G7's control: "staged assets are public and listed in the trunk,
+    where moderators see and act on them as on posts; private ones are
+    served to their owner and moderators only."
 - **Q32 Orientation and profile text.** With nothing turned, a phone
   photo whose camera wrote an orientation tag now shows on its side.
   Keeping that one tag (no pixel changed, a few bytes of EXIF that say
@@ -93,10 +94,22 @@ here.
   `booru_at_once`. Whether a board post pins the version it showed
   (line 190): it shows its own asset, which is the version it posted.
   Who may tag before proposals (M4): to be stubbed as accounts, with a
-  history of who changed what.
-- **Q35 Wiki edit conflicts** (planning line 253): an edit made on a
-  revision that is no longer the newest is refused for now, with both
-  texts shown. A three-way merge instead?
+  history of who changed what. lux's model of asset, meta, tack and
+  curation (decisions.md) answers the rest; it waits on Q31.
+- **Q35 Wiki edit conflicts.** Answered: edits stack, and retraction
+  undoes one (decisions.md, "Edits stack, and amend").
+- **Q36 What a folded revision said.** Amend replaces a revision's text,
+  so nothing keeps what it said before the fold: not the moderators'
+  page, not a report made on it. A report on a revision that is folded
+  after it reads the new text. Keep the old text for moderators (as
+  trash), or is this fine? And is there a time limit past which an edit
+  is a revision of its own (git's amend has none)?
+- **Q37 Amending tags.** lux: a change to "anything" right after its
+  author's own is folded in. Tag changes have their history
+  (`tag_change`), but no curation thread yet to tell "nothing between";
+  built with that thread.
+- **Q38 A meta's page.** lux finds Danbooru's media asset page hard to
+  justify. Is `/trunk` a list only, or does each meta have a page?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

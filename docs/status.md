@@ -61,7 +61,10 @@ Branches past `dev`, in order, each with full checks passing:
 the wiki page's thread as its history, diff colours), `phi/postfiles`
 (files on the post form, the anonymous upload switch), `phi/traits`
 (raster, image, animation, video, audio tags), `phi/markup` (a DText
-subset, ctrl+enter, ctrl+b, ctrl+i).
+subset, ctrl+enter, ctrl+b, ctrl+i), `phi/redlink` (a name with no page
+links to where it would be), `phi/stack` (edits stack over the newest,
+an account's next edit amends its own, unsigned edits retract by
+password).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -74,6 +77,11 @@ subset, ctrl+enter, ctrl+b, ctrl+i).
 - **Markup owes:** nested lists, tables, markup in titles.
 
 ## Blocked on lux
+
+- **Invariant 10 before the trunk:** lux's asset, meta, tack and
+  curation model (decisions.md) makes uploads public by default, which
+  invariant 10 forbids. A wording is proposed in Q31. Also open: Q36
+  (what a folded revision said), Q37, Q38.
 
 - **Merging** the M0 stack, then `phi/board`.
 - **Authelia's `groups` before deploying `phi/mod`:** ike now asks for

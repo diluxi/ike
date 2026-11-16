@@ -897,8 +897,7 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   dot, since a name may become a file's.
 - **Accounts write** (anonymous edits are proposals, M4), unsigned unless
   "sign" is ticked, as posts. An edit on a revision that is no longer the
-  newest is refused with the page as it now is and the refused text, to
-  be made again (planning line 253 is open: reject or merge; Q35).
+  newest was refused at first; edits now stack (below, "Edits stack").
 - **`[[name]]`** links to the page; with no page but a tag by that name,
   to the tag's search; else it reads as every other link to nothing.
   Kept in `link.name`; starting a page re-renders the threads that
@@ -992,3 +991,64 @@ Every wiki href and Location is made by `ike_wiki:path/1`, which writes a
 name's `?` as `%3F` (it would start a query) and its `'` as `%27`; the
 router reads both back. The invariant suite's href check admits exactly
 `/wiki/` and a name's characters so written.
+
+## Edits stack, and amend (lux, 2026-11-16)
+
+- **No merge, no refusal** (Q35, planning line 253): "whomever posts
+  first causes the edit first, all other edits are stacked on top, and
+  users may retract them if that caused inconsistencies." An edit is the
+  next revision over the newest, whatever it was opened on, and `base`
+  says which revision it went over. The form no longer carries one.
+- **Retraction undoes a revision,** as any post: a signed one by its
+  account, an unsigned one by its password, which the wiki form now
+  takes (filled in from this browser's, as the post forms). A page reads
+  as its newest shown revision, so retracting the newest steps it back.
+- **Batching is amend:** an edit right after its own author's revision,
+  with nothing shown posted between, replaces that revision's text and
+  time instead of adding one, so its diff is everything both edits did
+  (git's `commit --amend` replaces the newest commit the same way). The
+  revision's links are read again from the new text, and every page
+  either text pointed at is made again.
+- *Simplification:* "the same author" is a signed account only. An
+  unsigned edit is the anonymous actor's, which is everyone's: folding
+  one into another would fold strangers' edits together, and nothing
+  else (no address, by rule) tells two anonymous editors apart. So
+  unsigned edits are never folded, nor folded into.
+- *Not yet:* amend for tags (Q37), which needs the curation's thread
+  first.
+- What a folded revision said before is gone, as a retracted post's is
+  not: Q36.
+
+## Asset, meta, tack, curation (lux, 2026-11-16; recorded, not built)
+
+lux's model, in lux's words where they are given:
+
+1. **An asset** is the bytes, at `cdn.amartia.online`.
+2. **A meta** is what is known of an asset: its owner (or the anonymous
+   actor), the EXIF that stripping spares, attribution where there is
+   one (later read by ike itself when it archives others' posts),
+   similarity hashes later, its size. Metas live at `/trunk`. lux on
+   Danbooru's media asset page, the full EXIF dump: hard to justify. The
+   meta shows only what stripping kept (invariant 11), and whether a
+   meta has a page of its own or `/trunk` is only a list is open (Q38).
+3. **A tack:** an asset shown in a board post, tacked to the board. Not
+   a pinned post, which is held at the top of a board.
+4. **A curation:** an asset tagged, perhaps translated, with its
+   artist's commentary, and posted to the booru; what Danbooru calls a
+   post and ike has called an entry. It is missing its comment section:
+   a reverse board, as a wiki page's thread, with changes to its tags,
+   attribution and commentary (later translation notes) shown as diffs
+   between the comments.
+
+- **Uploads are public by default** (Q31): a staged asset is listed in
+  `/trunk`. An account may mark one private: still in the trunk, seen
+  only by its owner and moderators and up. A private asset may be
+  curated privately, as a comic tagged in full before it is released,
+  and a curation may later be embedded in a followers-only post
+  (ActivityPub).
+- **Moderators and up see every asset:** to them `/trunk` lists the
+  private metas as well.
+- **Not built:** this crosses invariant 10 ("A staged upload is served
+  to no one but its uploader") and G7's control, which are lux's words
+  in hazards.md. The wording proposed in questions.md (Q31) is needed
+  first.

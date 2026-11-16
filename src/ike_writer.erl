@@ -174,16 +174,23 @@ retract(Post, By) ->
     end.
 
 %% a wiki page written: made, if there is none by the name, else a new
-%% revision of it, but only on the revision it was made from: an edit
-%% made on an older one is refused (planning line 253 is open; Q35)
+%% revision on top of the newest, whatever revision the edit was opened
+%% on (lux: the first to save is the first edit, the rest stack on it,
+%% and a poster retracts one that undid another's). An account's edit
+%% right after its own revision, with nothing posted between, is folded
+%% into that revision instead, as git's amend does (lux: batching)
 -spec wiki(#{
-    name := binary(), actor := ike_id:actor(), body := binary(), base := pos_integer() | none
+    name := binary(), actor := ike_id:actor(), body := binary(), password => binary()
 }) ->
-    {ok, ike_id:post()} | {error, bad_text | {conflict, pos_integer()}} | error().
-wiki(#{name := Name, actor := Actor, body := Body, base := Base}) ->
-    case call({wiki, Name, ike_id:to_integer(Actor), Body, Base}) of
+    {ok, ike_id:post()} | {error, bad_text} | error().
+wiki(#{name := Name, actor := Actor, body := Body} = Edit) ->
+    Password =
+        case Edit of
+            #{password := Given} when byte_size(Given) > 0 -> sealed(Given);
+            _ -> undefined
+        end,
+    case call({wiki, Name, ike_id:to_integer(Actor), Body, Password}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
-        {error, {conflict, C}} when is_integer(C), C > 0 -> {error, {conflict, C}};
         Other -> failed(Other)
     end.
 
@@ -400,8 +407,11 @@ handle_call({post, Actor, Home, Body, Upload, Password, Title}, _From, Conn) whe
                 {error, bad_text}
         end,
     {reply, Reply, Conn};
-handle_call({wiki, Name, Actor, Body, Base}, _From, Conn) when
-    is_binary(Name), is_integer(Actor), is_binary(Body)
+handle_call({wiki, Name, Actor, Body, Password}, _From, Conn) when
+    is_binary(Name),
+    is_integer(Actor),
+    is_binary(Body),
+    (is_binary(Password) orelse Password =:= undefined)
 ->
     Reply =
         case text(Body) of
@@ -411,7 +421,7 @@ handle_call({wiki, Name, Actor, Body, Base}, _From, Conn) when
                 Time = erlang:system_time(second),
                 committed(
                     ike_db:transaction(Conn, fun() ->
-                        revised(Conn, Name, Actor, Body, Base, Time)
+                        revised(Conn, Name, Actor, Body, Password, Time)
                     end)
                 )
         end,
@@ -1364,24 +1374,21 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
             Error
     end.
 
--spec revised(ike_db:writer(), binary(), integer(), binary(), term(), integer()) ->
+-spec revised(ike_db:writer(), binary(), integer(), binary(), binary() | undefined, integer()) ->
     {ok, {integer(), [term()]}} | error().
-revised(Conn, Name, Actor, Body, Base, Time) ->
-    Current = <<
-        "SELECT max(p.id) FROM shown s JOIN post p ON p.id = s.id"
-        " WHERE s.thread = ?1 AND p.revision = 1"
-    >>,
+revised(Conn, Name, Actor, Body, Password, Time) ->
     %% the threads that point at the name: it is a page now
     Pointing = <<
         "SELECT DISTINCT p.thread FROM link l JOIN post p ON p.id = l.source WHERE l.name = ?1"
     >>,
     case ike_db:q(Conn, <<"SELECT thread FROM page WHERE name = ?1">>, [Name]) of
-        {ok, []} when Base =:= none ->
+        {ok, []} ->
             case post(Conn, Actor, {new, <<"wiki">>}, Time, Body) of
                 {ok, {Id, Threads}} ->
                     Steps = [
                         {<<"UPDATE post SET revision = 1, title = ?2 WHERE id = ?1">>, [Id, Name]},
                         {<<"INSERT INTO page (name, thread) VALUES (?1, ?2)">>, [Name, Id]}
+                        | sealing(Id, Password)
                     ],
                     case {steps(Conn, Steps), ike_db:q(Conn, Pointing, [Name])} of
                         {ok, {ok, Rows}} -> {ok, {Id, Threads ++ [T || [T] <- Rows]}};
@@ -1391,25 +1398,16 @@ revised(Conn, Name, Actor, Body, Base, Time) ->
                 {error, _} = Error ->
                     Error
             end;
-        {ok, []} ->
-            {error, no_such_page};
         {ok, [[Thread]]} when is_integer(Thread) ->
-            case ike_db:q(Conn, Current, [Thread]) of
-                {ok, [[Base]]} when is_integer(Base) ->
-                    case insert(Conn, Actor, Thread, Time, Body) of
-                        {ok, {Id, Threads}} ->
-                            Mark = <<"UPDATE post SET revision = 1, base = ?2 WHERE id = ?1">>,
-                            case ike_db:q(Conn, Mark, [Id, Base]) of
-                                {ok, _} -> {ok, {Id, Threads}};
-                                {error, _} = Error -> Error
-                            end;
-                        {error, _} = Error ->
-                            Error
+            case newest(Conn, Thread) of
+                {ok, {Base, Last}} when Actor =/= ?NOBODY, is_integer(Last), Base =:= Last ->
+                    case ike_db:q(Conn, <<"SELECT actor FROM post WHERE id = ?1">>, [Last]) of
+                        {ok, [[Actor]]} -> amended(Conn, Last, Thread, Body, Time);
+                        {ok, _} -> stacked(Conn, Actor, Thread, Body, Password, Base, Time);
+                        {error, _} = Error -> Error
                     end;
-                {ok, [[Newer]]} when is_integer(Newer) ->
-                    {error, {conflict, Newer}};
-                {ok, _} ->
-                    {error, no_such_page};
+                {ok, {Base, _}} ->
+                    stacked(Conn, Actor, Thread, Body, Password, Base, Time);
                 {error, _} = Error ->
                     Error
             end;
@@ -1418,6 +1416,106 @@ revised(Conn, Name, Actor, Body, Base, Time) ->
         {error, _} = Error ->
             Error
     end.
+
+%% a page's newest revision there to be shown (null if none is), and its
+%% thread's newest post
+-spec newest(ike_db:writer(), integer()) ->
+    {ok, {integer() | null, integer() | null}} | error().
+newest(Conn, Thread) ->
+    Sql = <<
+        "SELECT (SELECT max(p.id) FROM shown s JOIN post p ON p.id = s.id"
+        " WHERE s.thread = ?1 AND p.revision = 1),"
+        " (SELECT max(s.id) FROM shown s WHERE s.thread = ?1)"
+    >>,
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, [[Base, Last]]} when
+            (is_integer(Base) orelse Base =:= null), (is_integer(Last) orelse Last =:= null)
+        ->
+            {ok, {Base, Last}};
+        {ok, Rows} ->
+            {error, {unexpected, Rows}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% a revision on top of Base, whatever the edit was opened on
+-spec stacked(
+    ike_db:writer(),
+    integer(),
+    integer(),
+    binary(),
+    binary() | undefined,
+    integer() | null,
+    integer()
+) ->
+    {ok, {integer(), [term()]}} | error().
+stacked(Conn, Actor, Thread, Body, Password, Base, Time) ->
+    case insert(Conn, Actor, Thread, Time, Body) of
+        {ok, {Id, Threads}} ->
+            Mark = {<<"UPDATE post SET revision = 1, base = ?2 WHERE id = ?1">>, [Id, Base]},
+            case steps(Conn, [Mark | sealing(Id, Password)]) of
+                ok -> {ok, {Id, Threads}};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+%% the revision Id made over with the new text: its links read again from
+%% it, and the pages it pointed at before as well as those it points at
+%% now made again. its time is the edit's
+-spec amended(ike_db:writer(), integer(), integer(), binary(), integer()) ->
+    {ok, {integer(), [term()]}} | error().
+amended(Conn, Id, Thread, Body, Time) ->
+    Was = <<"SELECT booru FROM link WHERE source = ?1 AND booru IS NOT NULL">>,
+    case {touched(Conn, Id, Thread), ike_db:q(Conn, Was, [Id])} of
+        {{ok, {Id, Before}}, {ok, Entries0}} ->
+            Steps = [
+                {<<"DELETE FROM link WHERE source = ?1">>, [Id]},
+                {<<"UPDATE post SET body = ?2, time = ?3 WHERE id = ?1">>, [Id, Body, Time]}
+            ],
+            Entries = ike_text:entries(Body),
+            case
+                {
+                    steps(Conn, Steps),
+                    link(Conn, Id, ike_text:targets(Body)),
+                    entry_links(Conn, Id, Entries),
+                    page_links(Conn, Id, ike_text:pages(Body))
+                }
+            of
+                {ok, ok, ok, ok} ->
+                    case touched(Conn, Id, Thread) of
+                        {ok, {Id, After}} ->
+                            Booru = [{booru, E} || E <- Entries] ++ [{booru, E} || [E] <- Entries0],
+                            {ok, {Id, Before ++ After ++ Booru}};
+                        {ok, Other} ->
+                            {error, {unexpected, Other}};
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {{error, _} = Error, _, _, _} ->
+                    Error;
+                {_, {error, _} = Error, _, _} ->
+                    Error;
+                {_, _, {error, _} = Error, _} ->
+                    Error;
+                {_, _, _, {error, _} = Error} ->
+                    Error
+            end;
+        {{ok, Other}, _} ->
+            {error, {unexpected, Other}};
+        {{error, _} = Error, _} ->
+            Error;
+        {_, {error, _} = Error} ->
+            Error
+    end.
+
+%% the password a revision is retracted with, when one was given
+-spec sealing(integer(), binary() | undefined) -> [{binary(), [term()]}].
+sealing(_Id, undefined) ->
+    [];
+sealing(Id, Password) ->
+    [{<<"UPDATE post SET password = ?2 WHERE id = ?1">>, [Id, {blob, Password}]}].
 
 -spec steps(ike_db:writer(), [{binary(), [term()]}]) -> ok | error().
 steps(Conn, [{Sql, Args} | Rest]) ->

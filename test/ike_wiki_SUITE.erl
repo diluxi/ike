@@ -8,7 +8,9 @@
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
     started_and_read/1,
-    edited_on_its_revision/1,
+    edits_stack/1,
+    signed_edits_are_amended/1,
+    retracted_by_password/1,
     pointed_at_by_name/1,
     accounts_write/1,
     names/1,
@@ -21,7 +23,9 @@
 all() ->
     [
         started_and_read,
-        edited_on_its_revision,
+        edits_stack,
+        signed_edits_are_amended,
+        retracted_by_password,
         pointed_at_by_name,
         accounts_write,
         names,
@@ -35,25 +39,20 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ike_browser:stop().
 
-%% the edit form's base, as a browser would read it
-base(Config, Session, Name) ->
-    {200, _, Form} = request(Config, get, "/wiki/" ++ Name ++ "/edit", cookies(Session), none),
-    {match, [Base]} = re:run(Form, "name=\"base\" value=\"([^\"]+)\"", [
-        {capture, all_but_first, list}
-    ]),
-    Base.
+save(Config, Session, Name, Text) ->
+    save(Config, Session, Name, Text, []).
 
-save(Config, #{csrf := Csrf} = Session, Name, Base, Text) ->
-    Form = uri_string:compose_query([{"csrf", Csrf}, {"base", Base}, {"body", Text}]),
+%% an edit, unsigned unless Fields sign it
+save(Config, #{csrf := Csrf} = Session, Name, Text, Fields) ->
+    Form = uri_string:compose_query([{"csrf", Csrf}, {"body", Text} | Fields]),
     request(Config, post, "/wiki/" ++ Name ++ "/edit", cookies(Session), {form, Form}).
 
 started_and_read(Config) ->
     Session = login(Config, <<"wikier">>),
     {404, _, Missing} = request(Config, get, "/wiki/blue_hair", cookies(Session), none),
     {_, _} = binary:match(Missing, <<"start it">>),
-    "none" = base(Config, Session, "blue_hair"),
     {303, H, _} = save(
-        Config, Session, "blue_hair", "none", <<"hair that is blue.\nsee [[long_hair]].">>
+        Config, Session, "blue_hair", <<"hair that is blue.\nsee [[long_hair]].">>
     ),
     "/wiki/blue_hair" = proplists:get_value("location", H),
     {200, _, Page} = request(Config, get, "/wiki/blue_hair", [], none),
@@ -72,40 +71,107 @@ started_and_read(Config) ->
     %% the wiki's board starts no threads: a page does
     {404, _, _} = request(Config, get, "/board/wiki/new", cookies(Session), none).
 
-edited_on_its_revision(Config) ->
+edits_stack(Config) ->
     A = login(Config, <<"editor-a">>),
     B = login(Config, <<"editor-b">>),
-    {303, _, _} = save(Config, A, "long_hair", "none", <<"one\ntwo\nthree">>),
-    BaseA = base(Config, A, "long_hair"),
-    BaseB = base(Config, B, "long_hair"),
-    BaseA = BaseB,
-    {303, _, _} = save(Config, A, "long_hair", BaseA, <<"one\n2\nthree\nfour">>),
-    %% B edited the revision A replaced: refused, shown the page as it is
-    {409, _, Conflict} = save(Config, B, "long_hair", BaseB, <<"one\ntwo\nthree\nB's">>),
-    {_, _} = binary:match(Conflict, <<"the page changed while you edited it">>),
-    {_, _} = binary:match(Conflict, <<"four">>),
+    {303, _, _} = save(Config, A, "long_hair", <<"one\ntwo\nthree">>),
+    %% both open the page on its first revision; the first to save is the
+    %% next revision, and the other is stacked on it as it was written
+    {200, _, _} = request(Config, get, "/wiki/long_hair/edit", cookies(B), none),
+    {303, _, _} = save(Config, A, "long_hair", <<"one\n2\nthree\nfour">>),
+    {303, _, _} = save(Config, B, "long_hair", <<"one\ntwo\nthree\nB's">>),
     {200, _, Page} = request(Config, get, "/wiki/long_hair", [], none),
-    {_, _} = binary:match(Page, <<"four">>),
-    nomatch = binary:match(Page, <<"B&#39;s">>),
+    {_, _} = binary:match(Page, <<"B&#39;s">>),
+    nomatch = binary:match(Page, <<"four">>),
     %% the history is the page's thread, newest first, each revision as
-    %% what it changed
+    %% what it changed from the one before
     {303, Away, _} = request(Config, get, "/wiki/long_hair/history", [], none),
     "/board/wiki/" ++ _ = Thread = proplists:get_value("location", Away),
     {200, _, History} = request(Config, get, Thread, [], none),
     {_, _} = binary:match(History, <<"<ol reversed>">>),
     {_, _} = binary:match(History, <<"<h1>long_hair</h1>">>),
-    {_, _} = binary:match(History, <<"<details open><summary>+2 -1</summary>">>),
+    {_, _} = binary:match(History, <<"<details open><summary>+2 -2</summary>">>),
+    {_, _} = binary:match(History, <<"<details><summary>+2 -1</summary>">>),
     {_, _} = binary:match(History, <<"<details><summary>+3</summary>">>),
     {_, _} = binary:match(History, <<"<del>two</del>">>),
     {_, _} = binary:match(History, <<"<ins>2</ins>">>),
-    {_, _} = binary:match(History, <<"<ins>four</ins>">>),
+    {_, _} = binary:match(History, <<"<del>four</del>">>),
     %% a revision is a post, and each its own number
-    [[2]] = query(
+    [[3]] = query(
         Config,
         "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
         " WHERE pg.name = 'long_hair' AND p.revision = 1",
         []
     ).
+
+%% an account's edit right after its own signed revision is folded into
+%% it: one revision, its change from the one before, its time the
+%% newest. a post between, an unsigned edit or another account's is a
+%% revision of its own
+signed_edits_are_amended(Config) ->
+    A = login(Config, <<"amender">>),
+    B = login(Config, <<"other-amender">>),
+    Signed = [{"signed", "1"}],
+    Count = fun() ->
+        [[N]] = query(
+            Config,
+            "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
+            " WHERE pg.name = 'amended' AND p.revision = 1",
+            []
+        ),
+        N
+    end,
+    {303, _, _} = save(Config, A, "amended", <<"one">>, Signed),
+    {303, _, _} = save(Config, A, "amended", <<"one\ntwo">>, Signed),
+    1 = Count(),
+    {303, _, _} = save(Config, A, "amended", <<"one\ntwo\nthree">>, Signed),
+    1 = Count(),
+    {200, _, Page} = request(Config, get, "/wiki/amended", [], none),
+    {_, _} = binary:match(Page, <<"three">>),
+    {303, Away, _} = request(Config, get, "/wiki/amended/history", [], none),
+    Thread = proplists:get_value("location", Away),
+    {200, _, History} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(History, <<"<details open><summary>+3</summary>">>),
+    %% another account's signed edit is its own revision, and so is the
+    %% first account's after it
+    {303, _, _} = save(Config, B, "amended", <<"one\ntwo\nthree\nfour">>, Signed),
+    2 = Count(),
+    {303, _, _} = save(Config, A, "amended", <<"one\ntwo\nthree\nfour\nfive">>, Signed),
+    3 = Count(),
+    %% a talk post between, and the next edit is a revision again
+    {303, _, _} = ike_browser:post(Config, Thread ++ "/reply", A, <<"why five?">>),
+    {303, _, _} = save(Config, A, "amended", <<"one\ntwo\nthree\nfour\n5">>, Signed),
+    4 = Count(),
+    %% an unsigned edit is nobody's: never folded, nor folded into
+    {303, _, _} = save(Config, A, "amended", <<"6">>),
+    {303, _, _} = save(Config, A, "amended", <<"7">>),
+    6 = Count(),
+    {303, _, _} = save(Config, A, "amended", <<"8">>, Signed),
+    7 = Count().
+
+%% an unsigned edit is retracted with its password, and the page steps
+%% back to the revision under it
+retracted_by_password(Config) ->
+    Session = login(Config, <<"retractor">>),
+    {200, _, Form} = request(Config, get, "/wiki/undone/edit", cookies(Session), none),
+    {_, _} = binary:match(Form, <<"name=\"password\"">>),
+    {303, _, _} = save(Config, Session, "undone", <<"kept">>),
+    {303, _, _} = save(Config, Session, "undone", <<"mistaken">>, [{"password", "pw"}]),
+    [[Last]] = query(
+        Config,
+        "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'undone'",
+        []
+    ),
+    Act = uri_string:compose_query([
+        {"post", integer_to_list(Last)}, {"kind", "retract"}, {"password", "pw"}
+    ]),
+    {200, _, Said} = request(
+        Config, post, "/act", [{"origin", ?config(base, Config)}], {form, Act}
+    ),
+    {_, _} = binary:match(Said, <<": retracted">>),
+    {200, _, Page} = request(Config, get, "/wiki/undone", [], none),
+    {_, _} = binary:match(Page, <<"kept">>),
+    nomatch = binary:match(Page, <<"mistaken">>).
 
 pointed_at_by_name(Config) ->
     Session = login(Config, <<"namer">>),
@@ -119,7 +185,7 @@ pointed_at_by_name(Config) ->
     ),
     {_, _} = binary:match(Before, <<"<a href=\"/wiki/long_hair\">[[long_hair]]</a>">>),
     %% the page is started, and the post that pointed at it is made again
-    {303, _, _} = save(Config, Session, "short_hair", "none", <<"short.">>),
+    {303, _, _} = save(Config, Session, "short_hair", <<"short.">>),
     {200, _, After} = request(Config, get, Thread, [], none),
     {_, _} = binary:match(After, <<"<a href=\"/wiki/short_hair\">[[short_hair]]</a>">>).
 
@@ -127,15 +193,15 @@ accounts_write(Config) ->
     {200, _, Form} = request(Config, get, "/wiki/anyone/edit", [], none),
     {_, _} = binary:match(Form, <<"href=\"/login\"">>),
     {403, _, _} = request(
-        Config, post, "/wiki/anyone/edit", [], {form, "csrf=x&base=none&body=anything"}
+        Config, post, "/wiki/anyone/edit", [], {form, "csrf=x&body=anything"}
     ),
     Session = login(Config, <<"tokenless">>),
-    {403, _, _} = save(Config, Session#{csrf := "wrong"}, "anyone", "none", <<"x">>),
+    {403, _, _} = save(Config, Session#{csrf := "wrong"}, "anyone", <<"x">>),
     [[0]] = query(Config, "SELECT count(*) FROM page WHERE name = 'anyone'", []).
 
 names(Config) ->
     Session = login(Config, <<"spacer">>),
-    {303, H, _} = save(Config, Session, "Big%20Eyes", "none", <<"eyes.">>),
+    {303, H, _} = save(Config, Session, "Big%20Eyes", <<"eyes.">>),
     "/wiki/big_eyes" = proplists:get_value("location", H),
     [
         404 = element(1, request(Config, get, "/wiki/" ++ N, [], none))
@@ -145,8 +211,8 @@ names(Config) ->
 a_hidden_revision_steps_back(Config) ->
     Session = login(Config, <<"stepper">>),
     Moderator = login(Config, <<"wiki-mod">>, #{groups => [<<"ike-moderator">>]}),
-    {303, _, _} = save(Config, Session, "steps", "none", <<"first">>),
-    {303, _, _} = save(Config, Session, "steps", base(Config, Session, "steps"), <<"vandalised">>),
+    {303, _, _} = save(Config, Session, "steps", <<"first">>),
+    {303, _, _} = save(Config, Session, "steps", <<"vandalised">>),
     [[Last]] = query(
         Config,
         "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'steps'",
@@ -180,7 +246,7 @@ missing_pages_are_asked_for(Config) ->
     {_, _} = binary:match(Page, <<"<a class=\"missing\" href=\"/wiki/why%3F\">ask</a>">>),
     {404, _, Asked} = request(Config, get, "/wiki/doesn%27t_yet_exist", cookies(Session), none),
     {_, _} = binary:match(Asked, <<"href=\"/wiki/doesn%27t_yet_exist/edit\">start it">>),
-    {303, Made, _} = save(Config, Session, "why%3F", "none", <<"because.">>),
+    {303, Made, _} = save(Config, Session, "why%3F", <<"because.">>),
     "/wiki/why%3F" = proplists:get_value("location", Made),
     {200, _, Why} = request(Config, get, "/wiki/why%3F", [], none),
     {_, _} = binary:match(Why, <<"because.">>),

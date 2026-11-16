@@ -5,7 +5,7 @@
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
--export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/6, wiki_history/2]).
+-export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
 -export([style/0, script/0, user/2]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
@@ -446,23 +446,7 @@ post_form(Action, {nobody, Token, Password, Files}) ->
                 ])
                 | [files_field(still) || Files] ++
                     [
-                        ike_html:el(p, [
-                            ike_html:el(label, [{for, <<"password">>}], [
-                                ike_html:text(
-                                    <<"password, to retract it later; this browser keeps it ">>
-                                )
-                            ]),
-                            ike_html:el(
-                                input,
-                                [
-                                    {type, <<"text">>},
-                                    {id, <<"password">>},
-                                    {name, <<"password">>},
-                                    {value, Password}
-                                ],
-                                []
-                            )
-                        ]),
+                        password_field(Password),
                         ike_html:el(p, [
                             ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
                         ])
@@ -576,23 +560,7 @@ post_form(Action, {csrf, Csrf, Name, Staged, Password}) ->
                 ])
                 | Pick ++ [files_field(any)] ++ Signed ++
                     [
-                        ike_html:el(p, [
-                            ike_html:el(label, [{for, <<"password">>}], [
-                                ike_html:text(
-                                    <<"password, to retract it later; this browser keeps it ">>
-                                )
-                            ]),
-                            ike_html:el(
-                                input,
-                                [
-                                    {type, <<"text">>},
-                                    {id, <<"password">>},
-                                    {name, <<"password">>},
-                                    {value, Password}
-                                ],
-                                []
-                            )
-                        ]),
+                        password_field(Password),
                         ike_html:el(p, [
                             ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
                         ])
@@ -1198,25 +1166,24 @@ wiki_missing(Name, SignedIn) ->
         ])
     ]).
 
-%% the editing form, on the revision Base; with Theirs, the text that was
-%% refused because the page changed meanwhile, to be made again on it
--spec wiki_edit(binary(), binary(), binary() | none, binary(), binary(), binary() | none) ->
-    ike_html:html().
-wiki_edit(Name, Csrf, Signer, Base, Text, Theirs) ->
-    Conflict =
-        case Theirs of
-            none ->
-                [];
-            _ ->
-                [
-                    ike_html:el(p, [
-                        ike_html:text(
-                            <<"the page changed while you edited it. below is it now; yours was:">>
-                        )
-                    ]),
-                    ike_html:el(p, plain(binary:split(Theirs, <<"\n">>, [global])))
-                ]
-        end,
+%% where a poster gives the password a post is retracted with
+-spec password_field(binary()) -> ike_html:html().
+password_field(Password) ->
+    ike_html:el(p, [
+        ike_html:el(label, [{for, <<"password">>}], [
+            ike_html:text(<<"password, to retract it later; this browser keeps it ">>)
+        ]),
+        ike_html:el(
+            input,
+            [{type, <<"text">>}, {id, <<"password">>}, {name, <<"password">>}, {value, Password}],
+            []
+        )
+    ]).
+
+%% the editing form, on the page's text now; an unsigned edit is
+%% retracted with the password
+-spec wiki_edit(binary(), binary(), binary() | none, binary(), binary()) -> ike_html:html().
+wiki_edit(Name, Csrf, Signer, Text, Password) ->
     Sign =
         case Signer of
             none ->
@@ -1243,36 +1210,33 @@ wiki_edit(Name, Csrf, Signer, Base, Text, Theirs) ->
         end,
     layout(<<"editing ", Name/binary>>, [
         ike_html:el(h1, [ike_html:text(<<"editing ", Name/binary>>)])
-        | Conflict ++
-            [
-                ike_html:el(
-                    form,
-                    [{method, <<"post">>}, {action, <<(ike_wiki:path(Name))/binary, "/edit">>}],
-                    [
+        | [
+            ike_html:el(
+                form,
+                [{method, <<"post">>}, {action, <<(ike_wiki:path(Name))/binary, "/edit">>}],
+                [
+                    ike_html:el(
+                        input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
+                    ),
+                    ike_html:el(p, [
                         ike_html:el(
-                            input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
-                        ),
-                        ike_html:el(
-                            input, [{type, <<"hidden">>}, {name, <<"base">>}, {value, Base}], []
-                        ),
-                        ike_html:el(p, [
-                            ike_html:el(
-                                textarea, [{name, <<"body">>}, {rows, <<"20">>}, required], [
-                                    ike_html:text(Text)
-                                ]
-                            )
-                        ])
-                        | Sign ++
-                            [
-                                ike_html:el(p, [
-                                    ike_html:el(button, [{type, <<"submit">>}], [
-                                        ike_html:text(<<"save">>)
-                                    ])
-                                ])
+                            textarea, [{name, <<"body">>}, {rows, <<"20">>}, required], [
+                                ike_html:text(Text)
                             ]
-                    ]
-                )
-            ]
+                        )
+                    ])
+                    | Sign ++
+                        [
+                            password_field(Password),
+                            ike_html:el(p, [
+                                ike_html:el(button, [{type, <<"submit">>}], [
+                                    ike_html:text(<<"save">>)
+                                ])
+                            ])
+                        ]
+                ]
+            )
+        ]
     ]).
 
 %% each revision, newest first, as lines kept, added and taken away

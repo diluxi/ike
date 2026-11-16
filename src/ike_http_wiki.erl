@@ -59,20 +59,21 @@ signed_in(Req) ->
         error -> false
     end.
 
-%% the form, with the text it is opened on and that revision's number
+%% the form, with the page's text as it is now
 -spec editor(binary(), cowboy_req:req()) -> cowboy_req:req().
-editor(Name, Req) ->
-    case ike_http_login:session(Req) of
+editor(Name, Req0) ->
+    case ike_http_login:session(Req0) of
         {ok, _, #{csrf := Csrf, name := Signer}} ->
-            {Base, Text} =
+            Text =
                 case ike_reader:page(Name) of
-                    {ok, #{revision := R, body := B}} -> {integer_to_binary(R), B};
-                    none -> {<<"none">>, <<>>}
+                    {ok, #{body := B}} -> B;
+                    none -> <<>>
                 end,
-            ike_http:page(200, ike_view:wiki_edit(Name, Csrf, Signer, Base, Text, none), Req);
+            {Password, Req} = ike_http_post:kept_password(Req0),
+            ike_http:page(200, ike_view:wiki_edit(Name, Csrf, Signer, Text, Password), Req);
         error ->
             ike_http:page(
-                200, ike_view:post_form(<<(ike_wiki:path(Name))/binary, "/edit">>, locked), Req
+                200, ike_view:post_form(<<(ike_wiki:path(Name))/binary, "/edit">>, locked), Req0
             )
     end.
 
@@ -86,33 +87,24 @@ write(Name, Req0) ->
             case byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf) of
                 true ->
                     Body = trimmed(maps:get(<<"body">>, Form, <<>>)),
-                    Base =
-                        case string:to_integer(maps:get(<<"base">>, Form, <<>>)) of
-                            {B, <<>>} when is_integer(B), B > 0 -> B;
-                            _ -> none
-                        end,
                     %% unsigned unless asked, as a post is
                     Actor =
                         case Form of
                             #{<<"signed">> := <<"1">>} when is_binary(Signer) -> Account;
                             _ -> ike_id:anonymous()
                         end,
-                    case
-                        ike_writer:wiki(#{name => Name, actor => Actor, body => Body, base => Base})
-                    of
+                    Edit = #{name => Name, actor => Actor, body => Body},
+                    Password =
+                        case Form of
+                            #{<<"password">> := P} when byte_size(P) > 0, byte_size(P) =< 256 ->
+                                #{password => P};
+                            _ ->
+                                #{}
+                        end,
+                    case ike_writer:wiki(maps:merge(Edit, Password)) of
                         {ok, _} ->
                             _ = ike_render:sync(),
                             ike_http:see_other(ike_wiki:path(Name), Req);
-                        {error, {conflict, _}} ->
-                            %% the page changed meanwhile: its text now, and
-                            %% the edit, to be made again on it (Q35)
-                            {Now, Text} =
-                                case ike_reader:page(Name) of
-                                    {ok, #{revision := R, body := T}} -> {integer_to_binary(R), T};
-                                    none -> {<<"none">>, <<>>}
-                                end,
-                            Html = ike_view:wiki_edit(Name, Csrf, Signer, Now, Text, Body),
-                            ike_http:page(409, Html, Req);
                         {error, bad_text} ->
                             Html = ike_view:message(
                                 <<"not saved">>,
