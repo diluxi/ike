@@ -13,11 +13,13 @@
     | body
     | br
     | button
+    | del
     | details
     | footer
     | form
     | h1
     | img
+    | ins
     | head
     | header
     | html
@@ -149,11 +151,13 @@ tag(article) -> <<"article">>;
 tag(body) -> <<"body">>;
 tag(br) -> <<"br">>;
 tag(button) -> <<"button">>;
+tag(del) -> <<"del">>;
 tag(details) -> <<"details">>;
 tag(footer) -> <<"footer">>;
 tag(form) -> <<"form">>;
 tag(h1) -> <<"h1">>;
 tag(img) -> <<"img">>;
+tag(ins) -> <<"ins">>;
 tag(head) -> <<"head">>;
 tag(header) -> <<"header">>;
 tag(html) -> <<"html">>;

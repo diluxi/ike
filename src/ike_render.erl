@@ -254,7 +254,8 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
 
 %% the posts this thread's posts point at, those that are there to be
 %% shown, and the board each is on
--spec links(ike_db:reader(), integer()) -> #{integer() | {booru, integer()} => binary()}.
+-spec links(ike_db:reader(), integer()) ->
+    #{integer() | {booru, integer()} | {page, binary()} => binary()}.
 links(Conn, Thread) ->
     Sql = <<
         "SELECT DISTINCT l.post, b.name FROM post s"
@@ -262,6 +263,28 @@ links(Conn, Thread) ->
         " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " WHERE s.thread = ?1"
     >>,
+    %% the names they point at: a page, else a tag
+    Names = <<
+        "SELECT DISTINCT l.name,"
+        " EXISTS (SELECT 1 FROM page pg JOIN shown s2 ON s2.thread = pg.thread"
+        " JOIN post p2 ON p2.id = s2.id WHERE pg.name = l.name AND p2.revision = 1),"
+        " EXISTS (SELECT 1 FROM tag WHERE name = l.name)"
+        " FROM post s JOIN link l ON l.source = s.id WHERE s.thread = ?1 AND l.name IS NOT NULL"
+    >>,
+    Named =
+        case ike_db:q(Conn, Names, [Thread]) of
+            {ok, NRows} ->
+                #{
+                    {page, N} =>
+                        case IsPage of
+                            1 -> <<"page">>;
+                            _ -> <<"tag">>
+                        end
+                 || [N, IsPage, IsTag] <- NRows, is_binary(N), IsPage =:= 1 orelse IsTag =:= 1
+                };
+            {error, NReason} ->
+                error({render, Thread, NReason})
+        end,
     %% and the entries they point at that are there to be shown
     Entries = <<
         "SELECT DISTINCT l.booru FROM post s JOIN link l ON l.source = s.id"
@@ -270,8 +293,11 @@ links(Conn, Thread) ->
     case {ike_db:q(Conn, Sql, [Thread]), ike_db:q(Conn, Entries, [Thread])} of
         {{ok, Rows}, {ok, Shown}} ->
             maps:merge(
-                #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)},
-                #{{booru, E} => <<>> || [E] <- Shown, is_integer(E)}
+                maps:merge(
+                    #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)},
+                    #{{booru, E} => <<>> || [E] <- Shown, is_integer(E)}
+                ),
+                Named
             );
         {{error, Reason}, _} ->
             error({render, Thread, Reason});

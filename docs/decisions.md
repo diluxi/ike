@@ -884,3 +884,30 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   Caddy serves `.webm` and `.mp4` from it.
 - *Not yet:* GIF (planning lists it with video), duration on the page,
   the moderator's page showing the video.
+
+## M3: the wiki, first slice (2026-11-16, before launch on lux's word)
+
+- **A page is a thread on the board `wiki`,** its first post the first
+  revision (planning, Model). An edit is a reply holding the page's
+  whole new text, marked `revision`, with the revision it was made on in
+  `base`; other replies are the discussion, at `/board/wiki/N`. `page`
+  maps a name to its thread. A page reads as its newest shown revision,
+  so hiding a revision steps the page back.
+- **Names** are tag names (spaces become `_`) that do not start with a
+  dot, since a name may become a file's.
+- **Accounts write** (anonymous edits are proposals, M4), unsigned unless
+  "sign" is ticked, as posts. An edit on a revision that is no longer the
+  newest is refused with the page as it now is and the refused text, to
+  be made again (planning line 253 is open: reject or merge; Q35).
+- **`[[name]]`** links to the page; with no page but a tag by that name,
+  to the tag's search; else it reads as every other link to nothing.
+  Kept in `link.name`; starting a page re-renders the threads that
+  pointed at its name.
+- **History** shows each revision against the one before, newest first,
+  by lines (`ins`, `del`), from a longest-common-subsequence diff made
+  when the page is shown, as planning has it.
+- *Simplification:* pages, history and the index are made per request,
+  not written as files as planning has current pages; reverse links of a
+  page (what points at it) are not shown yet.
+- *Not yet:* renames and redirects, tag pages, the threaded view,
+  promoting a reply to a thread or a page.

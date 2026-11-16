@@ -94,6 +94,9 @@ here.
   (line 190): it shows its own asset, which is the version it posted.
   Who may tag before proposals (M4): to be stubbed as accounts, with a
   history of who changed what.
+- **Q35 Wiki edit conflicts** (planning line 253): an edit made on a
+  revision that is no longer the newest is refused for now, with both
+  texts shown. A three-way merge instead?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

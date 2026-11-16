@@ -180,7 +180,7 @@ boards_keep_their_threads(Config) ->
      || B <- [<<"href=\"/board/b\"">>, <<"href=\"/board/meta\"">>]
     ],
     [[<<"b">>, 1], [<<"meta">>, 1]] = query(
-        Config, "SELECT name, locked FROM board WHERE log = 0 ORDER BY name", []
+        Config, "SELECT name, locked FROM board WHERE log = 0 AND wiki = 0 ORDER BY name", []
     ).
 
 only_boards_there_are(Config) ->

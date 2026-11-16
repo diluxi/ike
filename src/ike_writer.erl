@@ -6,7 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
--export([report/2, dismiss/1, tag/3]).
+-export([report/2, dismiss/1, tag/3, wiki/1]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -163,6 +163,20 @@ retract(Post, By) ->
     case Allowed of
         true -> done(call({retract, N, Who}));
         false -> {error, not_yours}
+    end.
+
+%% a wiki page written: made, if there is none by the name, else a new
+%% revision of it, but only on the revision it was made from: an edit
+%% made on an older one is refused (planning line 253 is open; Q35)
+-spec wiki(#{
+    name := binary(), actor := ike_id:actor(), body := binary(), base := pos_integer() | none
+}) ->
+    {ok, ike_id:post()} | {error, bad_text | {conflict, pos_integer()}} | error().
+wiki(#{name := Name, actor := Actor, body := Body, base := Base}) ->
+    case call({wiki, Name, ike_id:to_integer(Actor), Body, Base}) of
+        {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
+        {error, {conflict, C}} when is_integer(C), C > 0 -> {error, {conflict, C}};
+        Other -> failed(Other)
     end.
 
 %% an account adds and takes away an entry's tags; the history keeps who
@@ -359,6 +373,22 @@ handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
                 end;
             false ->
                 {error, bad_text}
+        end,
+    {reply, Reply, Conn};
+handle_call({wiki, Name, Actor, Body, Base}, _From, Conn) when
+    is_binary(Name), is_integer(Actor), is_binary(Body)
+->
+    Reply =
+        case text(Body) of
+            false ->
+                {error, bad_text};
+            true ->
+                Time = erlang:system_time(second),
+                committed(
+                    ike_db:transaction(Conn, fun() ->
+                        revised(Conn, Name, Actor, Body, Base, Time)
+                    end)
+                )
         end,
     {reply, Reply, Conn};
 handle_call({tag, Entry, Actor, Add, Remove}, _From, Conn) when
@@ -1309,6 +1339,70 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
             Error
     end.
 
+-spec revised(ike_db:writer(), binary(), integer(), binary(), term(), integer()) ->
+    {ok, {integer(), [term()]}} | error().
+revised(Conn, Name, Actor, Body, Base, Time) ->
+    Current = <<
+        "SELECT max(p.id) FROM shown s JOIN post p ON p.id = s.id"
+        " WHERE s.thread = ?1 AND p.revision = 1"
+    >>,
+    %% the threads that point at the name: it is a page now
+    Pointing = <<
+        "SELECT DISTINCT p.thread FROM link l JOIN post p ON p.id = l.source WHERE l.name = ?1"
+    >>,
+    case ike_db:q(Conn, <<"SELECT thread FROM page WHERE name = ?1">>, [Name]) of
+        {ok, []} when Base =:= none ->
+            case post(Conn, Actor, {new, <<"wiki">>}, Time, Body) of
+                {ok, {Id, Threads}} ->
+                    Steps = [
+                        {<<"UPDATE post SET revision = 1 WHERE id = ?1">>, [Id]},
+                        {<<"INSERT INTO page (name, thread) VALUES (?1, ?2)">>, [Name, Id]}
+                    ],
+                    case {steps(Conn, Steps), ike_db:q(Conn, Pointing, [Name])} of
+                        {ok, {ok, Rows}} -> {ok, {Id, Threads ++ [T || [T] <- Rows]}};
+                        {{error, _} = Error, _} -> Error;
+                        {_, {error, _} = Error} -> Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end;
+        {ok, []} ->
+            {error, no_such_page};
+        {ok, [[Thread]]} when is_integer(Thread) ->
+            case ike_db:q(Conn, Current, [Thread]) of
+                {ok, [[Base]]} when is_integer(Base) ->
+                    case insert(Conn, Actor, Thread, Time, Body) of
+                        {ok, {Id, Threads}} ->
+                            Mark = <<"UPDATE post SET revision = 1, base = ?2 WHERE id = ?1">>,
+                            case ike_db:q(Conn, Mark, [Id, Base]) of
+                                {ok, _} -> {ok, {Id, Threads}};
+                                {error, _} = Error -> Error
+                            end;
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {ok, [[Newer]]} when is_integer(Newer) ->
+                    {error, {conflict, Newer}};
+                {ok, _} ->
+                    {error, no_such_page};
+                {error, _} = Error ->
+                    Error
+            end;
+        {ok, _} ->
+            {error, no_such_page};
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec steps(ike_db:writer(), [{binary(), [term()]}]) -> ok | error().
+steps(Conn, [{Sql, Args} | Rest]) ->
+    case ike_db:q(Conn, Sql, Args) of
+        {ok, _} -> steps(Conn, Rest);
+        {error, _} = Error -> Error
+    end;
+steps(_Conn, []) ->
+    ok.
+
 %% tags on, tags off, and a line in the history saying what changed; an
 %% entry out of sight is not tagged
 -spec tagged(ike_db:writer(), integer(), integer(), [term()], [term()]) ->
@@ -1868,21 +1962,39 @@ insert(Conn, Actor, Home, Time, Body) ->
     case ike_db:q(Conn, Insert, [Home, Actor, Time, Body]) of
         {ok, [[Id]]} when is_integer(Id) ->
             Entries = ike_text:entries(Body),
-            case {link(Conn, Id, ike_text:targets(Body)), entry_links(Conn, Id, Entries)} of
-                {ok, ok} ->
+            case
+                {
+                    link(Conn, Id, ike_text:targets(Body)),
+                    entry_links(Conn, Id, Entries),
+                    page_links(Conn, Id, ike_text:pages(Body))
+                }
+            of
+                {ok, ok, ok} ->
                     case touched(Conn, Id, Home) of
                         {ok, {Id, Threads}} -> {ok, {Id, Threads ++ [{booru, E} || E <- Entries]}};
                         Other -> Other
                     end;
-                {{error, _} = Error, _} ->
+                {{error, _} = Error, _, _} ->
                     Error;
-                {_, {error, _} = Error} ->
+                {_, {error, _} = Error, _} ->
+                    Error;
+                {_, _, {error, _} = Error} ->
                     Error
             end;
         {ok, Rows} ->
             {error, {unexpected, Rows}};
         {error, _} = Error ->
             Error
+    end.
+
+%% [[name]], kept as links too: a page made later is found pointed at
+-spec page_links(ike_db:writer(), integer(), [binary()]) -> ok | error().
+page_links(_Conn, _Source, []) ->
+    ok;
+page_links(Conn, Source, [Name | Names]) ->
+    case ike_db:q(Conn, <<"INSERT INTO link (source, name) VALUES (?1, ?2)">>, [Source, Name]) of
+        {ok, _} -> page_links(Conn, Source, Names);
+        {error, _} = Error -> Error
     end.
 
 %% ##N, kept as links too: an entry's page shows who points at it

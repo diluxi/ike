@@ -3,7 +3,7 @@
 %% shows, so the two cannot disagree about what is a link (hazard d1).
 -module(ike_text).
 
--export([parse/1, targets/1, entries/1]).
+-export([parse/1, targets/1, entries/1, pages/1]).
 -export_type([piece/0]).
 
 %% a post may point at this many others; what comes after is only text.
@@ -19,7 +19,9 @@
     %% >>>/board/N
     | {post, Board :: binary(), pos_integer()}
     %% ##N, a booru entry
-    | {booru, pos_integer()}.
+    | {booru, pos_integer()}
+    %% [[name]], a wiki page, or a tag
+    | {page, binary()}.
 
 %% the text as lines, each as its pieces
 -spec parse(binary()) -> [[piece()]].
@@ -44,7 +46,13 @@ targets([[] | Lines], Seen) -> targets(Lines, Seen);
 targets([[{post, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N => []});
 targets([[{post, _, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N => []});
 targets([[{text, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
-targets([[{booru, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen).
+targets([[{booru, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
+targets([[{page, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen).
+
+%% every page name the text points at, once each
+-spec pages(binary()) -> [binary()].
+pages(Body) ->
+    maps:keys(#{N => [] || Line <- parse(Body), {page, N} <- Line, is_binary(N)}).
 
 %% every booru entry the text points at, once each
 -spec entries(binary()) -> [pos_integer()].
@@ -68,6 +76,16 @@ line(<<">>>/", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
                 none -> skip(All, Text, Pieces, Left)
             end;
         none ->
+            skip(All, Text, Pieces, Left)
+    end;
+line(<<"[[", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
+    case binary:split(Rest, <<"]]">>) of
+        [Inside, Rest1] when byte_size(Inside) =< 64 ->
+            case ike_wiki:name(Inside) of
+                {ok, Name} -> line(Rest1, <<>>, [{page, Name} | text(Text, Pieces)], Left - 1);
+                error -> skip(All, Text, Pieces, Left)
+            end;
+        _ ->
             skip(All, Text, Pieces, Left)
     end;
 line(<<"##", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->

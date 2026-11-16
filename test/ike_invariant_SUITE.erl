@@ -357,6 +357,9 @@ inv02_works_without_scripts(Config) ->
         {get, "/booru", []},
         {get, "/booru/1", []},
         {get, "/booru/search?tags=a+-b+c*", []},
+        {get, "/wiki", []},
+        {get, "/wiki/nothing_yet", []},
+        {get, "/wiki/nothing_yet/edit", Cookies},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
         {post, "/board/b/new", []}
@@ -582,7 +585,9 @@ inv04_text_is_escaped(Config) ->
             "/board/b/1/reply?x=" ++ Attack,
             "/upload?x=" ++ Attack,
             "/account?x=" ++ Attack,
-            "/booru/search?tags=" ++ Attack
+            "/booru/search?tags=" ++ Attack,
+            "/wiki/" ++ Attack,
+            "/wiki/" ++ Attack ++ "/history"
         ]
     ).
 
@@ -1564,6 +1569,10 @@ known_routes() ->
         [<<"booru">>, booru],
         [<<"booru">>, <<"search">>],
         [<<"booru">>, booru, <<"tags">>],
+        [<<"wiki">>],
+        [<<"wiki">>, name],
+        [<<"wiki">>, name, <<"edit">>],
+        [<<"wiki">>, name, <<"history">>],
         [<<"mod">>, <<"booru">>, booru],
         [<<"mod">>, <<"report">>, report],
         [<<"login">>],
@@ -1597,6 +1606,7 @@ known_tables(Config) ->
         [<<"booru_version">>],
         [<<"link">>],
         [<<"migration">>],
+        [<<"page">>],
         [<<"post">>],
         [<<"post_image">>],
         [<<"report">>],
@@ -1725,12 +1735,14 @@ known_tag(Name) ->
         <<"body">>,
         <<"br">>,
         <<"button">>,
+        <<"del">>,
         <<"details">>,
         <<"footer">>,
         <<"form">>,
         <<"h1">>,
         <<"head">>,
         <<"img">>,
+        <<"ins">>,
         <<"header">>,
         <<"html">>,
         <<"input">>,

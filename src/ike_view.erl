@@ -5,6 +5,7 @@
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
+-export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/6, wiki_history/2]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -15,7 +16,7 @@
     time := integer(),
     body := binary(),
     name := {account | nobody | role, binary()},
-    links := #{integer() | {booru, pos_integer()} => binary()},
+    links := #{integer() | {booru, integer()} | {page, binary()} => binary()},
     replies := [integer()],
     images => [image() | gone]
 }.
@@ -243,13 +244,21 @@ permalink(Post, Board) ->
 gone(Text) ->
     ike_html:el(span, [{class, <<"gone">>}], [ike_html:text(Text)]).
 
--spec piece(ike_text:piece(), #{integer() | {booru, integer()} => binary()}) -> ike_html:html().
+-spec piece(ike_text:piece(), #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+    ike_html:html().
 piece({text, Text}, _Links) ->
     ike_html:text(Text);
 piece({post, N}, Links) ->
     case Links of
         #{N := _} -> permalink(N, <<>>);
         _ -> gone(<<">>", (integer_to_binary(N))/binary>>)
+    end;
+piece({page, Name}, Links) ->
+    Text = <<"[[", Name/binary, "]]">>,
+    case Links of
+        #{{page, Name} := <<"page">>} -> anchor(<<"/wiki/", Name/binary>>, Text);
+        #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Text);
+        _ -> gone(Text)
     end;
 piece({booru, N}, Links) ->
     Text = <<"##", (integer_to_binary(N))/binary>>,
@@ -306,7 +315,8 @@ index() ->
         ike_html:el(h1, [ike_html:text(<<"ike">>)]),
         ike_html:el(ul, [
             ike_html:el(li, [anchor(<<"/board">>, <<"board">>)]),
-            ike_html:el(li, [anchor(<<"/booru">>, <<"booru">>)])
+            ike_html:el(li, [anchor(<<"/booru">>, <<"booru">>)]),
+            ike_html:el(li, [anchor(<<"/wiki">>, <<"wiki">>)])
         ])
     ]).
 
@@ -1020,6 +1030,165 @@ entries(Entries) ->
         ])
     ]).
 
+%% the wiki's pages, by name
+-spec wiki_index([binary()]) -> ike_html:html().
+wiki_index(Names) ->
+    layout(<<"wiki">>, [
+        ike_html:el(h1, [ike_html:text(<<"wiki">>)]),
+        ike_html:el(ul, [ike_html:el(li, [anchor(<<"/wiki/", N/binary>>, N)]) || N <- Names])
+    ]).
+
+%% a page as it now reads, and the ways to its history, its editing and
+%% its discussion
+-spec wiki_page(
+    binary(),
+    #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()},
+    #{integer() | {booru, integer()} | {page, binary()} => binary()}
+) -> ike_html:html().
+wiki_page(Name, #{thread := Thread, revision := Revision, time := Time, body := Body}, Links) ->
+    Stamp = stamp(Time),
+    layout(Name, [
+        ike_html:el(h1, [ike_html:text(Name)]),
+        ike_html:el(p, lines(ike_text:parse(Body), Links)),
+        ike_html:el(p, [
+            ike_html:text(<<"as of ">>),
+            permalink(Revision, <<>>),
+            ike_html:text(<<", ">>),
+            ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
+        ]),
+        ike_html:el(
+            p,
+            spaced([
+                anchor(<<"/wiki/", Name/binary, "/edit">>, <<"edit">>),
+                anchor(<<"/wiki/", Name/binary, "/history">>, <<"history">>),
+                anchor(<<"/board/wiki/", (integer_to_binary(Thread))/binary>>, <<"discussion">>)
+            ])
+        )
+    ]).
+
+%% a name with no page yet
+-spec wiki_missing(binary(), SignedIn :: boolean()) -> ike_html:html().
+wiki_missing(Name, SignedIn) ->
+    layout(Name, [
+        ike_html:el(h1, [ike_html:text(Name)]),
+        ike_html:el(p, [
+            ike_html:text(<<"no page by this name yet. ">>),
+            case SignedIn of
+                true -> anchor(<<"/wiki/", Name/binary, "/edit">>, <<"start it">>);
+                false -> anchor(<<"/login">>, <<"log in to start it">>)
+            end
+        ])
+    ]).
+
+%% the editing form, on the revision Base; with Theirs, the text that was
+%% refused because the page changed meanwhile, to be made again on it
+-spec wiki_edit(binary(), binary(), binary() | none, binary(), binary(), binary() | none) ->
+    ike_html:html().
+wiki_edit(Name, Csrf, Signer, Base, Text, Theirs) ->
+    Conflict =
+        case Theirs of
+            none ->
+                [];
+            _ ->
+                [
+                    ike_html:el(p, [
+                        ike_html:text(
+                            <<"the page changed while you edited it. below is it now; yours was:">>
+                        )
+                    ]),
+                    ike_html:el(p, plain(binary:split(Theirs, <<"\n">>, [global])))
+                ]
+        end,
+    Sign =
+        case Signer of
+            none ->
+                [];
+            _ ->
+                [
+                    ike_html:el(p, [
+                        ike_html:el(
+                            input,
+                            [
+                                {type, <<"checkbox">>},
+                                {id, <<"signed">>},
+                                {name, <<"signed">>},
+                                {value, <<"1">>}
+                            ],
+                            []
+                        ),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(label, [{for, <<"signed">>}], [
+                            ike_html:text(<<"sign as ", Signer/binary>>)
+                        ])
+                    ])
+                ]
+        end,
+    layout(<<"editing ", Name/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<"editing ", Name/binary>>)])
+        | Conflict ++
+            [
+                ike_html:el(
+                    form, [{method, <<"post">>}, {action, <<"/wiki/", Name/binary, "/edit">>}], [
+                        ike_html:el(
+                            input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
+                        ),
+                        ike_html:el(
+                            input, [{type, <<"hidden">>}, {name, <<"base">>}, {value, Base}], []
+                        ),
+                        ike_html:el(p, [
+                            ike_html:el(
+                                textarea, [{name, <<"body">>}, {rows, <<"20">>}, required], [
+                                    ike_html:text(Text)
+                                ]
+                            )
+                        ])
+                        | Sign ++
+                            [
+                                ike_html:el(p, [
+                                    ike_html:el(button, [{type, <<"submit">>}], [
+                                        ike_html:text(<<"save">>)
+                                    ])
+                                ])
+                            ]
+                    ]
+                )
+            ]
+    ]).
+
+%% each revision, newest first, as lines kept, added and taken away
+-spec wiki_history(binary(), [{pos_integer(), integer(), [ike_wiki:change()]}]) -> ike_html:html().
+wiki_history(Name, Revisions) ->
+    layout(<<Name/binary, " history">>, [
+        ike_html:el(h1, [ike_html:text(<<Name/binary, " history">>)]),
+        ike_html:el(p, [anchor(<<"/wiki/", Name/binary>>, Name)]),
+        ike_html:el(ol, [
+            ike_html:el(li, [
+                ike_html:el(p, [
+                    permalink(Id, <<>>),
+                    ike_html:text(<<" ">>),
+                    ike_html:el(time, [{datetime, stamp(T)}], [ike_html:text(stamp(T))])
+                ]),
+                ike_html:el(p, changes(Changes))
+            ])
+         || {Id, T, Changes} <- Revisions
+        ])
+    ]).
+
+-spec changes([ike_wiki:change()]) -> [ike_html:html()].
+changes([{Kind, Line} | Rest]) ->
+    Piece =
+        case Kind of
+            same -> ike_html:text(Line);
+            added -> ike_html:el(ins, [ike_html:text(Line)]);
+            removed -> ike_html:el(del, [ike_html:text(Line)])
+        end,
+    case Rest of
+        [] -> [Piece];
+        _ -> [Piece, ike_html:el(br, []) | changes(Rest)]
+    end;
+changes([]) ->
+    [].
+
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().
 message(Title, Text) ->
@@ -1044,7 +1213,7 @@ anchor(Href, Text) ->
     ike_html:el(a, [{href, Href}], [ike_html:text(Text)]).
 
 %% each line's pieces, with a br between lines
--spec lines([[ike_text:piece()]], #{integer() | {booru, integer()} => binary()}) ->
+-spec lines([[ike_text:piece()]], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
     [ike_html:html()].
 lines([], _Links) ->
     [];

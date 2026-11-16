@@ -6,7 +6,7 @@
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
--export([entry_state/1, search/1]).
+-export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -177,6 +177,55 @@ search(Query) ->
             []
     end.
 
+%% a wiki page as it now reads: its thread, its newest shown revision
+-spec page(Name :: binary()) ->
+    {ok, #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()}}
+    | none.
+page(Name) ->
+    case gen_server:call(?MODULE, {page, Name}) of
+        {ok, [[Thread, Revision, Time, Body]]} when
+            is_integer(Thread),
+            Thread > 0,
+            is_integer(Revision),
+            Revision > 0,
+            is_integer(Time),
+            is_binary(Body)
+        ->
+            {ok, #{thread => Thread, revision => Revision, time => Time, body => Body}};
+        _ ->
+            none
+    end.
+
+%% a page's shown revisions, oldest first
+-spec revisions(Name :: binary()) -> [{pos_integer(), integer(), binary()}].
+revisions(Name) ->
+    case gen_server:call(?MODULE, {revisions, Name}) of
+        {ok, Rows} when is_list(Rows) ->
+            [{Id, T, B} || [Id, T, B] <- Rows, is_integer(Id), Id > 0, is_integer(T), is_binary(B)];
+        _ ->
+            []
+    end.
+
+%% the pages there are to read, by name
+-spec pages() -> [binary()].
+pages() ->
+    case gen_server:call(?MODULE, pages) of
+        {ok, Rows} when is_list(Rows) -> [N || [N] <- Rows, is_binary(N)];
+        _ -> []
+    end.
+
+%% for a text shown per request: which of its links lead somewhere, as
+%% the renderer's map has them
+-spec links(binary()) -> #{integer() | {booru, integer()} | {page, binary()} => binary()}.
+links(Body) ->
+    Posts = ike_text:targets(Body),
+    Entries = ike_text:entries(Body),
+    Names = ike_text:pages(Body),
+    case gen_server:call(?MODULE, {links, Posts, Entries, Names}) of
+        {ok, Map} when is_map(Map) -> maps:from_list(narrow(maps:to_list(Map)));
+        _ -> #{}
+    end.
+
 %% an entry's state, for a moderator
 -spec entry_state(Entry :: integer()) -> {ok, shown | hidden | trashed} | none.
 entry_state(Entry) ->
@@ -339,6 +388,45 @@ handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
     %% only ever itself
     Args = Must ++ Not ++ [<<"\"", P/binary, "\"*">> || P <- Prefixes, is_binary(P)],
     {reply, ike_db:q(Conn, Sql, Args), Conn};
+handle_call({page, Name}, _From, Conn) when is_binary(Name) ->
+    Sql = <<
+        "SELECT pg.thread, p.id, p.time, p.body FROM page pg JOIN shown s ON s.thread = pg.thread"
+        " JOIN post p ON p.id = s.id WHERE pg.name = ?1 AND p.revision = 1"
+        " ORDER BY p.id DESC LIMIT 1"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Name]), Conn};
+handle_call({revisions, Name}, _From, Conn) when is_binary(Name) ->
+    Sql = <<
+        "SELECT p.id, p.time, p.body FROM page pg JOIN shown s ON s.thread = pg.thread"
+        " JOIN post p ON p.id = s.id WHERE pg.name = ?1 AND p.revision = 1 ORDER BY p.id"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Name]), Conn};
+handle_call(pages, _From, Conn) ->
+    Sql = <<
+        "SELECT pg.name FROM page pg WHERE EXISTS (SELECT 1 FROM shown s JOIN post p ON p.id = s.id"
+        " WHERE s.thread = pg.thread AND p.revision = 1) ORDER BY pg.name"
+    >>,
+    {reply, ike_db:q(Conn, Sql, []), Conn};
+handle_call({links, Posts, Entries, Names}, _From, Conn) when
+    is_list(Posts), is_list(Entries), is_list(Names)
+->
+    Where = <<
+        "SELECT b.name FROM shown p JOIN thread t ON t.root = p.thread"
+        " JOIN board b ON b.id = t.board WHERE p.id = ?1"
+    >>,
+    Map = maps:from_list(
+        [
+            {P, B}
+         || P <- Posts, {ok, [[B]]} <- [ike_db:q(Conn, Where, [P])], is_binary(B)
+        ] ++
+            [
+                {{booru, E}, <<>>}
+             || E <- Entries,
+                {ok, [_]} <- [ike_db:q(Conn, <<"SELECT 1 FROM shown_entry WHERE id = ?1">>, [E])]
+            ] ++
+            [{{page, N}, kind_of_name(Conn, N)} || N <- Names]
+    ),
+    {reply, {ok, Map}, Conn};
 handle_call({entry_state, Entry}, _From, Conn) when is_integer(Entry) ->
     {reply, ike_db:q(Conn, <<"SELECT state FROM booru WHERE id = ?1">>, [Entry]), Conn};
 handle_call(reports, _From, Conn) ->
@@ -395,6 +483,34 @@ handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
     {reply, {ike_db:q(Conn, Sql, [Post]), ike_db:q(Conn, Images, [Post])}, Conn};
 handle_call(_Request, _From, Conn) ->
     {reply, {error, bad_request}, Conn}.
+
+-spec narrow([{term(), term()}]) ->
+    [{integer() | {booru, integer()} | {page, binary()}, binary()}].
+narrow([{K, V} | Rest]) when is_integer(K), is_binary(V) -> [{K, V} | narrow(Rest)];
+narrow([{{booru, E}, V} | Rest]) when is_integer(E), is_binary(V) ->
+    [{{booru, E}, V} | narrow(Rest)];
+narrow([{{page, N}, V} | Rest]) when is_binary(N), is_binary(V) -> [{{page, N}, V} | narrow(Rest)];
+narrow([_ | Rest]) ->
+    narrow(Rest);
+narrow([]) ->
+    [].
+
+%% what [[name]] leads to: a page, else a tag, else nothing
+-spec kind_of_name(ike_db:reader(), term()) -> binary() | none.
+kind_of_name(Conn, Name) ->
+    Page = <<
+        "SELECT 1 FROM page pg JOIN shown s ON s.thread = pg.thread JOIN post p ON p.id = s.id"
+        " WHERE pg.name = ?1 AND p.revision = 1 LIMIT 1"
+    >>,
+    case ike_db:q(Conn, Page, [Name]) of
+        {ok, [_]} ->
+            <<"page">>;
+        _ ->
+            case ike_db:q(Conn, <<"SELECT 1 FROM tag WHERE name = ?1">>, [Name]) of
+                {ok, [_]} -> <<"tag">>;
+                _ -> none
+            end
+    end.
 
 -spec handle_cast(term(), ike_db:reader()) -> {noreply, ike_db:reader()}.
 handle_cast(_Request, Conn) ->

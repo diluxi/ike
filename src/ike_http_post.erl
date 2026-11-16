@@ -24,6 +24,8 @@ init(Req, State) ->
                 %% the log is written by ike alone
                 case {ike_reader:board(Board), cowboy_req:method(Req)} of
                     {log, _} -> ike_http:not_found(Req);
+                    %% a thread on the wiki is a page: started at /wiki/NAME
+                    {_, _} when Board =:= <<"wiki">>, Thread =:= new -> ike_http:not_found(Req);
                     {_, <<"GET">>} -> form(Place, Req);
                     {_, <<"POST">>} -> submit(Place, Req);
                     _ -> ike_http:reply(405, Req)
