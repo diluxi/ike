@@ -4,7 +4,7 @@
 -export([data_dir/0, db_path/0, pages_dir/0, session_seconds/0, oidc/0]).
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0, hold_seconds/0]).
--export([assets_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
+-export([assets_dir/0, media_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
 -export_type([oidc/0, limit/0, strip/0]).
 
 %% the stripper's socket, and the caps it was started with: ike reads no
@@ -169,6 +169,15 @@ pages_dir() ->
 -spec assets_dir() -> binary().
 assets_dir() ->
     <<(data_dir())/binary, "/assets">>.
+
+%% what the media origin serves: copies of the assets shown, derived and
+%% made again at start, so it may live apart from the state
+-spec media_dir() -> binary().
+media_dir() ->
+    case application:get_env(ike, media_dir) of
+        {ok, Dir} when is_binary(Dir) -> Dir;
+        _ -> <<(data_dir())/binary, "/media">>
+    end.
 
 -spec strip() -> strip().
 strip() ->

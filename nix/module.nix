@@ -6,6 +6,9 @@
 	# derived from the database and rebuilt at every start, hence a cache.
 	# apart from the state, so that caddy can read pages and nothing else
 	pages = "/var/cache/ike/pages";
+	# the files of shown posts' images: derived from the state as pages
+	# are, made again at every start, and read by caddy for the media host
+	media = "/var/cache/ike/media";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
 	csp = "default-src 'none'; img-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -23,6 +26,7 @@
 				{listen, #{ip => {127, 0, 0, 1}, port => ${toString cfg.port}}},
 				{data_dir, <<"/var/lib/ike">>},
 				{pages_dir, <<"${pages}">>},
+				{media_dir, <<"${media}">>},
 				{backup_seconds, ${toString cfg.backup.interval}},
 				{backup_keep, ${toString cfg.backup.keep}},
 				{boards, [${lib.concatStringsSep ", " (lib.mapAttrsToList
@@ -329,8 +333,9 @@ in {
 
 		services.caddy = lib.mkIf cfg.caddy.enable {
 			enable = true;
-			# the media origin: staged uploads through ike, and nothing else yet.
-			# no cookie is ever set here, and nothing it serves may run
+			# the media origin: staged uploads through ike, and the files of
+			# shown posts from disk. no cookie is ever set here, and nothing
+			# it serves may run
 			virtualHosts.${cfg.media.origin} = {
 				logFormat = null;
 				extraConfig = ''
@@ -344,6 +349,11 @@ in {
 					}
 					handle /staged/* {
 						reverse_proxy 127.0.0.1:${toString cfg.port}
+					}
+					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|thumb\.webp)$
+					handle @file {
+						root * ${media}
+						file_server
 					}
 					handle {
 						respond 404

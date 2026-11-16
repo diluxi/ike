@@ -259,6 +259,30 @@ inv02_works_without_scripts(Config) ->
     {200, _, Staged} = ike_browser:request(Config, get, "/upload", Cookies, none),
     {_, _} = binary:match(Staged, <<"<img src=\"http://media.test/staged/">>),
     scriptless(Staged),
+    %% and posting it: the reply form offers it as a radio button
+    {200, _, WithUpload} = ike_browser:request(Config, get, Reply, Cookies, none),
+    {match, [Picked]} = re:run(
+        WithUpload,
+        "<input type=\"radio\" id=\"u[0-9]+\" name=\"upload\" value=\"([0-9]+)\">",
+        [{capture, all_but_first, binary}]
+    ),
+    {match, PostHidden} = re:run(
+        WithUpload,
+        "<input type=\"hidden\" name=\"([^\"]+)\" value=\"([^\"]*)\"",
+        [global, {capture, all_but_first, binary}]
+    ),
+    PostFields = [{N, V} || [N, V] <- PostHidden] ++ [{<<"body">>, <<>>}, {<<"upload">>, Picked}],
+    {303, _, _} = ike_browser:request(
+        Config, post, Reply, Cookies, {form, uri_string:compose_query(PostFields)}
+    ),
+    {200, _, Pictured} = ike_browser:request(Config, get, Thread, [], none),
+    {match, [Shown]} = re:run(
+        Pictured,
+        "<img src=\"(http://media\\.test/[0-9a-f]{64}\\.thumb\\.webp)\"",
+        [{capture, all_but_first, list}]
+    ),
+    scriptless(Pictured),
+    {200, _, _} = ike_browser:media(Config, Shown),
     %% logged out, the same pages say how to log in, with a link
     {200, _, Anonymous} = ike_browser:request(Config, get, "/board/b/new", [], none),
     {_, _} = binary:match(Anonymous, <<"href=\"/login\"">>),
@@ -360,6 +384,7 @@ inv03_one_writer(Config) ->
         {ike_render, {file, rename}},
         {ike_render, {file, write_file}},
         {ike_render, {filelib, ensure_path}},
+        {ike_writer, {file, copy}},
         {ike_writer, {file, delete}},
         {ike_writer, {file, rename}},
         {ike_writer, {file, write_file}},
@@ -379,7 +404,7 @@ inv03_one_writer(Config) ->
     %% and from outside: the database is one file with its wal beside it,
     %% in a directory nothing else of ike's is written to
     Top = lists:sort(element(2, file:list_dir(?config(dir, Config)))),
-    [] = Top -- ["assets", "backups", "ike.db", "ike.db-shm", "ike.db-wal", "pages"].
+    [] = Top -- ["assets", "backups", "ike.db", "ike.db-shm", "ike.db-wal", "media", "pages"].
 
 %% 4. Every text node is escaped by construction, in static and
 %% per-request renderers alike.
@@ -557,6 +582,32 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         ]
     ),
     Before = ike_browser:posts(Config),
+    %% a posted image's file is on the media origin and not on this one
+    Png = read(?config(data_dir, Config), "base.png"),
+    {303, _, _} = ike_browser:upload(Config, Session, [{<<"p.png">>, Png}]),
+    [[Mine]] = ike_browser:query(
+        Config,
+        "SELECT max(u.id) FROM upload u JOIN actor a ON a.id = u.actor WHERE a.subject = 'uploader'",
+        []
+    ),
+    {303, Where, _} = ike_browser:post(
+        Config, "/board/b/new", Session, <<"with a picture">>, [
+            {<<"upload">>, integer_to_binary(Mine)}
+        ]
+    ),
+    {200, _, Page} = ike_browser:request(
+        Config, get, hd(string:split(proplists:get_value("location", Where), "#")), [], none
+    ),
+    {match, [Full]} = re:run(
+        Page, "<a href=\"http://media\\.test(/[0-9a-f]{64}\\.png)\">", [
+            {capture, all_but_first, list}
+        ]
+    ),
+    {200, _, Png2} = ike_browser:media(Config, "http://media.test" ++ Full),
+    true = byte_size(Png2) > 0,
+    {404, _, _} = ike_browser:request(Config, get, Full, [], none),
+    {404, _, _} = ike_browser:request(Config, get, Full, Cookies, none),
+    Before2 = ike_browser:posts(Config),
     %% what is served is html or plain text, typed as such and not sniffed
     lists:foreach(
         fun(Path) ->
@@ -567,6 +618,7 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         end,
         ["/", "/board/b/new", "/health", "/nothing", "/upload"]
     ),
+    Before2 = ike_browser:posts(Config),
     %% and the tree the web server reads from holds pages, nothing else
     Pages = files(filename:join(?config(dir, Config), "pages")),
     [_ | _] = Pages,
@@ -1124,9 +1176,10 @@ outside(Config) ->
 known_routes() ->
     [{Media, [], MediaRoutes}, {'_', [], Routes}] =
         maps:get(dispatch, maps:get(env, ranch:get_protocol_options(ike_http))),
-    %% the media origin answers staged uploads and nothing else
+    %% the media origin answers staged uploads and the files of shown
+    %% posts, and nothing else
     [<<"media">>, <<"test">>] = lists:reverse(Media),
-    ['_', [<<"staged">>, upload, expires, sig], [<<"staged">>, upload, expires, sig, part]] =
+    ['_', [file], [<<"staged">>, upload, expires, sig], [<<"staged">>, upload, expires, sig, part]] =
         lists:sort([Path || {Path, _, _, _} <- MediaRoutes]),
     Paths = lists:sort([Path || {Path, _, _, _} <- Routes]),
     Paths = lists:sort([

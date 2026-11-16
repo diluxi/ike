@@ -8,7 +8,7 @@
 
 -export([start/2, stop/0, restart/0]).
 -export([login/2, login/3, begin_login/1, expect/3, callback/3, claims/3, id_token/4]).
--export([post/4, sign/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
+-export([post/4, post/5, sign/4, cookies/1, request/5, set_cookie/2, cookie_attributes/2]).
 -export([query/3, posts/1, page_file/2, unlock/2, form/3, anonymous/4]).
 -export([upload/3, multipart/1, media/2, media_host/0]).
 

@@ -168,9 +168,10 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     >>,
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
-        "SELECT p.id, p.time, p.body, a.name, b.log, m.role FROM shown p"
-        " JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
+        "SELECT p.id, p.time, p.body, a.name, b.log, m.role, x.hash, x.type, x.width, x.height"
+        " FROM shown p JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
+        " LEFT JOIN asset x ON x.hash = p.asset"
         " WHERE p.thread = ?1 ORDER BY p.id"
     >>,
     case ike_db:q(Conn, Where, [Thread]) of
@@ -187,9 +188,10 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                             body => Body,
                             name => name(Name0, Id, Names, Log, Role),
                             links => Links,
-                            replies => maps:get(Id, Replies, [])
+                            replies => maps:get(Id, Replies, []),
+                            image => image(Hash, Type, W, H)
                         }
-                     || [Id, Time, Body, Name0, Log, Role] <- Rows,
+                     || [Id, Time, Body, Name0, Log, Role, Hash, Type, W, H] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)
@@ -262,6 +264,21 @@ name(_, Id, [First | _] = Names, _, _) ->
         Name when is_binary(Name) -> {nobody, Name};
         _ -> {nobody, First}
     end.
+
+-spec image(term(), term(), term(), term()) -> ike_view:image() | none.
+image(Hash, Type, W, H) when
+    is_binary(Hash), is_binary(Type), is_integer(W), is_integer(H)
+->
+    Hex = binary:encode_hex(Hash, lowercase),
+    #{
+        file => ike_media:url(Hex, Type),
+        thumb => ike_media:thumb_url(Hex),
+        type => Type,
+        width => W,
+        height => H
+    };
+image(_, _, _, _) ->
+    none.
 
 -spec render_board(#state{}, binary()) -> ok.
 render_board(#state{conn = Conn, dir = Dir}, Name) ->

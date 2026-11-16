@@ -639,3 +639,22 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   stay until the sweeper (M2); anonymous uploads (I4's switch) are not
   built; a signed link is a bearer credential for its lifetime, as G7
   accepts.
+
+## Posting images (M1, step 6)
+
+- **A post takes one staged upload of its account's,** picked on the post
+  form by radio button; posting marks it posted and sets the post's
+  asset, in the same transaction. Someone else's upload, or one already
+  posted, is refused and nothing is written. A post with an image may
+  have no text.
+- **The media origin's files are the assets of shown posts and no
+  others:** `<hash>.<ext>` and `<hash>.thumb.webp`, copied from the
+  assets by the writer after a commit that may change what is shown
+  (a post, or any rung of the ladder), removed when nothing shown uses
+  them, and made again whole at start. Derived like the pages, so they
+  live in the cache directory, where Caddy reads them for the media
+  host; without Caddy, ike serves them there.
+- **Pages show the thumbnail** linking to the whole file, both on the
+  media origin, with the type and size as the image's text.
+- *Simplifications:* one image per post; the board index shows no
+  thumbnails; the anonymous post form offers no uploads (I4's switch).

@@ -58,6 +58,14 @@ for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "Me
 machine.succeed("curl -fsS http://localhost/upload | grep -q 'log in'")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/staged/1/9999999999/x) = 404")
 machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/board) = 404")
+machine.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -H 'Host: media.localhost' http://localhost/" + "0" * 64 + ".png) = 404")
+machine.succeed("su -s /bin/sh caddy -c 'test -d /var/cache/ike/media'")
+# (a file put where ike would put one is served, typed by its name; the
+# writer would take it away again at the next start)
+machine.succeed("install -m 0640 -o ike -g ike /etc/ike-test/base.png /var/cache/ike/media/" + "a" * 64 + ".png")
+machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i '^content-type: image/png'")
+machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i \"^content-security-policy: default-src 'none'; sandbox\"")
+machine.succeed("rm /var/cache/ike/media/" + "a" * 64 + ".png")
 machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; img-src http://media.localhost;\"")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")

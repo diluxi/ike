@@ -34,6 +34,7 @@ dispatch() ->
         {Media, [
             {"/staged/:upload/:expires/:sig/[:part]", [{upload, int}, {expires, int}],
                 ike_http_media, []},
+            {"/:file", ike_http_media, public},
             {'_', ike_http_media, []}
         ]},
         {'_', [

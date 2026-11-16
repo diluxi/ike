@@ -14,7 +14,10 @@
     actor := ike_id:actor(),
     %% a reply's thread, or the board an op starts one on
     thread := {new, Board :: binary()} | ike_id:post(),
-    body := binary()
+    body := binary(),
+    %% a staged upload of the account's, which the post shows; the post
+    %% may then have no text
+    upload => {Account :: ike_id:actor(), Upload :: pos_integer()}
 }.
 
 %% what a moderator does, and to what: a post by its number, an account
@@ -37,7 +40,9 @@
     gone := [{Board :: binary(), Root :: integer()}],
     boards := [binary()],
     drop := [integer()],
-    scrub := boolean()
+    scrub := boolean(),
+    %% assets whose being shown may have changed
+    assets := [binary()]
 }.
 
 %% long enough for a write queued behind a few others; a caller that gives
@@ -69,14 +74,21 @@ local_actor(Issuer, Subject, Nick) ->
     end.
 
 -spec post(new_post()) ->
-    {ok, ike_id:post()} | {error, bad_text | no_such_thread | no_such_board} | error().
-post(#{actor := Actor, thread := Thread, body := Body}) ->
+    {ok, ike_id:post()}
+    | {error, bad_text | no_such_thread | no_such_board | no_such_upload}
+    | error().
+post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
     Home =
         case Thread of
             {new, Board} -> {new, Board};
             _ -> ike_id:to_integer(Thread)
         end,
-    case call({post, ike_id:to_integer(Actor), Home, Body}) of
+    Upload =
+        case Post of
+            #{upload := {Account, Staged}} -> {ike_id:to_integer(Account), Staged};
+            _ -> none
+        end,
+    case call({post, ike_id:to_integer(Actor), Home, Body, Upload}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
@@ -165,6 +177,7 @@ init([]) ->
                         ok ->
                             ok = swept(Conn),
                             ok = unkept(Conn),
+                            ok = republished(Conn),
                             _ = erlang:send_after(tick(), self(), held),
                             {ok, Conn};
                         {error, Reason} ->
@@ -218,21 +231,38 @@ handle_call({local_actor, Issuer, Subject, Nick}, _From, Conn) when
                 Other
         end,
     {reply, Reply, Conn};
-handle_call({post, Actor, Home, Body}, _From, Conn) when
+handle_call({post, Actor, Home, Body, Upload}, _From, Conn) when
     is_integer(Actor), is_binary(Body)
 ->
+    %% a post with an image may say nothing else
+    Fits = text(Body) orelse (Upload =/= none andalso Body =:= <<>>),
     Reply =
-        case text(Body) of
+        case Fits of
             true ->
                 Time = erlang:system_time(second),
-                committed(
-                    ike_db:transaction(Conn, fun() ->
-                        case open(Conn, Home) of
-                            ok -> post(Conn, Actor, Home, Time, Body);
-                            {error, _} = Error -> Error
-                        end
-                    end)
-                );
+                Result = ike_db:transaction(Conn, fun() ->
+                    case open(Conn, Home) of
+                        ok ->
+                            case post(Conn, Actor, Home, Time, Body) of
+                                {ok, {Id, Threads}} when is_integer(Id) ->
+                                    case attach(Conn, Id, Upload, Time) of
+                                        {ok, Assets} -> {ok, {Id, Threads, Assets}};
+                                        {error, _} = Error -> Error
+                                    end;
+                                Other ->
+                                    Other
+                            end;
+                        {error, _} = Error ->
+                            Error
+                    end
+                end),
+                case Result of
+                    {ok, {Id, Threads, Assets}} when is_list(Assets) ->
+                        ok = published(Conn, [A || A <- Assets, is_binary(A)]),
+                        committed({ok, {Id, Threads}});
+                    Other ->
+                        Other
+                end;
             false ->
                 {error, bad_text}
         end,
@@ -413,9 +443,10 @@ moderated(Conn, Who, Kind, Target, Reason) ->
                     act(Conn, Who, Kind, Target, Reason, Time)
                 end)
             of
-                {ok, #{threads := T, gone := G, boards := B, drop := D, scrub := S}} when
-                    is_list(T), is_list(G), is_list(B), is_list(D), is_boolean(S)
+                {ok, #{threads := T, gone := G, boards := B, drop := D, scrub := S, assets := A}} when
+                    is_list(T), is_list(G), is_list(B), is_list(D), is_boolean(S), is_list(A)
                 ->
+                    ok = published(Conn, [H || H <- A, is_binary(H)]),
                     followed(Conn, T, G, B, D, S);
                 {error, _} = Error ->
                     Error;
@@ -752,7 +783,7 @@ there(Conn, Sql, Key, Missing) ->
 
 -spec effects() -> effects().
 effects() ->
-    #{threads => [], gone => [], boards => [], drop => [], scrub => false}.
+    #{threads => [], gone => [], boards => [], drop => [], scrub => false, assets => []}.
 
 -spec logged({ok, [term()]} | error(), effects()) -> {ok, effects()} | error().
 logged({ok, Threads}, #{threads := Others} = Effects) ->
@@ -802,8 +833,12 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
         " WHERE l.source IN (SELECT id FROM these)"
     >>,
     Text = <<(ike_role:to_binary(Kind))/binary, " >>", (integer_to_binary(Post))/binary>>,
-    case ike_db:q(Conn, Around, [Post, Thread]) of
-        {ok, Rows} ->
+    Pictured = <<
+        "SELECT asset FROM post WHERE (id = ?1 OR (?1 = ?2 AND thread = ?2))"
+        " AND asset IS NOT NULL"
+    >>,
+    case {ike_db:q(Conn, Around, [Post, Thread]), ike_db:q(Conn, Pictured, [Post, Thread])} of
+        {{ok, Rows}, {ok, Assets}} ->
             case log(Conn, Who, Kind, Text, Reason, Time, {Post, undefined, undefined}) of
                 {ok, Logged} ->
                     case changed(Conn, Post, Thread, To) of
@@ -818,7 +853,8 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                                 gone => Gone,
                                 boards => [Board],
                                 drop => [],
-                                scrub => To =:= purge
+                                scrub => To =:= purge,
+                                assets => [A || [A] <- Assets, is_binary(A)]
                             }};
                         {error, _} = Error ->
                             Error
@@ -826,8 +862,115 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                 {error, _} = Error ->
                     Error
             end;
+        {{error, _} = Error, _} ->
+            Error;
+        {_, {error, _} = Error} ->
+            Error
+    end.
+
+%% a staged upload of the account's, given to the post: posted now, and
+%% its asset the post's
+-spec attach(ike_db:writer(), integer(), term(), integer()) ->
+    {ok, [binary()]} | error().
+attach(_Conn, _Post, none, _Time) ->
+    {ok, []};
+attach(Conn, Post, {Account, Upload}, Time) when is_integer(Account), is_integer(Upload) ->
+    Take = <<
+        "UPDATE upload SET posted = ?3 WHERE id = ?1 AND actor = ?2 AND posted IS NULL"
+        " RETURNING asset"
+    >>,
+    case ike_db:q(Conn, Take, [Upload, Account, Time]) of
+        {ok, [[Hash]]} when is_binary(Hash) ->
+            case
+                ike_db:q(Conn, <<"UPDATE post SET asset = ?1 WHERE id = ?2">>, [{blob, Hash}, Post])
+            of
+                {ok, _} -> {ok, [Hash]};
+                {error, _} = Error -> Error
+            end;
+        {ok, _} ->
+            {error, no_such_upload};
         {error, _} = Error ->
             Error
+    end;
+attach(_Conn, _Post, _Upload, _Time) ->
+    {error, bad_request}.
+
+%% the media origin's files are the assets some shown post shows, and
+%% no others: each asset named is copied there or taken away to match.
+%% derived, like the pages, and made again whole at start
+-spec published(ike_db:writer(), [binary()]) -> ok.
+published(Conn, [Hash | Hashes]) ->
+    Sql = <<
+        "SELECT x.type, EXISTS (SELECT 1 FROM shown s WHERE s.asset = x.hash)"
+        " FROM asset x WHERE x.hash = ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [{blob, Hash}]) of
+        {ok, [[Type, Shown]]} when is_binary(Type) -> publish(Hash, Type, Shown =:= 1);
+        {ok, _} -> publish(Hash, <<>>, false);
+        {error, _} -> ok
+    end,
+    published(Conn, Hashes);
+published(_Conn, []) ->
+    ok.
+
+-spec publish(binary(), binary(), boolean()) -> ok.
+publish(Hash, Type, Shown) ->
+    Hex = binary:encode_hex(Hash, lowercase),
+    From = ike_config:assets_dir(),
+    To = ike_config:media_dir(),
+    ok = copied(From, To, Hex, ike_media:file(Hex, Type), Shown),
+    copied(From, To, <<Hex/binary, ".thumb">>, ike_media:thumb(Hex), Shown).
+
+%% one file of the media origin's, there if it is shown and not if not
+-spec copied(binary(), binary(), binary(), binary(), boolean()) -> ok.
+copied(From, To, Source, Name, true) ->
+    Path = <<To/binary, "/", Name/binary>>,
+    case filelib:is_regular(Path) of
+        true ->
+            ok;
+        false ->
+            Tmp = <<Path/binary, ".tmp">>,
+            _ = filelib:ensure_path(To),
+            case file:copy(<<From/binary, "/", Source/binary>>, Tmp) of
+                {ok, _} -> _ = file:rename(Tmp, Path);
+                {error, _} -> _ = file:delete(Tmp)
+            end,
+            ok
+    end;
+copied(_From, To, _Source, Name, false) ->
+    _ = file:delete(<<To/binary, "/", Name/binary>>),
+    ok.
+
+-spec kept_name(term(), #{binary() => true}) -> boolean().
+kept_name(Name, Keep) when is_binary(Name) ->
+    case ike_media:parse(Name) of
+        {ok, Hex, _} -> maps:is_key(Hex, Keep);
+        error -> false
+    end;
+kept_name(_, _) ->
+    false.
+
+%% at start: the media origin's files made to match what is shown
+-spec republished(ike_db:writer()) -> ok.
+republished(Conn) ->
+    case ike_db:q(Conn, <<"SELECT DISTINCT asset FROM shown WHERE asset IS NOT NULL">>, []) of
+        {ok, Rows} ->
+            Shown = [H || [H] <- Rows, is_binary(H)],
+            ok = published(Conn, Shown),
+            Keep = #{binary:encode_hex(H, lowercase) => true || H <- Shown},
+            Dir = ike_config:media_dir(),
+            case file:list_dir(Dir) of
+                {ok, Files} ->
+                    [
+                        file:delete(filename:join(Dir, F))
+                     || F <- Files, not kept_name(unicode:characters_to_binary(F), Keep)
+                    ],
+                    ok;
+                {error, _} ->
+                    ok
+            end;
+        {error, _} ->
+            ok
     end.
 
 -spec changed(

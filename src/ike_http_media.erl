@@ -1,13 +1,42 @@
 %% The media origin, as far as ike answers it: staged uploads, to whoever
-%% holds a link the uploader's page made (invariant 10). Never reached by
-%% ike's own host: the router gives this handler the media host alone, so
-%% no byte of an upload is ever served from the main origin (invariant 5).
+%% holds a link the uploader's page made (invariant 10), and the files of
+%% shown posts when no web server in front serves them from disk. Never
+%% reached by ike's own host: the router gives this handler the media
+%% host alone, so no byte of an upload is ever served from the main
+%% origin (invariant 5).
 -module(ike_http_media).
 -behaviour(cowboy_handler).
 
 -export([init/2]).
 
 -spec init(cowboy_req:req(), State) -> {ok, cowboy_req:req(), State}.
+init(Req, public = State) ->
+    Reply =
+        case {cowboy_req:method(Req), cowboy_req:binding(file, Req)} of
+            {Method, Name} when
+                (Method =:= <<"GET">> orelse Method =:= <<"HEAD">>), is_binary(Name)
+            ->
+                case ike_media:parse(Name) of
+                    {ok, _, Mime} ->
+                        case
+                            file:read_file(<<(ike_config:media_dir())/binary, "/", Name/binary>>)
+                        of
+                            {ok, Bytes} ->
+                                Headers = (headers())#{
+                                    <<"content-type">> => Mime,
+                                    <<"cache-control">> => <<"public, max-age=31536000, immutable">>
+                                },
+                                cowboy_req:reply(200, Headers, Bytes, Req);
+                            {error, _} ->
+                                missing(Req)
+                        end;
+                    error ->
+                        missing(Req)
+                end;
+            _ ->
+                missing(Req)
+        end,
+    {ok, Reply, State};
 init(Req, State) ->
     Reply =
         case

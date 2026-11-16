@@ -43,8 +43,12 @@ form({Board, _} = Place, Req) ->
     case exists(Place) of
         true ->
             case ike_http_login:session(Req) of
-                {ok, _Id, #{csrf := Csrf, name := Name}} ->
-                    Who = {csrf, Csrf, Name},
+                {ok, _Id, #{actor := Actor, csrf := Csrf, name := Name}} ->
+                    Staged = [
+                        {U, ike_staged:url(U, thumb)}
+                     || #{id := U} <- ike_reader:staged(ike_id:to_integer(Actor))
+                    ],
+                    Who = {csrf, Csrf, Name, Staged},
                     ike_http:page(200, ike_view:post_form(action(Place), Who), Req);
                 error ->
                     case ike_reader:board(Board) of
@@ -110,7 +114,7 @@ nobody({Board, _} = Place, Req0) ->
 unhurried({Board, _} = Place, Body, Req) ->
     case ike_limit:board(Board) of
         ok ->
-            write(Place, ike_id:anonymous(), Body, Req);
+            write(Place, ike_id:anonymous(), Body, #{}, Req);
         limited ->
             Html = ike_view:message(
                 <<"slow down">>,
@@ -138,9 +142,20 @@ submit(Place, Req0) ->
                                     #{<<"signed">> := <<"1">>} when is_binary(Name) -> Account;
                                     _ -> ike_id:anonymous()
                                 end,
+                            Upload =
+                                case string:to_integer(maps:get(<<"upload">>, Form, <<>>)) of
+                                    {U, <<>>} when is_integer(U), U > 0 ->
+                                        #{upload => {Account, U}};
+                                    _ ->
+                                        #{}
+                                end,
                             case exists(Place) of
-                                true -> write(Place, Actor, maps:get(<<"body">>, Form, <<>>), Req);
-                                false -> ike_http:not_found(Req)
+                                true ->
+                                    write(
+                                        Place, Actor, maps:get(<<"body">>, Form, <<>>), Upload, Req
+                                    );
+                                false ->
+                                    ike_http:not_found(Req)
                             end;
                         false ->
                             ike_http:forbidden(Req)
@@ -154,8 +169,14 @@ submit(Place, Req0) ->
             nobody(Place, Req0)
     end.
 
--spec write(place(), ike_id:actor(), binary(), cowboy_req:req()) -> cowboy_req:req().
-write({Board, Thread} = Place, Actor, Body0, Req) ->
+-spec write(
+    place(),
+    ike_id:actor(),
+    binary(),
+    #{upload => {ike_id:actor(), pos_integer()}},
+    cowboy_req:req()
+) -> cowboy_req:req().
+write({Board, Thread} = Place, Actor, Body0, Upload, Req) ->
     %% forms send lines as crlf
     Body = trim_end(binary:replace(Body0, <<"\r\n">>, <<"\n">>, [global])),
     Home =
@@ -163,7 +184,7 @@ write({Board, Thread} = Place, Actor, Body0, Req) ->
             new -> {new, Board};
             _ -> Thread
         end,
-    case ike_writer:post(#{actor => Actor, thread => Home, body => Body}) of
+    case ike_writer:post(Upload#{actor => Actor, thread => Home, body => Body}) of
         {ok, Post} ->
             %% the page is there before the browser is sent to it
             _ = ike_render:sync(),
@@ -178,6 +199,11 @@ write({Board, Thread} = Place, Actor, Body0, Req) ->
             Html = ike_view:message(
                 <<"not posted">>,
                 <<"a post is text: not empty, not too long, no control characters.">>
+            ),
+            ike_http:page(400, Html, Req);
+        {error, no_such_upload} ->
+            Html = ike_view:message(
+                <<"not posted">>, <<"that upload is not one of yours waiting to be posted.">>
             ),
             ike_http:page(400, Html, Req);
         {error, Missing} when Missing =:= no_such_thread; Missing =:= no_such_board ->

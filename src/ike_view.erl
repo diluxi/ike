@@ -4,7 +4,7 @@
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export([moderation/3, moderated/3, upload/3, upload_locked/0]).
--export_type([post/0, summary/0, board/0, held/0]).
+-export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
 %% links: the posts the text points at that are there, and their boards
@@ -15,7 +15,16 @@
     body := binary(),
     name := {account | nobody | role, binary()},
     links := #{integer() => binary()},
-    replies := [integer()]
+    replies := [integer()],
+    image => image() | none
+}.
+%% an asset a post shows, where the media origin has it
+-type image() :: #{
+    file := binary(),
+    thumb := binary(),
+    type := binary(),
+    width := pos_integer(),
+    height := pos_integer()
 }.
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
@@ -66,17 +75,37 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
             role -> <<"name role">>;
             nobody -> <<"name">>
         end,
-    ike_html:el(article, [{id, Anchor}], [
-        ike_html:el(header, [
-            ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
-            ike_html:text(<<" ">>),
-            anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
-            ike_html:text(<<" ">>),
-            ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
-        ]),
-        ike_html:el(p, lines(ike_text:parse(Body), Links))
-        | replies(maps:get(replies, Post))
-    ]).
+    Header = ike_html:el(header, [
+        ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
+        ike_html:text(<<" ">>),
+        anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
+        ike_html:text(<<" ">>),
+        ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
+    ]),
+    Text =
+        case Body of
+            <<>> -> [];
+            _ -> [ike_html:el(p, lines(ike_text:parse(Body), Links))]
+        end,
+    ike_html:el(
+        article,
+        [{id, Anchor}],
+        [Header | figure(maps:get(image, Post, none))] ++ Text ++ replies(maps:get(replies, Post))
+    ).
+
+%% the thumbnail, a link to the whole, and what it is
+-spec figure(image() | none) -> [ike_html:html()].
+figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) ->
+    Size = <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>,
+    [
+        ike_html:el(p, [
+            ike_html:el(a, [{href, File}], [
+                ike_html:el(img, [{src, Thumb}, {alt, <<Type/binary, ", ", Size/binary>>}], [])
+            ])
+        ])
+    ];
+figure(none) ->
+    [].
 
 -spec replies([integer()]) -> [ike_html:html()].
 replies([]) ->
@@ -167,7 +196,9 @@ index() ->
 %% else is shown the way to log in. plain forms: nothing here needs a script
 -spec post_form(
     Action :: binary(),
-    {csrf, binary(), Name :: binary() | none} | {nobody, Token :: binary()} | locked
+    {csrf, binary(), Name :: binary() | none, Staged :: [{pos_integer(), Thumb :: binary()}]}
+    | {nobody, Token :: binary()}
+    | locked
 ) ->
     ike_html:html().
 post_form(Action, {nobody, Token}) ->
@@ -205,7 +236,46 @@ post_form(Action, locked) ->
             ike_html:text(<<".">>)
         ])
     ]);
-post_form(Action, {csrf, Csrf, Name}) ->
+post_form(Action, {csrf, Csrf, Name, Staged}) ->
+    %% an upload waiting to be posted, one of them or none, by plain
+    %% radio buttons; with one, the text may be left empty
+    Pick =
+        case Staged of
+            [] ->
+                [];
+            _ ->
+                [
+                    ike_html:el(p, [ike_html:text(<<"with one of your uploads:">>)])
+                    | [
+                        ike_html:el(p, [
+                            ike_html:el(
+                                input,
+                                [
+                                    {type, <<"radio">>},
+                                    {id, <<"u", (integer_to_binary(U))/binary>>},
+                                    {name, <<"upload">>},
+                                    {value, integer_to_binary(U)}
+                                ],
+                                []
+                            ),
+                            ike_html:text(<<" ">>),
+                            ike_html:el(label, [{for, <<"u", (integer_to_binary(U))/binary>>}], [
+                                ike_html:el(
+                                    img,
+                                    [{src, T}, {alt, <<"upload ", (integer_to_binary(U))/binary>>}],
+                                    []
+                                )
+                            ])
+                        ])
+                     || {U, T} <- Staged
+                    ]
+                ]
+        end,
+    Area =
+        case Staged of
+            [] -> [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required];
+            _ -> [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}]
+        end,
     %% unticked unless asked for: a post carries no name by default
     Signed =
         case Name of
@@ -241,11 +311,11 @@ post_form(Action, {csrf, Csrf, Name}) ->
                 ike_html:el(br, []),
                 ike_html:el(
                     textarea,
-                    [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
+                    Area,
                     []
                 )
             ])
-            | Signed ++
+            | Pick ++ Signed ++
                 [
                     ike_html:el(p, [
                         ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
