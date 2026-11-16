@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
--export([staged/1, staged_file/1, posted/1, out_of_sight/0]).
+-export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -78,7 +78,22 @@ suspended() ->
 post(Post) ->
     case gen_server:call(?MODULE, {post, Post}) of
         {
-            {ok, [[Thread, Board, State, Time, Body, Name, Local, Banned, Author, Rank, Undo]]},
+            {ok, [
+                [
+                    Thread,
+                    Board,
+                    State,
+                    Time,
+                    Body,
+                    Name,
+                    Local,
+                    Banned,
+                    Author,
+                    Rank,
+                    Undo,
+                    Retracted
+                ]
+            ]},
             {ok, Images}
         } when
             is_list(Images),
@@ -115,6 +130,7 @@ post(Post) ->
                         _ -> none
                     end,
                 author => Author,
+                retracted => Retracted =:= 1,
                 images => [
                     {Position,
                         case {Gone, Blocked} of
@@ -129,6 +145,14 @@ post(Post) ->
             }};
         _ ->
             none
+    end.
+
+%% what a post keeps of its password, if it was given one
+-spec password(Post :: integer()) -> {ok, binary()} | none.
+password(Post) ->
+    case gen_server:call(?MODULE, {password, Post}) of
+        {ok, [[Sealed]]} when is_binary(Sealed) -> {ok, Sealed};
+        _ -> none
     end.
 
 %% posts taken out of sight and kept: hidden or trashed, newest first
@@ -226,6 +250,8 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({password, Post}, _From, Conn) when is_integer(Post) ->
+    {reply, ike_db:q(Conn, <<"SELECT password FROM post WHERE id = ?1">>, [Post]), Conn};
 handle_call(out_of_sight, _From, Conn) ->
     Sql = <<
         "SELECT p.id, b.name, p.state FROM post p JOIN thread t ON t.root = p.thread"
@@ -255,7 +281,7 @@ handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
     Sql = <<
         "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, t.kind = 'local', t.banned,"
         " t.id, t.rank, (SELECT role FROM action WHERE post = p.id"
-        " AND kind IN ('hide', 'delete') ORDER BY entry DESC LIMIT 1)"
+        " AND kind IN ('hide', 'trash') ORDER BY entry DESC LIMIT 1), p.retracted"
         " FROM post p JOIN thread h ON h.root = p.thread JOIN board b ON b.id = h.board"
         " JOIN actor a ON a.id = p.actor"
         %% the account a ban would reach, as the writer finds it

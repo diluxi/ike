@@ -5,6 +5,7 @@
 -export([child_spec/0]).
 -export([headers/0]).
 -export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1, pairs/1]).
+-export([same_origin/1]).
 
 %% what a form may weigh; caddy caps bodies at the same size
 -define(FORM_BYTES, 65536).
@@ -46,6 +47,7 @@ dispatch() ->
             {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
             {"/board/:board/:thread/reply", [Board, Thread], ike_http_post, []},
             {"/p/:post", [{post, int}], ike_http_permalink, []},
+            {"/p/:post/retract", [{post, int}], ike_http_retract, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
@@ -123,6 +125,26 @@ forbidden(Req) ->
         <<"not allowed">>, <<"log in at /login, and send forms from this site's own pages.">>
     ),
     page(403, Html, Req).
+
+%% whether a form was sent from one of this site's own pages: a form on a
+%% page that is the same for everyone carries no session's token, so the
+%% browser's word on where it came from stands in for one. no Origin, or
+%% "null", is no
+-spec same_origin(cowboy_req:req()) -> boolean().
+same_origin(Req) ->
+    case {cowboy_req:header(<<"origin">>, Req), cowboy_req:header(<<"host">>, Req)} of
+        {Origin, Host} when is_binary(Origin), is_binary(Host), Origin =/= <<"null">> ->
+            case uri_string:parse(Origin) of
+                #{host := H, port := P} when is_binary(H), is_integer(P) ->
+                    <<H/binary, ":", (integer_to_binary(P))/binary>> =:= Host;
+                #{host := H} when is_binary(H) ->
+                    H =:= Host;
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
 
 %% a submitted form. only urlencoded ones are read at all: a multipart
 %% body, which is what carries files, is refused unread (hazard a1)

@@ -5,7 +5,7 @@
 -module(ike_writer).
 -behaviour(gen_server).
 
--export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, snapshot/0]).
+-export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -17,7 +17,9 @@
     body := binary(),
     %% staged uploads of the account's, which the post shows in this
     %% order; the post may then have no text
-    upload => {Account :: ike_id:actor(), Uploads :: [pos_integer(), ...]}
+    upload => {Account :: ike_id:actor(), Uploads :: [pos_integer(), ...]},
+    %% what the poster may retract it with later, as given
+    password => binary()
 }.
 
 %% what a moderator does, and to what: a post by its number, an account
@@ -92,7 +94,12 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
             #{upload := {Account, [_ | _] = Staged}} -> {ike_id:to_integer(Account), Staged};
             _ -> none
         end,
-    case call({post, ike_id:to_integer(Actor), Home, Body, Upload}) of
+    Password =
+        case Post of
+            #{password := Given} when byte_size(Given) > 0 -> sealed(Given);
+            _ -> undefined
+        end,
+    case call({post, ike_id:to_integer(Actor), Home, Body, Upload, Password}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
@@ -109,6 +116,45 @@ upload(#{actor := Actor, original := Original, stripped := Stripped}) ->
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
+    end.
+
+%% a password as a post keeps it: a salt of its own and a slow hash
+%% under it, so that two posts with one password have nothing in common
+-define(ROUNDS, 100000).
+
+-spec sealed(binary()) -> binary().
+sealed(Password) ->
+    Salt = crypto:strong_rand_bytes(16),
+    <<Salt/binary, (crypto:pbkdf2_hmac(sha256, Password, Salt, ?ROUNDS, 32))/binary>>.
+
+-spec opens(binary(), term()) -> boolean().
+opens(Password, <<Salt:16/binary, Hash:32/binary>>) ->
+    crypto:hash_equals(Hash, crypto:pbkdf2_hmac(sha256, Password, Salt, ?ROUNDS, 32));
+opens(_, _) ->
+    false.
+
+%% a poster trashes their own post: with the password they gave, or, for
+%% a post their account signed, by being that account. not a moderation,
+%% and not in the log; the post says it was retracted
+-spec retract(ike_id:post(), {password, binary()} | {account, ike_id:actor()}) ->
+    ok | {error, not_yours | no_such_post | not_now} | error().
+retract(Post, By) ->
+    N = ike_id:to_integer(Post),
+    %% the slow part outside the writer: whether the password opens it
+    Allowed =
+        case {By, ike_reader:password(N)} of
+            {{password, Given}, {ok, Sealed}} -> opens(Given, Sealed);
+            {{account, _}, _} -> true;
+            _ -> false
+        end,
+    Who =
+        case By of
+            {account, Actor} -> ike_id:to_integer(Actor);
+            _ -> none
+        end,
+    case Allowed of
+        true -> done(call({retract, N, Who}));
+        false -> {error, not_yours}
     end.
 
 %% one rung of the ladder, and its entry in the log, or neither
@@ -236,8 +282,8 @@ handle_call({local_actor, Issuer, Subject, Nick}, _From, Conn) when
                 Other
         end,
     {reply, Reply, Conn};
-handle_call({post, Actor, Home, Body, Upload}, _From, Conn) when
-    is_integer(Actor), is_binary(Body)
+handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
+    is_integer(Actor), is_binary(Body), (is_binary(Password) orelse Password =:= undefined)
 ->
     %% a post with an image may say nothing else
     Fits = text(Body) orelse (Upload =/= none andalso Body =:= <<>>),
@@ -250,6 +296,12 @@ handle_call({post, Actor, Home, Body, Upload}, _From, Conn) when
                         ok ->
                             case post(Conn, Actor, Home, Time, Body) of
                                 {ok, {Id, Threads}} when is_integer(Id) ->
+                                    Sealed = <<"UPDATE post SET password = ?2 WHERE id = ?1">>,
+                                    _ =
+                                        case Password of
+                                            undefined -> ok;
+                                            _ -> ike_db:q(Conn, Sealed, [Id, {blob, Password}])
+                                        end,
                                     case attach(Conn, Id, Upload, Time) of
                                         {ok, Assets} -> {ok, {Id, Threads, Assets}};
                                         {error, _} = Error -> Error
@@ -270,6 +322,45 @@ handle_call({post, Actor, Home, Body, Upload}, _From, Conn) when
                 end;
             false ->
                 {error, bad_text}
+        end,
+    {reply, Reply, Conn};
+handle_call({retract, Post, Who}, _From, Conn) when is_integer(Post) ->
+    %% shown or hidden, not on the log; and for an account, its own
+    Sql = <<
+        "SELECT p.thread, p.state, b.name, p.actor FROM post p JOIN thread t ON t.root = p.thread"
+        " JOIN board b ON b.id = t.board WHERE p.id = ?1 AND b.log = 0"
+    >>,
+    Reply =
+        case ike_db:q(Conn, Sql, [Post]) of
+            {ok, [[Thread, State, Board, Actor]]} when
+                is_integer(Thread), is_integer(State), is_binary(Board)
+            ->
+                case {State < 2, Who =:= none orelse Who =:= Actor} of
+                    {true, true} ->
+                        Time = erlang:system_time(second),
+                        Result = ike_db:transaction(Conn, fun() ->
+                            retracted(Conn, Post, Thread, Board, Time)
+                        end),
+                        case Result of
+                            {ok, #{threads := T, gone := G, boards := B, assets := A}} when
+                                is_list(T), is_list(G), is_list(B), is_list(A)
+                            ->
+                                ok = published(Conn, [H || H <- A, is_binary(H)]),
+                                followed(Conn, T, G, B, [], false);
+                            {error, _} = Error ->
+                                Error;
+                            Other ->
+                                {error, {unexpected, Other}}
+                        end;
+                    {false, _} ->
+                        {error, not_now};
+                    {_, false} ->
+                        {error, not_yours}
+                end;
+            {ok, _} ->
+                {error, no_such_post};
+            {error, _} = Error ->
+                Error
         end,
     {reply, Reply, Conn};
 handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
@@ -691,7 +782,7 @@ act(Conn, Who, Kind, {Post, Position}, Reason, Time) when is_integer(Post), is_i
     %% the state it is in, by role
     Sql = <<
         "SELECT p.thread, p.state, t.id, t.kind = 'local', t.banned, b.name, t.rank,"
-        " (SELECT role FROM action WHERE post = p.id AND kind IN ('hide', 'delete')"
+        " (SELECT role FROM action WHERE post = p.id AND kind IN ('hide', 'trash')"
         " ORDER BY entry DESC LIMIT 1),"
         " (SELECT role FROM action WHERE post = p.id AND kind = 'block'"
         " ORDER BY entry DESC LIMIT 1),"
@@ -1020,6 +1111,49 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
             Error
     end.
 
+%% trashed by its poster: what trash does, with no entry in the log
+-spec retracted(ike_db:writer(), integer(), integer(), binary(), integer()) ->
+    {ok, effects()} | error().
+retracted(Conn, Post, Thread, Board, Time) ->
+    Around = <<
+        "WITH these AS (SELECT id FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2))"
+        " SELECT s.thread FROM link l JOIN post s ON s.id = l.source"
+        " WHERE l.post IN (SELECT id FROM these)"
+        " UNION SELECT p.thread FROM link l JOIN post p ON p.id = l.post"
+        " WHERE l.source IN (SELECT id FROM these)"
+    >>,
+    Pictured = <<
+        "SELECT pa.asset FROM post_image pa JOIN post p ON p.id = pa.post"
+        " WHERE (p.id = ?1 OR (?1 = ?2 AND p.thread = ?2)) AND pa.asset IS NOT NULL"
+    >>,
+    Trash = <<"UPDATE post SET state = 2, purge_at = ?2, retracted = 1 WHERE id = ?1">>,
+    case
+        {
+            ike_db:q(Conn, Around, [Post, Thread]),
+            ike_db:q(Conn, Pictured, [Post, Thread]),
+            ike_db:q(Conn, Trash, [Post, Time])
+        }
+    of
+        {{ok, Rows}, {ok, Assets}, {ok, _}} ->
+            Gone =
+                case Post =:= Thread of
+                    true -> [{Board, Thread}];
+                    false -> []
+                end,
+            {ok, (effects())#{
+                threads := [Thread | [T || [T] <- Rows]],
+                gone := Gone,
+                boards := [Board],
+                assets := [A || [A] <- Assets, is_binary(A)]
+            }};
+        {{error, _} = Error, _, _} ->
+            Error;
+        {_, {error, _} = Error, _} ->
+            Error;
+        {_, _, {error, _} = Error} ->
+            Error
+    end.
+
 %% a staged upload of the account's, given to the post: posted now, and
 %% its asset the post's
 -spec attach(ike_db:writer(), integer(), term(), integer()) ->
@@ -1183,7 +1317,7 @@ changed(Conn, Post, Thread, purge) ->
         {error, _} = Error -> Error
     end;
 changed(Conn, Post, _Thread, {State, Until}) ->
-    Update = <<"UPDATE post SET state = ?2, purge_at = ?3 WHERE id = ?1">>,
+    Update = <<"UPDATE post SET state = ?2, purge_at = ?3, retracted = 0 WHERE id = ?1">>,
     case ike_db:q(Conn, Update, [Post, State, Until]) of
         {ok, _} -> {ok, []};
         {error, _} = Error -> Error

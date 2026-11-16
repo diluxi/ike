@@ -40,6 +40,8 @@
     body := binary(),
     name := binary() | none,
     account := local | suspended | none,
+    %% whether its poster trashed it
+    retracted := boolean(),
     %% its images, in order: there, there and blocked, or purged
     images := [{non_neg_integer(), shown | blocked | gone}],
     %% who signed it, their rank, and the rank that put it in its state
@@ -62,12 +64,12 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
     layout(<<">>", N/binary>>, [
         ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
         ike_html:el(p, [board_link(Board)]),
-        ike_html:el(ol, [ike_html:el(li, [post(P)]) || P <- Posts])
+        ike_html:el(ol, [ike_html:el(li, [post(P, Log)]) || P <- Posts])
         | Reply
     ]).
 
--spec post(post()) -> ike_html:html().
-post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post) ->
+-spec post(post(), Log :: boolean()) -> ike_html:html().
+post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post, Log) ->
     N = integer_to_binary(Id),
     Anchor = <<"p", N/binary>>,
     Stamp = stamp(Time),
@@ -92,8 +94,36 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
     ike_html:el(
         article,
         [{id, Anchor}],
-        [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post))
+        [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post)) ++
+            case Log of
+                true -> [];
+                false -> [own(N)]
+            end
     ).
+
+%% folded away under each post: retracting it, by its password or by
+%% being its account, and the way to moderate it. a plain form, the same
+%% for everyone; who may do what is the server's to say
+-spec own(binary()) -> ike_html:html().
+own(N) ->
+    ike_html:el(details, [
+        ike_html:el(summary, [ike_html:text(<<"...">>)]),
+        ike_html:el(
+            form, [{method, <<"post">>}, {action, <<"/p/", N/binary, "/retract">>}], [
+                ike_html:el(p, [
+                    ike_html:el(label, [{for, <<"r", N/binary>>}], [ike_html:text(<<"password ">>)]),
+                    ike_html:el(
+                        input,
+                        [{type, <<"password">>}, {id, <<"r", N/binary>>}, {name, <<"password">>}],
+                        []
+                    ),
+                    ike_html:text(<<" ">>),
+                    ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"retract">>)])
+                ])
+            ]
+        ),
+        ike_html:el(p, [anchor(<<"/mod/post/", N/binary>>, <<"moderate">>)])
+    ]).
 
 -spec figures([image() | gone]) -> [ike_html:html()].
 figures([Image | Images]) -> figure(Image) ++ figures(Images);
@@ -223,11 +253,23 @@ post_form(Action, {nobody, Token}) ->
                 )
             ]),
             ike_html:el(p, [
+                ike_html:el(label, [{for, <<"password">>}], [
+                    ike_html:text(<<"password, to retract it later (optional) ">>)
+                ]),
+                ike_html:el(
+                    input,
+                    [{type, <<"password">>}, {id, <<"password">>}, {name, <<"password">>}],
+                    []
+                )
+            ]),
+            ike_html:el(p, [
                 ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
             ])
         ]),
         ike_html:el(p, [
-            ike_html:text(<<"posted without an account: nothing is kept but the text. or ">>),
+            ike_html:text(
+                <<"posted without an account: nothing is kept but the text (and a password, if given, as a salted hash). or ">>
+            ),
             anchor(<<"/login">>, <<"log in">>),
             ike_html:text(<<".">>)
         ])
@@ -324,6 +366,16 @@ post_form(Action, {csrf, Csrf, Name, Staged}) ->
             ])
             | Pick ++ Signed ++
                 [
+                    ike_html:el(p, [
+                        ike_html:el(label, [{for, <<"password">>}], [
+                            ike_html:text(<<"password, to retract it later (optional) ">>)
+                        ]),
+                        ike_html:el(
+                            input,
+                            [{type, <<"password">>}, {id, <<"password">>}, {name, <<"password">>}],
+                            []
+                        )
+                    ]),
                     ike_html:el(p, [
                         ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
                     ])
@@ -442,7 +494,18 @@ moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, {
             ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
             ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
             ike_html:el(p, [
-                ike_html:text(<<(atom_to_binary(State))/binary, ", on ", Where/binary, ", ">>),
+                ike_html:text(
+                    <<
+                        (atom_to_binary(State))/binary,
+                        (case maps:get(retracted, Post) of
+                            true -> <<" (retracted by its poster)">>;
+                            false -> <<"">>
+                        end)/binary,
+                        ", on ",
+                        Where/binary,
+                        ", "
+                    >>
+                ),
                 ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)]),
                 ike_html:text(
                     case Name of

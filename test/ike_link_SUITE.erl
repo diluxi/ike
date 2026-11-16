@@ -99,7 +99,9 @@ what_is_not_a_link(Config) ->
     {Op, Op} = new(Config, Session, "b", Text),
     [_, Article] = articles(page(Config, "b", Op)),
     [_, Rest] = binary:split(Article, <<"</header>">>),
-    [Body, _] = binary:split(Rest, <<"</article>">>),
+    [Whole, _] = binary:split(Rest, <<"</article>">>),
+    %% the text, without what is folded away under it
+    [Body | _] = binary:split(Whole, <<"<details>">>),
     %% but for the last, where a link starts at the second of three
     [[Op, 1]] = query(Config, "SELECT source, post FROM link WHERE source = ?", [Op]),
     [_] = binary:matches(Body, <<"<a ">>),

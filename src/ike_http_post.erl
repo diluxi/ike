@@ -94,7 +94,7 @@ nobody({Board, _} = Place, Req0) ->
                     of
                         true ->
                             case exists(Place) of
-                                true -> unhurried(Place, maps:get(<<"body">>, Form, <<>>), Req);
+                                true -> unhurried(Place, Form, Req);
                                 false -> ike_http:not_found(Req)
                             end;
                         false ->
@@ -110,11 +110,12 @@ nobody({Board, _} = Place, Req0) ->
     end.
 
 %% the board's own pace, counted only for posts that would go through
--spec unhurried(place(), binary(), cowboy_req:req()) -> cowboy_req:req().
-unhurried({Board, _} = Place, Body, Req) ->
+-spec unhurried(place(), #{binary() => binary()}, cowboy_req:req()) -> cowboy_req:req().
+unhurried({Board, _} = Place, Form, Req) ->
+    Body = maps:get(<<"body">>, Form, <<>>),
     case ike_limit:board(Board) of
         ok ->
-            write(Place, ike_id:anonymous(), Body, #{}, Req);
+            write(Place, ike_id:anonymous(), Body, password(Form), Req);
         limited ->
             Html = ike_view:message(
                 <<"slow down">>,
@@ -171,7 +172,11 @@ signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
                     case {exists(Place), length(Picked) =< ike_config:images()} of
                         {true, true} ->
                             write(
-                                Place, Actor, maps:get(<<"body">>, Form, <<>>), Upload, Req
+                                Place,
+                                Actor,
+                                maps:get(<<"body">>, Form, <<>>),
+                                maps:merge(Upload, password(Form)),
+                                Req
                             );
                         {true, false} ->
                             Html = ike_view:message(
@@ -188,11 +193,16 @@ signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
             ike_http:forbidden(Req)
     end.
 
+%% a password to retract the post with later, if one was given
+-spec password(#{binary() => binary()}) -> #{password => binary()}.
+password(#{<<"password">> := P}) when byte_size(P) > 0, byte_size(P) =< 256 -> #{password => P};
+password(_) -> #{}.
+
 -spec write(
     place(),
     ike_id:actor(),
     binary(),
-    #{upload => {ike_id:actor(), [pos_integer(), ...]}},
+    #{upload => {ike_id:actor(), [pos_integer(), ...]}, password => binary()},
     cowboy_req:req()
 ) -> cowboy_req:req().
 write({Board, Thread} = Place, Actor, Body0, Upload, Req) ->

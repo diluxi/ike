@@ -754,3 +754,30 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Also lux's word:** SVG beside SWF, in the same milestone, against
   P5's "never"; meshes, Live2D and MMD as downloads only, for now; the
   wiki before the public launch, which lifts S2 for M3.
+
+## Retraction (lux, 2026-11-16)
+
+- **A post may carry a password,** given on either post form, as vichan
+  has it. Kept is a 16-byte salt and PBKDF2-SHA256 (100000 rounds) of
+  it, per post, worked out in the request's process, never the password;
+  one password on two posts leaves nothing in common. Planning line 11's
+  "nothing kept but the text" now has this exception: wording for lux's
+  documents.
+- **`/p/N/retract`** trashes the post (`retracted = 1`), with its
+  password, or for a post an account signed, by being that account; an
+  unsigned post is nobody's, so only its password retracts it. Not in
+  the log; the moderator's page says "retracted by its poster", and
+  restore (moderators and up, as for any trash) puts it back.
+- **The form is folded under every post,** in a `<details>`, on the
+  static pages, with a link to the post's moderation page beside it. A
+  page that is the same for everyone carries no session token, so the
+  handler takes the browser's `Origin` instead (it must be this site's
+  host; missing or `null` is refused) and the limiter allows ten tries
+  at one post's password an hour. Retracting a thread's first post
+  takes the thread out of view, as trashing it would.
+- *Not possible on static pages:* a post hidden from all but its own
+  poster. The moderation forms stay on `/mod/post/N`, behind their
+  tokens, until lux says whether tokenless forms guarded by `Origin`
+  are acceptable (Q33).
+- *Fixed on the way:* the restore rank check still looked for the
+  old kind name `delete`; it reads `trash` now.

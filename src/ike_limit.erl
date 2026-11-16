@@ -9,7 +9,7 @@
 -module(ike_limit).
 -behaviour(gen_server).
 
--export([start_link/0, charge/2, board/1]).
+-export([start_link/0, charge/2, board/1, retraction/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(TABLE, ?MODULE).
@@ -41,6 +41,12 @@ charge(Peer, Forwarded) ->
 board(Name) ->
     #{board_posts := Max, board_seconds := Period} = ike_config:limit(),
     spend({board, Name}, Max, Period).
+
+%% one more try at a post's password: ten an hour, from anywhere, so
+%% that a password is not guessed (a retraction needs no account)
+-spec retraction(integer()) -> ok | limited.
+retraction(Post) ->
+    spend({retraction, Post}, 10, 3600).
 
 %% at most Max in each stretch of Period seconds
 -spec spend(term(), pos_integer(), pos_integer()) -> ok | limited.

@@ -13,6 +13,7 @@
     | body
     | br
     | button
+    | details
     | footer
     | form
     | h1
@@ -29,6 +30,7 @@
     | ol
     | p
     | span
+    | summary
     | textarea
     | time
     | title
@@ -142,6 +144,7 @@ tag(article) -> <<"article">>;
 tag(body) -> <<"body">>;
 tag(br) -> <<"br">>;
 tag(button) -> <<"button">>;
+tag(details) -> <<"details">>;
 tag(footer) -> <<"footer">>;
 tag(form) -> <<"form">>;
 tag(h1) -> <<"h1">>;
@@ -158,6 +161,7 @@ tag(nav) -> <<"nav">>;
 tag(ol) -> <<"ol">>;
 tag(p) -> <<"p">>;
 tag(span) -> <<"span">>;
+tag(summary) -> <<"summary">>;
 tag(textarea) -> <<"textarea">>;
 tag(time) -> <<"time">>;
 tag(title) -> <<"title">>;

@@ -283,6 +283,28 @@ inv02_works_without_scripts(Config) ->
     ),
     scriptless(Pictured),
     {200, _, _} = ike_browser:media(Config, Shown),
+    %% a post is retracted by the form folded under it, with its password
+    {303, H3, _} = ike_browser:post(
+        Config, Reply, Session, <<"to be taken back">>, [{<<"password">>, <<"pw">>}]
+    ),
+    "#p" ++ Taken = string:find(proplists:get_value("location", H3), "#"),
+    {200, _, WithBack} = ike_browser:request(Config, get, Thread, [], none),
+    RetractAction = "/p/" ++ Taken ++ "/retract",
+    match = re:run(
+        WithBack,
+        "<details><summary>[^<]*</summary><form method=\"post\" action=\"" ++ RetractAction ++
+            "\"><p><label[^>]*>[^<]*</label><input type=\"password\" id=\"[^\"]+\" name=\"password\">",
+        [{capture, none}]
+    ),
+    {200, _, _} = ike_browser:request(
+        Config,
+        post,
+        RetractAction,
+        [{"origin", ?config(base, Config)}],
+        {form, uri_string:compose_query([{"password", "pw"}])}
+    ),
+    {200, _, Without} = ike_browser:request(Config, get, Thread, [], none),
+    nomatch = binary:match(Without, <<"to be taken back">>),
     %% and every page leads to the account page, which logs out by form
     {_, _} = binary:match(Page, <<"href=\"/account\"">>),
     Leaving = ike_browser:login(Config, <<"noscript-leaving">>),
@@ -1426,6 +1448,7 @@ known_routes() ->
         [<<"board">>, board, thread],
         [<<"board">>, board, thread, <<"reply">>],
         [<<"p">>, post],
+        [<<"p">>, post, <<"retract">>],
         [<<"login">>],
         [<<"login">>, <<"callback">>],
         [<<"logout">>],
@@ -1558,6 +1581,7 @@ known_tag(Name) ->
         <<"body">>,
         <<"br">>,
         <<"button">>,
+        <<"details">>,
         <<"footer">>,
         <<"form">>,
         <<"h1">>,
@@ -1574,6 +1598,7 @@ known_tag(Name) ->
         <<"ol">>,
         <<"p">>,
         <<"span">>,
+        <<"summary">>,
         <<"textarea">>,
         <<"time">>,
         <<"title">>,
