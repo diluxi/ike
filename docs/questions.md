@@ -70,6 +70,16 @@ here.
   hash on the blocklist, so a deleted post whose hold ends blocks its
   image for good, even one deleted only as off-topic. Built that way;
   should a hold's end destroy the image without blocking it?
+- **Q31 Who sees staged uploads.** lux, 2026-11-16: moderators should
+  see and search everyone's uploads, as on Danbooru, where all uploads
+  are public with their metadata; private ones may make sense later,
+  with ActivityPub. Invariant 10 says a staged upload is served to no one
+  but its uploader, and phi.md forbids a change that cannot keep an
+  invariant, so nothing is built until hazards.md says which: staged
+  uploads public to everyone (invariant 10 dropped or turned around),
+  visible to moderators as well (its wording widened), or private by
+  default with a public switch per upload. Recognition tags (Danbooru's
+  AI tags, hidden while tagging) belong with tags, in M2.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 
