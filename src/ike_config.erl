@@ -5,6 +5,7 @@
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0, hold_seconds/0]).
 -export([assets_dir/0, media_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
+-export([images/0]).
 -export_type([oidc/0, limit/0, strip/0]).
 
 %% the stripper's socket, and the caps it was started with: ike reads no
@@ -220,6 +221,14 @@ media_host() ->
     case uri_string:parse(media_origin()) of
         #{host := Host} when is_binary(Host) -> Host;
         _ -> error({badenv, media_origin})
+    end.
+
+%% the most images one post shows; a stub for planning's open caps
+-spec images() -> pos_integer().
+images() ->
+    case application:get_env(ike, images) of
+        {ok, N} when is_integer(N), N > 0 -> N;
+        _ -> 8
     end.
 
 %% how long a link to a staged upload works

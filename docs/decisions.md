@@ -700,3 +700,20 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   hashes go onto the blocklist, as planning's Purge row says. That
   includes a hold that ends (Q30). An image another post shows stays.
 - **The media directory is made at start,** not only on the first image.
+
+## Several images to a post (lux, 2026-11-16)
+
+- **`post_image`** holds a post's images in order (`post`, `position`,
+  `asset`, `gone`), and is in the reachability view. The old
+  `post.asset` and `post.asset_gone` are emptied and no longer written;
+  SQLite drops no column that is a foreign key, so they stay.
+- **The post form offers every waiting upload as a checkbox,** in the
+  order shown; the post takes them all or none, up to `images` (8, a
+  stub). The post form is now read field by field, so the repeated
+  `upload` survives.
+- **Each image has its own rungs** on the moderator's page: `block`,
+  `unblock` and `purge_image` name the image's place, and the log says
+  "purge image 2 of >>N". Purging one leaves the others; purging the
+  post takes them all with it, as before.
+- **A ban through an unsigned post reaches the account behind its
+  images,** which is one account: whoever attached them.

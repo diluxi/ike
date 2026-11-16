@@ -63,19 +63,25 @@ look({Actor, Csrf, Role}, Req) ->
             ike_http:not_found(Req)
     end.
 
-%% what this role can do to a post as it now is: the forms that would
-%% go through, and no others
--spec kinds(ike_view:held(), ike_role:role(), integer()) -> [ike_role:kind()].
-kinds(#{state := State, account := Account, image := Image} = Post, Role, Actor) ->
+%% what this role can do to a post as it now is, and to each of its
+%% images: the forms that would go through, and no others
+-spec kinds(ike_view:held(), ike_role:role(), integer()) ->
+    {[ike_role:kind()], [{non_neg_integer(), shown | blocked | gone, [ike_role:kind()]}]}.
+kinds(#{state := State, account := Account, images := Images} = Post, Role, Actor) ->
     #{board := Board, author := Author, rank := Rank, undo := Undo} = Post,
     Facts = #{board => Board, self => Author =:= Actor, account => Rank, undo => Undo},
-    Pictured =
-        case Image of
-            none -> [];
-            shown -> [block, purge_image];
-            blocked -> [unblock, purge_image]
-        end,
-    [K || K <- ladder(State, Account) ++ Pictured, ike_role:permits(Role, K, Facts)].
+    Allowed = fun(Ks) -> [K || K <- Ks, ike_role:permits(Role, K, Facts)] end,
+    {Allowed(ladder(State, Account)), [
+        {Position, Image,
+            Allowed(
+                case Image of
+                    shown -> [block, purge_image];
+                    blocked -> [unblock, purge_image];
+                    gone -> []
+                end
+            )}
+     || {Position, Image} <- Images
+    ]}.
 
 -spec ladder(shown | hidden | deleted, local | suspended | none) -> [ike_role:kind()].
 ladder(State, Account) ->
@@ -103,7 +109,23 @@ submit(What, {Actor, Csrf, Role}, Req0) ->
             of
                 {false, _, _} ->
                     ike_http:forbidden(Req);
-                {true, {ok, Kind}, {ok, Target, Back}} ->
+                {true, {ok, Kind}, {ok, Target0, Back}} ->
+                    %% an image's rung names which of the post's images
+                    Target =
+                        case {Kind, Form, cowboy_req:binding(post, Req), What} of
+                            {_, #{<<"image">> := I}, N, post} when
+                                (Kind =:= block orelse Kind =:= unblock orelse
+                                    Kind =:= purge_image),
+                                is_integer(N),
+                                N > 0
+                            ->
+                                case position(I) of
+                                    {ok, P} -> {image, ike_id:post(N), P};
+                                    error -> Target0
+                                end;
+                            _ ->
+                                Target0
+                        end,
                     case fits(What, Kind) of
                         true ->
                             Reason = maps:get(<<"reason">>, Form, <<>>),
@@ -155,6 +177,13 @@ target(account, Req) ->
     end;
 target(front, _Req) ->
     none.
+
+-spec position(binary()) -> {ok, non_neg_integer()} | error.
+position(Bin) ->
+    case string:to_integer(Bin) of
+        {N, <<>>} when is_integer(N), N >= 0 -> {ok, N};
+        _ -> error
+    end.
 
 -spec fits(what(), ike_role:kind()) -> boolean().
 fits(post, Kind) ->

@@ -42,9 +42,13 @@ Each a branch on the one before, starting from `phi/sessions`.
    that show one, with the media origin's files following what is
    shown; dedup; block, unblock and purge of an image by hash.
    Invariants 6, 10 and 11 are real; 2, 3, 5, 7, 8 and 9 extended.
+   Assets are kept whole: colour profiles, animated PNG frames, pixels
+   as stored (lux). A post shows any number of images, up to a cap.
    Still owed: uploads without an account (I4's switch, before a public
    launch), staged uploads expiring, blocking a hash that no post shows,
-   thumbnails on the board index.
+   thumbnails on the board index, animated WebP. Waiting on lux: who
+   sees staged uploads (Q31), orientation and profile text (Q32), a
+   hold's end and the blocklist (Q30).
 7. **Notice and action, Impressum.**
 
 ## Next

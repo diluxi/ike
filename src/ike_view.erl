@@ -16,7 +16,7 @@
     name := {account | nobody | role, binary()},
     links := #{integer() => binary()},
     replies := [integer()],
-    image => image() | gone | none
+    images => [image() | gone]
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -40,8 +40,8 @@
     body := binary(),
     name := binary() | none,
     account := local | suspended | none,
-    %% whether it shows an image, and whether that image's hash is blocked
-    image := none | shown | blocked,
+    %% its images, in order: there, there and blocked, or purged
+    images := [{non_neg_integer(), shown | blocked | gone}],
     %% who signed it, their rank, and the rank that put it in its state
     author := integer(),
     rank := 0..3,
@@ -92,11 +92,15 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
     ike_html:el(
         article,
         [{id, Anchor}],
-        [Header | figure(maps:get(image, Post, none))] ++ Text ++ replies(maps:get(replies, Post))
+        [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post))
     ).
 
+-spec figures([image() | gone]) -> [ike_html:html()].
+figures([Image | Images]) -> figure(Image) ++ figures(Images);
+figures([]) -> [].
+
 %% the thumbnail, a link to the whole, and what it is
--spec figure(image() | gone | none) -> [ike_html:html()].
+-spec figure(image() | gone) -> [ike_html:html()].
 figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) ->
     Size = <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>,
     [
@@ -108,9 +112,7 @@ figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) -
     ];
 figure(gone) ->
     %% the words of every link to something taken down (hazard G5)
-    [ike_html:el(p, [gone(<<"image">>)])];
-figure(none) ->
-    [].
+    [ike_html:el(p, [gone(<<"image">>)])].
 
 -spec replies([integer()]) -> [ike_html:html()].
 replies([]) ->
@@ -242,21 +244,21 @@ post_form(Action, locked) ->
         ])
     ]);
 post_form(Action, {csrf, Csrf, Name, Staged}) ->
-    %% an upload waiting to be posted, one of them or none, by plain
-    %% radio buttons; with one, the text may be left empty
+    %% uploads waiting to be posted, any of them, in the order shown, by
+    %% plain checkboxes; with one, the text may be left empty
     Pick =
         case Staged of
             [] ->
                 [];
             _ ->
                 [
-                    ike_html:el(p, [ike_html:text(<<"with one of your uploads:">>)])
+                    ike_html:el(p, [ike_html:text(<<"with your uploads, as many as you tick:">>)])
                     | [
                         ike_html:el(p, [
                             ike_html:el(
                                 input,
                                 [
-                                    {type, <<"radio">>},
+                                    {type, <<"checkbox">>},
                                     {id, <<"u", (integer_to_binary(U))/binary>>},
                                     {name, <<"upload">>},
                                     {value, integer_to_binary(U)}
@@ -381,7 +383,8 @@ moderation({Csrf, Role}, Boards, Suspended) ->
                             end
                         ],
                         ike_role:may(Role, K)
-                    ]
+                    ],
+                    []
                 )
             ])
          || {Name, Title, Locked} <- Boards
@@ -389,21 +392,30 @@ moderation({Csrf, Role}, Boards, Suspended) ->
         ike_html:el(ul, [
             ike_html:el(li, [
                 ike_html:text(<<Name/binary, ": suspended">>)
-                | act(<<"/mod/account/", (integer_to_binary(Account))/binary>>, Csrf, [
-                    unban
-                 || ike_role:permits(Role, unban, #{
-                        board => any, self => false, account => Rank, undo => 0
-                    })
-                ])
+                | act(
+                    <<"/mod/account/", (integer_to_binary(Account))/binary>>,
+                    Csrf,
+                    [
+                        unban
+                     || ike_role:permits(Role, unban, #{
+                            board => any, self => false, account => Rank, undo => 0
+                        })
+                    ],
+                    []
+                )
             ])
          || {Account, Name, Rank} <- Suspended
         ])
     ]).
 
 %% one post, as it is stored, and what this role may do with it
--spec moderated({Csrf :: binary(), ike_role:role()}, held(), [ike_role:kind()]) ->
+-spec moderated(
+    {Csrf :: binary(), ike_role:role()},
+    held(),
+    {[ike_role:kind()], [{non_neg_integer(), shown | blocked | gone, [ike_role:kind()]}]}
+) ->
     ike_html:html().
-moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, Kinds) ->
+moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, {PostKinds, Images}) ->
     #{state := State, time := Time, body := Body, name := Name} = Post,
     N = integer_to_binary(Id),
     Stamp = stamp(Time),
@@ -412,30 +424,51 @@ moderated({Csrf, _Role}, #{id := Id, thread := Thread, board := Board} = Post, K
             Thread -> <<"/", Board/binary, "/, the first post of its thread">>;
             _ -> <<"/", Board/binary, "/, in >>", (integer_to_binary(Thread))/binary>>
         end,
-    layout(<<"moderating >>", N/binary>>, [
-        ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
-        ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
-        ike_html:el(p, [
-            ike_html:text(<<(atom_to_binary(State))/binary, ", on ", Where/binary, ", ">>),
-            ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)]),
-            ike_html:text(
-                case Name of
-                    none -> <<", unsigned">>;
-                    _ -> <<", signed ", Name/binary>>
-                end
-            ),
-            ike_html:text(
-                case maps:get(image, Post) of
-                    none -> <<"">>;
-                    shown -> <<"; with an image">>;
-                    blocked -> <<"; with an image whose hash is blocked">>
-                end
-            )
-        ]),
-        %% as text and nothing more: no link in it is followed from here
-        ike_html:el(article, [ike_html:el(p, plain(binary:split(Body, <<"\n">>, [global])))])
-        | act(<<"/mod/post/", N/binary>>, Csrf, Kinds)
-    ]).
+    layout(
+        <<"moderating >>", N/binary>>,
+        [
+            ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
+            ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
+            ike_html:el(p, [
+                ike_html:text(<<(atom_to_binary(State))/binary, ", on ", Where/binary, ", ">>),
+                ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)]),
+                ike_html:text(
+                    case Name of
+                        none -> <<", unsigned">>;
+                        _ -> <<", signed ", Name/binary>>
+                    end
+                ),
+                ike_html:text(
+                    case length(maps:get(images, Post)) of
+                        0 -> <<"">>;
+                        1 -> <<"; with an image">>;
+                        Count -> <<"; with ", (integer_to_binary(Count))/binary, " images">>
+                    end
+                )
+            ]),
+            %% as text and nothing more: no link in it is followed from here
+            ike_html:el(article, [ike_html:el(p, plain(binary:split(Body, <<"\n">>, [global])))])
+            | act(<<"/mod/post/", N/binary>>, Csrf, PostKinds, [])
+        ] ++ pictured(N, Csrf, Images)
+    ).
+
+%% each of a post's images, and what can be done to it
+-spec pictured(binary(), binary(), [{non_neg_integer(), shown | blocked | gone, [ike_role:kind()]}]) ->
+    [ike_html:html()].
+pictured(N, Csrf, [{Position, Shown, Kinds} | Rest]) ->
+    Line =
+        <<"image ", (integer_to_binary(Position + 1))/binary,
+            (case Shown of
+                shown -> <<"">>;
+                blocked -> <<", its hash blocked">>;
+                gone -> <<", purged">>
+            end)/binary>>,
+    [
+        ike_html:el(p, [ike_html:text(Line)])
+        | act(<<"/mod/post/", N/binary>>, Csrf, Kinds, [{<<"image">>, integer_to_binary(Position)}])
+    ] ++ pictured(N, Csrf, Rest);
+pictured(_N, _Csrf, []) ->
+    [].
 
 -spec as(ike_role:role()) -> binary().
 as({janitor, [First | Rest]}) ->
@@ -449,24 +482,35 @@ plain([Line | Rest]) -> [ike_html:text(Line), ike_html:el(br, []) | plain(Rest)]
 plain([]) -> [].
 
 %% one form for each thing that would go through, each with its reason
--spec act(Action :: binary(), Csrf :: binary(), [ike_role:kind()]) -> [ike_html:html()].
-act(Action, Csrf, Kinds) ->
+-spec act(Action :: binary(), Csrf :: binary(), [ike_role:kind()], [{binary(), binary()}]) ->
+    [ike_html:html()].
+act(Action, Csrf, Kinds, Fields) ->
+    Hidden = [
+        ike_html:el(input, [{type, <<"hidden">>}, {name, F}, {value, V}], [])
+     || {F, V} <- [{<<"csrf">>, Csrf} | Fields]
+    ],
     [
-        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
-            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
-            ike_html:el(
-                input, [{type, <<"hidden">>}, {name, <<"kind">>}, {value, atom_to_binary(Kind)}], []
-            ),
-            ike_html:el(p, [
-                ike_html:el(
-                    input,
-                    [{name, <<"reason">>}, {maxlength, <<"200">>}, required],
-                    []
-                ),
-                ike_html:text(<<" ">>),
-                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(atom_to_binary(Kind))])
-            ])
-        ])
+        ike_html:el(
+            form,
+            [{method, <<"post">>}, {action, Action}],
+            Hidden ++
+                [
+                    ike_html:el(
+                        input,
+                        [{type, <<"hidden">>}, {name, <<"kind">>}, {value, atom_to_binary(Kind)}],
+                        []
+                    ),
+                    ike_html:el(p, [
+                        ike_html:el(
+                            input, [{name, <<"reason">>}, {maxlength, <<"200">>}, required], []
+                        ),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(button, [{type, <<"submit">>}], [
+                            ike_html:text(atom_to_binary(Kind))
+                        ])
+                    ])
+                ]
+        )
      || Kind <- Kinds
     ].
 

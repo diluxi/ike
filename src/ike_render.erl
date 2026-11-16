@@ -168,11 +168,9 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     >>,
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
-        "SELECT p.id, p.time, p.body, a.name, b.log, m.role, x.hash, x.type, x.width, x.height,"
-        " p.asset_gone"
+        "SELECT p.id, p.time, p.body, a.name, b.log, m.role"
         " FROM shown p JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
-        " LEFT JOIN asset x ON x.hash = p.asset"
         " WHERE p.thread = ?1 ORDER BY p.id"
     >>,
     case ike_db:q(Conn, Where, [Thread]) of
@@ -182,6 +180,7 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                     Names = ike_config:anonymous_names(),
                     Links = links(Conn, Thread),
                     Replies = replies(Conn, Thread),
+                    Images = images(Conn, Thread),
                     Posts = [
                         #{
                             id => Id,
@@ -190,13 +189,9 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                             name => name(Name0, Id, Names, Log, Role),
                             links => Links,
                             replies => maps:get(Id, Replies, []),
-                            image =>
-                                case Gone of
-                                    1 -> gone;
-                                    _ -> image(Hash, Type, W, H)
-                                end
+                            images => maps:get(Id, Images, [])
                         }
-                     || [Id, Time, Body, Name0, Log, Role, Hash, Type, W, H, Gone] <- Rows,
+                     || [Id, Time, Body, Name0, Log, Role] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)
@@ -269,6 +264,34 @@ name(_, Id, [First | _] = Names, _, _) ->
         Name when is_binary(Name) -> {nobody, Name};
         _ -> {nobody, First}
     end.
+
+%% the images each of the thread's posts shows, in order
+-spec images(ike_db:reader(), integer()) -> #{integer() => [ike_view:image() | gone]}.
+images(Conn, Thread) ->
+    Sql = <<
+        "SELECT pa.post, pa.gone, x.hash, x.type, x.width, x.height"
+        " FROM post_image pa JOIN shown s ON s.id = pa.post"
+        " LEFT JOIN asset x ON x.hash = pa.asset"
+        " WHERE s.thread = ?1 ORDER BY pa.post DESC, pa.position DESC"
+    >>,
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, Rows} -> pictures(Rows, #{});
+        {error, Reason} -> error({render, Thread, Reason})
+    end.
+
+-spec pictures([ike_db:row()], #{integer() => [ike_view:image() | gone]}) ->
+    #{integer() => [ike_view:image() | gone]}.
+pictures([[Post, Gone, Hash, Type, W, H] | Rows], Acc) when is_integer(Post) ->
+    Image =
+        case {Gone, image(Hash, Type, W, H)} of
+            {0, #{} = Found} -> Found;
+            _ -> gone
+        end,
+    pictures(Rows, Acc#{Post => [Image | maps:get(Post, Acc, [])]});
+pictures([_ | Rows], Acc) ->
+    pictures(Rows, Acc);
+pictures([], Acc) ->
+    Acc.
 
 -spec image(term(), term(), term(), term()) -> ike_view:image() | none.
 image(Hash, Type, W, H) when

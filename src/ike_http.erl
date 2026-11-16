@@ -4,7 +4,7 @@
 
 -export([child_spec/0]).
 -export([headers/0]).
--export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1]).
+-export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1, pairs/1]).
 
 %% what a form may weigh; caddy caps bodies at the same size
 -define(FORM_BYTES, 65536).
@@ -129,11 +129,21 @@ forbidden(Req) ->
     {ok, #{binary() => binary()}, cowboy_req:req()}
     | {error, cowboy:http_status(), cowboy_req:req()}.
 form(Req0) ->
+    case pairs(Req0) of
+        {ok, Pairs, Req} -> {ok, maps:from_list(Pairs), Req};
+        {error, _, _} = Error -> Error
+    end.
+
+%% the same, every field as sent, for a name a form repeats
+-spec pairs(cowboy_req:req()) ->
+    {ok, [{binary(), binary()}], cowboy_req:req()}
+    | {error, cowboy:http_status(), cowboy_req:req()}.
+pairs(Req0) ->
     try cowboy_req:parse_header(<<"content-type">>, Req0) of
         {<<"application">>, <<"x-www-form-urlencoded">>, _} ->
             try cowboy_req:read_urlencoded_body(Req0, #{length => ?FORM_BYTES, period => 5000}) of
                 {ok, Pairs, Req} ->
-                    {ok, maps:from_list([{K, V} || {K, V} <- Pairs, is_binary(V)]), Req}
+                    {ok, [{K, V} || {K, V} <- Pairs, is_binary(V)], Req}
             catch
                 _:_ -> {error, 400, Req0}
             end;

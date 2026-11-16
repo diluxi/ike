@@ -259,11 +259,11 @@ inv02_works_without_scripts(Config) ->
     {200, _, Staged} = ike_browser:request(Config, get, "/upload", Cookies, none),
     {_, _} = binary:match(Staged, <<"<img src=\"http://media.test/staged/">>),
     scriptless(Staged),
-    %% and posting it: the reply form offers it as a radio button
+    %% and posting it: the reply form offers it as a checkbox
     {200, _, WithUpload} = ike_browser:request(Config, get, Reply, Cookies, none),
     {match, [Picked]} = re:run(
         WithUpload,
-        "<input type=\"radio\" id=\"u[0-9]+\" name=\"upload\" value=\"([0-9]+)\">",
+        "<input type=\"checkbox\" id=\"u[0-9]+\" name=\"upload\" value=\"([0-9]+)\">",
         [{capture, all_but_first, binary}]
     ),
     {match, PostHidden} = re:run(
@@ -864,9 +864,11 @@ inv08_purge_leaves_nothing(Config) ->
     %% (its thumbnail's bytes are not looked for: another image of the
     %% same pixels has the same thumbnail. its files are, by name)
     {200, _, _} = ike_browser:media(Config, Small),
-    [[ImageHash]] = ike_browser:query(Config, "SELECT asset FROM post WHERE id = ?", [
-        list_to_integer(Image)
-    ]),
+    [[ImageHash]] = ike_browser:query(
+        Config, "SELECT asset FROM post_image WHERE post = ? AND position = 0", [
+            list_to_integer(Image)
+        ]
+    ),
     ImageHex = binary_to_list(binary:encode_hex(ImageHash, lowercase)),
     #{csrf := ImageCsrf} = Admin,
     {303, _, _} = ike_browser:request(
@@ -876,7 +878,7 @@ inv08_purge_leaves_nothing(Config) ->
         ike_browser:cookies(Admin),
         {form,
             uri_string:compose_query([
-                {"csrf", ImageCsrf}, {"kind", "purge_image"}, {"reason", "rule 1"}
+                {"csrf", ImageCsrf}, {"kind", "purge_image"}, {"image", "0"}, {"reason", "rule 1"}
             ])}
     ),
     {200, _, Tombstoned} = ike_browser:request(Config, get, Imaged, [], none),
@@ -916,9 +918,11 @@ inv08_purge_leaves_nothing(Config) ->
         ]
     ),
     "#p" ++ Whole = string:find(proplists:get_value("location", H6), "#"),
-    [[WholeHash]] = ike_browser:query(Config, "SELECT asset FROM post WHERE id = ?", [
-        list_to_integer(Whole)
-    ]),
+    [[WholeHash]] = ike_browser:query(
+        Config, "SELECT asset FROM post_image WHERE post = ? AND position = 0", [
+            list_to_integer(Whole)
+        ]
+    ),
     WholeHex = binary_to_list(binary:encode_hex(WholeHash, lowercase)),
     {200, _, WholeImage} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
     {303, _, _} = ike_browser:request(
@@ -1423,6 +1427,7 @@ known_tables(Config) ->
         [<<"link">>],
         [<<"migration">>],
         [<<"post">>],
+        [<<"post_image">>],
         [<<"session">>],
         [<<"shown">>],
         [<<"thread">>],

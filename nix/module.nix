@@ -51,6 +51,7 @@
 				}},
 				{media_origin, <<"${cfg.media.origin}">>},
 				{staged_seconds, ${toString cfg.media.stagedSeconds}},
+				{images, ${toString cfg.media.images}},
 				{limit, #{
 					posts => ${toString cfg.limit.posts},
 					seconds => ${toString cfg.limit.seconds},
@@ -270,6 +271,11 @@ in {
 					Pages name it, so changing it is a restart, which renders
 					them all again.
 				'';
+			};
+			images = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 8;
+				description = "Most images one post shows. A stub: the caps are open in planning.md.";
 			};
 			stagedSeconds = lib.mkOption {
 				type = lib.types.ints.positive;

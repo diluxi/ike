@@ -127,41 +127,9 @@ unhurried({Board, _} = Place, Body, Req) ->
 submit(Place, Req0) ->
     case ike_http_login:session(Req0) of
         {ok, _Id, #{actor := Account, csrf := Csrf, name := Name}} ->
-            case ike_http:form(Req0) of
-                {ok, #{<<"csrf">> := Token} = Form, Req} ->
-                    case
-                        byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf)
-                    of
-                        true ->
-                            %% a post is its account's only when the account
-                            %% asks for that and has a name to put on it.
-                            %% otherwise it is nobody's, and nothing ties
-                            %% the two together
-                            Actor =
-                                case Form of
-                                    #{<<"signed">> := <<"1">>} when is_binary(Name) -> Account;
-                                    _ -> ike_id:anonymous()
-                                end,
-                            Upload =
-                                case string:to_integer(maps:get(<<"upload">>, Form, <<>>)) of
-                                    {U, <<>>} when is_integer(U), U > 0 ->
-                                        #{upload => {Account, U}};
-                                    _ ->
-                                        #{}
-                                end,
-                            case exists(Place) of
-                                true ->
-                                    write(
-                                        Place, Actor, maps:get(<<"body">>, Form, <<>>), Upload, Req
-                                    );
-                                false ->
-                                    ike_http:not_found(Req)
-                            end;
-                        false ->
-                            ike_http:forbidden(Req)
-                    end;
-                {ok, _, Req} ->
-                    ike_http:forbidden(Req);
+            case ike_http:pairs(Req0) of
+                {ok, Pairs, Req} ->
+                    signed_in(Place, {Account, Csrf, Name}, Pairs, Req);
                 {error, Status, Req} ->
                     ike_http:reply(Status, Req)
             end;
@@ -169,11 +137,62 @@ submit(Place, Req0) ->
             nobody(Place, Req0)
     end.
 
+%% a form from a session: its token, the text, whether to sign, and the
+%% uploads ticked, as many as the form repeats
+-spec signed_in(
+    place(), {ike_id:actor(), binary(), binary() | none}, [{binary(), binary()}], cowboy_req:req()
+) -> cowboy_req:req().
+signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
+    case maps:from_list(Pairs) of
+        #{<<"csrf">> := Token} = Form ->
+            case byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf) of
+                true ->
+                    %% a post is its account's only when the account
+                    %% asks for that and has a name to put on it.
+                    %% otherwise it is nobody's, and nothing ties
+                    %% the two together
+                    Actor =
+                        case Form of
+                            #{<<"signed">> := <<"1">>} when is_binary(Name) -> Account;
+                            _ -> ike_id:anonymous()
+                        end,
+                    Picked = [
+                        U
+                     || {<<"upload">>, V} <- Pairs,
+                        {U, <<>>} <- [string:to_integer(V)],
+                        is_integer(U),
+                        U > 0
+                    ],
+                    Upload =
+                        case Picked of
+                            [] -> #{};
+                            _ -> #{upload => {Account, Picked}}
+                        end,
+                    case {exists(Place), length(Picked) =< ike_config:images()} of
+                        {true, true} ->
+                            write(
+                                Place, Actor, maps:get(<<"body">>, Form, <<>>), Upload, Req
+                            );
+                        {true, false} ->
+                            Html = ike_view:message(
+                                <<"not posted">>, <<"that is more images than one post takes.">>
+                            ),
+                            ike_http:page(400, Html, Req);
+                        {false, _} ->
+                            ike_http:not_found(Req)
+                    end;
+                false ->
+                    ike_http:forbidden(Req)
+            end;
+        _ ->
+            ike_http:forbidden(Req)
+    end.
+
 -spec write(
     place(),
     ike_id:actor(),
     binary(),
-    #{upload => {ike_id:actor(), pos_integer()}},
+    #{upload => {ike_id:actor(), [pos_integer(), ...]}},
     cowboy_req:req()
 ) -> cowboy_req:req().
 write({Board, Thread} = Place, Actor, Body0, Upload, Req) ->

@@ -15,7 +15,8 @@
     the_media_follow_what_is_shown/1,
     a_restart_makes_them_again/1,
     a_blocked_image_does_not_come_back/1,
-    the_uploader_can_be_suspended/1
+    the_uploader_can_be_suspended/1,
+    a_post_shows_several/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/5, request/5, query/3, cookies/1, upload/3, media/2]).
@@ -28,7 +29,8 @@ all() ->
         the_media_follow_what_is_shown,
         a_restart_makes_them_again,
         a_blocked_image_does_not_come_back,
-        the_uploader_can_be_suspended
+        the_uploader_can_be_suspended,
+        a_post_shows_several
     ].
 
 init_per_suite(Config) ->
@@ -211,7 +213,9 @@ a_blocked_image_does_not_come_back(Config) ->
     "#p" ++ N = string:find(proplists:get_value("location", H), "#"),
     Path = "/mod/post/" ++ N,
     Act = fun(#{csrf := Csrf} = Who, Kind) ->
-        Form = uri_string:compose_query([{"csrf", Csrf}, {"kind", Kind}, {"reason", "x"}]),
+        Form = uri_string:compose_query([
+            {"csrf", Csrf}, {"kind", Kind}, {"image", "0"}, {"reason", "x"}
+        ]),
         element(1, request(Config, post, Path, cookies(Who), {form, Form}))
     end,
     %% offered as each role may
@@ -225,6 +229,15 @@ a_blocked_image_does_not_come_back(Config) ->
     [<<"hide">>] = Offered(Janitor),
     %% unsigned, and still the account behind the image can be suspended
     [<<"hide">>, <<"delete">>, <<"ban">>, <<"block">>] = Offered(Moderator),
+    %% (an image's rung needs to know which image)
+    #{csrf := ModCsrf} = Moderator,
+    {409, _, _} = request(
+        Config,
+        post,
+        Path,
+        cookies(Moderator),
+        {form, uri_string:compose_query([{"csrf", ModCsrf}, {"kind", "block"}, {"reason", "x"}])}
+    ),
     %% a janitor's own unsigned image is the janitor's, and below a
     %% moderator; nobody sees whose it is
     {200, _, Look} = request(Config, get, Path, cookies(Moderator), none),
@@ -283,3 +296,68 @@ the_uploader_can_be_suspended(Config) ->
     [[1]] = query(Config, "SELECT banned FROM actor WHERE subject = 'suspendable'", []),
     {200, _, Form} = request(Config, get, "/board/b/new", cookies(Uploader), none),
     nomatch = binary:match(Form, <<"/logout">>).
+
+a_post_shows_several(Config) ->
+    Session = login(Config, <<"several">>),
+    Other = login(Config, <<"several-other">>),
+    Moderator = login(Config, <<"several-mod">>, #{groups => [<<"ike-moderator">>]}),
+    Admin = login(Config, <<"several-admin">>, #{groups => [<<"ike-admin">>]}),
+    {303, _, _} = upload(Config, Session, [
+        {<<"a.png">>, read(Config, "base.png")}, {<<"b.webp">>, read(Config, "lossy.webp")}
+    ]),
+    [[A, B]] = [
+        [
+            X
+         || [X] <- query(
+                Config,
+                "SELECT u.id FROM upload u JOIN actor a ON a.id = u.actor"
+                " WHERE a.subject = 'several' AND u.posted IS NULL ORDER BY u.id",
+                []
+            )
+        ]
+    ],
+    {303, _, _} = upload(Config, Other, [{<<"c.png">>, read(Config, "base.png")}]),
+    Theirs = latest(Config, <<"several-other">>),
+    Ids = fun(L) -> [{<<"upload">>, integer_to_binary(I)} || I <- L] end,
+    %% all or none: one that is not the account's fails the post, and
+    %% takes nothing with it
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"three">>, Ids([A, B, Theirs])),
+    [[0]] = query(
+        Config, "SELECT count(*) FROM upload WHERE id IN (?, ?) AND posted IS NOT NULL", [A, B]
+    ),
+    {303, H, _} = post(Config, "/board/b/new", Session, <<"two">>, Ids([B, A])),
+    {200, _, Page} = request(Config, get, page(H), [], none),
+    {match, Shown} = re:run(
+        Page,
+        "<a href=\"(http://media\\.test/[0-9a-f]{64}\\.[a-z]+)\"><img",
+        [global, {capture, all_but_first, list}]
+    ),
+    %% in the order ticked
+    [[First], [Second]] = Shown,
+    ".webp" = filename:extension(First),
+    ".png" = filename:extension(Second),
+    "#p" ++ N = string:find(proplists:get_value("location", H), "#"),
+    Path = "/mod/post/" ++ N,
+    %% the post, with both, can be moderated: hidden and back
+    Act = fun(#{csrf := Csrf} = Who, Fields) ->
+        Form = uri_string:compose_query([{"csrf", Csrf}, {"reason", "x"} | Fields]),
+        element(1, request(Config, post, Path, cookies(Who), {form, Form}))
+    end,
+    303 = Act(Moderator, [{"kind", "hide"}]),
+    303 = Act(Moderator, [{"kind", "unhide"}]),
+    {200, _, Look} = request(Config, get, Path, cookies(Admin), none),
+    {_, _} = binary:match(Look, <<"with 2 images">>),
+    %% one image purged, the other stays
+    303 = Act(Admin, [{"kind", "purge_image"}, {"image", "0"}]),
+    {200, _, After} = request(Config, get, page(H), [], none),
+    {_, _} = binary:match(After, <<"<span class=\"gone\">image</span>">>),
+    {match, [[Left]]} = re:run(
+        After,
+        "<a href=\"(http://media\\.test/[0-9a-f]{64}\\.[a-z]+)\"><img",
+        [global, {capture, all_but_first, list}]
+    ),
+    Second = Left,
+    {200, _, _} = media(Config, Second),
+    %% and too many at once is refused
+    Many = [I || I <- lists:seq(1, 9)],
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"many">>, Ids(Many)).

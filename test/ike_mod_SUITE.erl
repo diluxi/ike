@@ -363,7 +363,7 @@ a_hold_ends(Config0) ->
     ),
     Root = number(Posted),
     N = list_to_integer(Root),
-    [[Hash]] = query(Config, "SELECT asset FROM post WHERE id = ?", [N]),
+    [[Hash]] = query(Config, "SELECT asset FROM post_image WHERE post = ? AND position = 0", [N]),
     Hex = binary_to_list(binary:encode_hex(Hash, lowercase)),
     Assets = filename:join(?config(dir, Config), "assets"),
     true = filelib:is_regular(filename:join(Assets, Hex)),

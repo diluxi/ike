@@ -217,6 +217,11 @@ reachability_covers_every_asset_column(Config) ->
         "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, 1, 0)",
         [{blob, Hash}, {blob, crypto:hash(sha256, <<"as it came">>)}]
     ),
+    [] = esqlite3:q(
+        Conn, "INSERT INTO post_image (post, position, asset) VALUES (?1, 0, ?2)", [
+            Root, {blob, Hash}
+        ]
+    ),
     Seen = [Via || [Via] <- esqlite3:q(Conn, "SELECT via FROM asset_reference")],
     lists:foreach(
         fun({Table, Column}) ->
