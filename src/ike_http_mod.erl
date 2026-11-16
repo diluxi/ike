@@ -42,7 +42,16 @@ front({_, Csrf, Role}, Req) ->
         end,
     case Asked of
         none ->
-            Html = ike_view:moderation({Csrf, Role}, ike_reader:boards(), ike_reader:suspended()),
+            Down = [
+                D
+             || {_, Board, _} = D <- ike_reader:out_of_sight(),
+                ike_role:permits(Role, unhide, #{
+                    board => Board, self => false, account => 0, undo => 0
+                })
+            ],
+            Html = ike_view:moderation(
+                {Csrf, Role}, ike_reader:boards(), ike_reader:suspended(), Down
+            ),
             ike_http:page(200, Html, Req);
         Post ->
             ike_http:see_other(<<"/mod/post/", (integer_to_binary(Post))/binary>>, Req)
@@ -83,13 +92,13 @@ kinds(#{state := State, account := Account, images := Images} = Post, Role, Acto
      || {Position, Image} <- Images
     ]}.
 
--spec ladder(shown | hidden | deleted, local | suspended | none) -> [ike_role:kind()].
+-spec ladder(shown | hidden | trashed, local | suspended | none) -> [ike_role:kind()].
 ladder(State, Account) ->
     Ladder =
         case State of
-            shown -> [hide, delete, purge];
-            hidden -> [unhide, delete, purge];
-            deleted -> [restore, purge]
+            shown -> [hide, trash, purge];
+            hidden -> [unhide, trash, purge];
+            trashed -> [restore, purge]
         end,
     case Account of
         local -> Ladder ++ [ban];
@@ -187,7 +196,7 @@ position(Bin) ->
 
 -spec fits(what(), ike_role:kind()) -> boolean().
 fits(post, Kind) ->
-    lists:member(Kind, [hide, unhide, delete, restore, purge, ban, block, unblock, purge_image]);
+    lists:member(Kind, [hide, unhide, trash, restore, purge, ban, block, unblock, purge_image]);
 fits(board, Kind) ->
     Kind =:= lock orelse Kind =:= unlock;
 fits(account, Kind) ->

@@ -14,7 +14,7 @@
 -type kind() ::
     hide
     | unhide
-    | delete
+    | trash
     | restore
     | purge
     | ban
@@ -112,12 +112,12 @@ rank_of(_) -> 0.
 
 -spec kinds() -> [kind()].
 kinds() ->
-    [hide, unhide, delete, restore, purge, ban, unban, lock, unlock, block, unblock, purge_image].
+    [hide, unhide, trash, restore, purge, ban, unban, lock, unlock, block, unblock, purge_image].
 
 -spec kind(binary()) -> {ok, kind()} | error.
 kind(<<"hide">>) -> {ok, hide};
 kind(<<"unhide">>) -> {ok, unhide};
-kind(<<"delete">>) -> {ok, delete};
+kind(<<"trash">>) -> {ok, trash};
 kind(<<"restore">>) -> {ok, restore};
 kind(<<"purge">>) -> {ok, purge};
 kind(<<"ban">>) -> {ok, ban};

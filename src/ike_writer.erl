@@ -60,8 +60,8 @@
 %% as it, and the row beside each entry says who it was
 -define(NOBODY, 1).
 -define(LOG, <<"mod">>).
-%% how often held posts are looked at, at most; milliseconds
--define(HOLD_TICK, 60000).
+%% how often the write-ahead log is folded back; milliseconds
+-define(CHECKPOINT, 60000).
 
 -spec start_link() -> gen_server:start_ret().
 start_link() ->
@@ -183,7 +183,7 @@ init([]) ->
                             ok = swept(Conn),
                             ok = unkept(Conn),
                             ok = republished(Conn),
-                            _ = erlang:send_after(tick(), self(), held),
+                            _ = erlang:send_after(?CHECKPOINT, self(), checkpoint),
                             {ok, Conn};
                         {error, Reason} ->
                             _ = ike_db:close(Conn),
@@ -380,31 +380,16 @@ handle_call(_Request, _From, Conn) ->
 handle_cast(_Request, Conn) ->
     {noreply, Conn}.
 
-%% a deleted post is held for a while and then purged, by nobody
+%% what a purge overwrote is in the write-ahead log until the log is
+%% folded back, and a reader can hold that up: the purge tries at once,
+%% and this tries again, every so often
 -spec handle_info(term(), ike_db:writer()) -> {noreply, ike_db:writer()}.
-handle_info(held, Conn) ->
-    Due = <<"SELECT id FROM post WHERE state = 2 AND purge_at <= ?1 ORDER BY id LIMIT 20">>,
-    case ike_db:q(Conn, Due, [erlang:system_time(second)]) of
-        {ok, Rows} ->
-            %% one that went with its thread a moment ago is no longer there
-            [
-                moderated(Conn, system, purge, Id, <<"its hold ended">>)
-             || [Id] <- Rows, is_integer(Id)
-            ];
-        {error, _} ->
-            ok
-    end,
-    %% what a purge overwrote is in the write-ahead log until the log
-    %% is folded back, and a reader can hold that up: so again, here
+handle_info(checkpoint, Conn) ->
     _ = ike_db:exec(Conn, <<"PRAGMA wal_checkpoint(TRUNCATE)">>),
-    _ = erlang:send_after(tick(), self(), held),
+    _ = erlang:send_after(?CHECKPOINT, self(), checkpoint),
     {noreply, Conn};
 handle_info(_Info, Conn) ->
     {noreply, Conn}.
-
--spec tick() -> pos_integer().
-tick() ->
-    min(?HOLD_TICK, ike_config:hold_seconds() * 1000).
 
 -spec terminate(term(), ike_db:writer()) -> ok.
 terminate(_Reason, Conn) ->
@@ -805,9 +790,9 @@ ladder(Conn, Who, Kind, {Post, Thread, Board, Actor}, {State, Local, Banned}, {R
             state(Conn, Who, Kind, {Post, Thread, Board}, {1, undefined}, Reason, Time);
         {unhide, 1, _, _} ->
             state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
-        {delete, Shown, _, _} when Shown < 2 ->
-            Until = Time + ike_config:hold_seconds(),
-            state(Conn, Who, Kind, {Post, Thread, Board}, {2, Until}, Reason, Time);
+        {trash, Shown, _, _} when Shown < 2 ->
+            %% kept, and when it was trashed (purge_at, by its old name)
+            state(Conn, Who, Kind, {Post, Thread, Board}, {2, Time}, Reason, Time);
         {restore, 2, _, _} ->
             state(Conn, Who, Kind, {Post, Thread, Board}, {0, undefined}, Reason, Time);
         {purge, _, _, _} ->
@@ -1181,44 +1166,21 @@ republished(Conn) ->
 ) ->
     {ok, Destroyed :: [binary()]} | error().
 changed(Conn, Post, Thread, purge) ->
-    %% invariant 8: the rows, and every link to or from them, and the
-    %% uploads that went into them. what the log says of them stays, and
-    %% names them by number only
+    %% invariant 8: the rows, and every link to or from them. what the
+    %% log says of them stays, and names them by number only. their
+    %% images are not the post's content: they stay, out of sight unless
+    %% another post shows them, and only purge_image erases one (lux)
     These = <<"(SELECT id FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2))">>,
-    Pictured =
-        <<"SELECT DISTINCT asset FROM post_image WHERE asset IS NOT NULL AND post IN ",
-            These/binary>>,
-    Originals = <<"SELECT DISTINCT original FROM upload WHERE asset = ?1">>,
-    case ike_db:q(Conn, Pictured, [Post, Thread]) of
-        {ok, Rows} ->
-            Assets = [A || [A] <- Rows, is_binary(A)],
-            %% every hash each image came as, before its uploads go
-            Hashes = [
-                {A, [
-                    A
-                    | [
-                        O
-                     || {ok, Os} <- [ike_db:q(Conn, Originals, [{blob, A}])],
-                        [O] <- Os,
-                        is_binary(O)
-                    ]
-                ]}
-             || A <- Assets
-            ],
-            Done = each(Conn, [Post, Thread], [
-                <<"DELETE FROM link WHERE post IN ", These/binary>>,
-                <<"DELETE FROM link WHERE source IN ", These/binary>>,
-                <<"UPDATE post SET parent = NULL WHERE parent IN ", These/binary>>,
-                <<"DELETE FROM upload WHERE post IN ", These/binary>>,
-                <<"DELETE FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2)">>,
-                <<"DELETE FROM thread WHERE root = ?1 AND ?1 = ?2">>
-            ]),
-            case Done of
-                ok -> orphaned(Conn, Hashes, []);
-                {error, _} = Error -> Error
-            end;
-        {error, _} = Error ->
-            Error
+    Done = each(Conn, [Post, Thread], [
+        <<"DELETE FROM link WHERE post IN ", These/binary>>,
+        <<"DELETE FROM link WHERE source IN ", These/binary>>,
+        <<"UPDATE post SET parent = NULL WHERE parent IN ", These/binary>>,
+        <<"DELETE FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2)">>,
+        <<"DELETE FROM thread WHERE root = ?1 AND ?1 = ?2">>
+    ]),
+    case Done of
+        ok -> {ok, []};
+        {error, _} = Error -> Error
     end;
 changed(Conn, Post, _Thread, {State, Until}) ->
     Update = <<"UPDATE post SET state = ?2, purge_at = ?3 WHERE id = ?1">>,
@@ -1226,40 +1188,6 @@ changed(Conn, Post, _Thread, {State, Until}) ->
         {ok, _} -> {ok, []};
         {error, _} = Error -> Error
     end.
-
-%% an image no post shows and no upload waits with any more goes too,
-%% and its hashes onto the blocklist, as planning's Purge has it (an
-%% image another post still shows stays, with that post)
--spec orphaned(ike_db:writer(), [{binary(), [binary()]}], [binary()]) ->
-    {ok, [binary()]} | error().
-orphaned(Conn, [{Hash, Hashes} | Rest], Acc) ->
-    Used = <<"SELECT 1 FROM asset_reference WHERE asset = ?1 LIMIT 1">>,
-    case ike_db:q(Conn, Used, [{blob, Hash}]) of
-        {ok, [_]} ->
-            orphaned(Conn, Rest, Acc);
-        {ok, []} ->
-            Insert =
-                <<"INSERT INTO blocklist (hash, time) VALUES (?1, ?2) ON CONFLICT DO NOTHING">>,
-            case each_hash(Conn, Insert, Hashes, [erlang:system_time(second)]) of
-                ok ->
-                    case
-                        each(Conn, [{blob, Hash}], [
-                            <<"DELETE FROM upload WHERE asset = ?1">>,
-                            <<"UPDATE post_image SET asset = NULL, gone = 1 WHERE asset = ?1">>,
-                            <<"DELETE FROM asset WHERE hash = ?1">>
-                        ])
-                    of
-                        ok -> orphaned(Conn, Rest, [binary:encode_hex(Hash, lowercase) | Acc]);
-                        {error, _} = Error -> Error
-                    end;
-                {error, _} = Error ->
-                    Error
-            end;
-        {error, _} = Error ->
-            Error
-    end;
-orphaned(_Conn, [], Acc) ->
-    {ok, Acc}.
 
 -spec each(ike_db:writer(), [term()], [binary()]) -> ok | error().
 each(Conn, Args, [Sql | Rest]) ->

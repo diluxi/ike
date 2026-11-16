@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
--export([staged/1, staged_file/1, posted/1]).
+-export([staged/1, staged_file/1, posted/1, out_of_sight/0]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -99,7 +99,7 @@ post(Post) ->
                     case State of
                         0 -> shown;
                         1 -> hidden;
-                        _ -> deleted
+                        _ -> trashed
                     end,
                 time => Time,
                 body => Body,
@@ -129,6 +129,23 @@ post(Post) ->
             }};
         _ ->
             none
+    end.
+
+%% posts taken out of sight and kept: hidden or trashed, newest first
+-spec out_of_sight() -> [{Post :: pos_integer(), Board :: binary(), hidden | trashed}].
+out_of_sight() ->
+    case gen_server:call(?MODULE, out_of_sight) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                {Id, Board,
+                    case State of
+                        1 -> hidden;
+                        _ -> trashed
+                    end}
+             || [Id, Board, State] <- Rows, is_integer(Id), Id > 0, is_binary(Board)
+            ];
+        _ ->
+            []
     end.
 
 %% an account's uploads that went into posts, newest first, and where
@@ -209,6 +226,13 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call(out_of_sight, _From, Conn) ->
+    Sql = <<
+        "SELECT p.id, b.name, p.state FROM post p JOIN thread t ON t.root = p.thread"
+        " JOIN board b ON b.id = t.board WHERE p.state IN (1, 2) AND b.log = 0"
+        " ORDER BY p.id DESC LIMIT 200"
+    >>,
+    {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call({posted, Actor}, _From, Conn) when is_integer(Actor) ->
     Sql = <<
         "SELECT id, post FROM upload WHERE actor = ?1 AND post IS NOT NULL"

@@ -82,21 +82,14 @@ here.
   nothing about anyone) would fix it, if wanted. And a kept profile's
   own text tags (its description) may name a device; blanking them
   leaves colour alone. Neither is built.
-- **Q33 Asking after the first deploy (2026-11-16).** lux's answers so
-  far: hiding and deleting never destroy or block an image (was Q30);
-  files on the post form; uploads without an account behind an admin's
-  switch, still images only (against A1 as written). Open:
-  - after a delete's hold, does the text still go for good (planning
-    lines 167, 200)? If it goes and its images stay, it is not a purge;
-  - deleting one's own post: not a moderation; for an unsigned post, a
-    per-browser secret in a cookie and a keyed hash of it per post
-    (beyond "nothing but contents", planning line 11);
-  - "svf": SWF (M6, P8) or SVG (never, P5)?
-  - moderating from the boards: pages made per request for anyone
-    logged in, static for everyone else;
-  - meshes, Live2D, MMD: as opaque downloads from a sandboxed origin
-    without previews, or wait until previews (JavaScript) are allowed;
-  - the wiki before the public launch means lifting S2.
+- **Q33 What the first deploy asked.** Answered (decisions.md): the
+  words for taking things down, nothing expires, SVG with SWF, meshes as
+  downloads, the wiki before launch, retraction by password. Open:
+  - tokenless forms on the static pages, guarded by the Origin header
+    instead of the session's token (hazard I2 asks for tokens);
+  - whose role may restore a retracted post;
+  - which mesh formats, and an exemption in invariant 11's wording for
+    files nothing can strip.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

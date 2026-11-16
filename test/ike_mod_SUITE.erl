@@ -19,7 +19,7 @@
     locking/1,
     the_log_takes_nothing/1,
     a_stale_page_goes_at_start/1,
-    a_hold_ends/1
+    trash_is_kept/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/4, sign/4, request/5, query/3, cookies/1]).
@@ -37,8 +37,7 @@ all() ->
         locking,
         the_log_takes_nothing,
         a_stale_page_goes_at_start,
-        %% last: it starts ike again with a short hold
-        a_hold_ends
+        trash_is_kept
     ].
 
 init_per_suite(Config) ->
@@ -107,7 +106,7 @@ a_janitor_only_hides(Config) ->
     {200, _, Look} = request(Config, get, Path, cookies(Janitor), none),
     Kinds = [K || [K] <- forms(Look)],
     [<<"hide">>] = Kinds,
-    [{403, _, _} = act(Config, Janitor, Path, K, "x") || K <- ["delete", "purge", "ban"]],
+    [{403, _, _} = act(Config, Janitor, Path, K, "x") || K <- ["trash", "purge", "ban"]],
     {403, _, _} = act(Config, Janitor, "/mod/board/b", "unlock", "x"),
     {303, _, _} = act(Config, Janitor, Path, "hide", "off topic"),
     {200, _, Page} = request(Config, get, Thread, [], none),
@@ -216,14 +215,15 @@ a_moderator_does_not_purge(Config) ->
     Moderator = moderator(Config, <<"moderator">>),
     {200, _, Look} = request(Config, get, Path, cookies(Moderator), none),
     %% an unsigned post leads to no account: nothing to ban
-    [<<"hide">>, <<"delete">>] = [K || [K] <- forms(Look)],
+    [<<"hide">>, <<"trash">>] = [K || [K] <- forms(Look)],
     {403, _, _} = act(Config, Moderator, Path, "purge", "x"),
-    {303, _, _} = act(Config, Moderator, Path, "delete", "rule 3"),
+    {303, _, _} = act(Config, Moderator, Path, "trash", "rule 3"),
     {404, _, _} = request(Config, get, "/p/" ++ N, [], none),
-    [[2, Until]] = query(
+    %% trashed now, kept with no end
+    [[2, When]] = query(
         Config, "SELECT state, purge_at FROM post WHERE id = ?", [list_to_integer(N)]
     ),
-    true = Until > erlang:system_time(second) + 86400,
+    true = When =< erlang:system_time(second),
     {200, _, Deleted} = request(Config, get, Path, cookies(Moderator), none),
     [<<"restore">>] = [K || [K] <- forms(Deleted)],
     {303, _, _} = act(Config, Moderator, Path, "restore", "on appeal"),
@@ -270,7 +270,7 @@ a_ban_outlives_a_restart(Config) ->
     N = number(H),
     Moderator = moderator(Config, <<"bmoderator">>),
     {200, _, Look} = request(Config, get, "/mod/post/" ++ N, cookies(Moderator), none),
-    [<<"hide">>, <<"delete">>, <<"ban">>] = [K || [K] <- forms(Look)],
+    [<<"hide">>, <<"trash">>, <<"ban">>] = [K || [K] <- forms(Look)],
     {303, _, _} = act(Config, Moderator, "/mod/post/" ++ N, "ban", "rule 4"),
     {409, _, _} = act(Config, Moderator, "/mod/post/" ++ N, "ban", "again"),
     %% the session is gone at once, and no new one is given
@@ -358,16 +358,15 @@ a_stale_page_goes_at_start(Config) ->
     404 = status(Config, Thread),
     200 = status(Config, Kept).
 
-a_hold_ends(Config0) ->
-    ike_browser:stop(),
-    Config = ike_browser:start(Config0, [{hold_seconds, 1}]),
-    Writer = login(Config, <<"hwriter">>),
-    %% with an image, which goes with it
-    {ok, Png} = file:read_file(filename:join(?config(data_dir, Config0), "base.png")),
-    {303, _, _} = ike_browser:upload(Config, Writer, [{<<"h.png">>, Png}]),
+%% trash is out of sight and kept: no time takes it, its images stay,
+%% moderators find it again, and restore puts it back (lux, 2026-11-16)
+trash_is_kept(Config) ->
+    Writer = login(Config, <<"twriter2">>),
+    {ok, Png} = file:read_file(filename:join(?config(data_dir, Config), "base.png")),
+    {303, _, _} = ike_browser:upload(Config, Writer, [{<<"t.png">>, Png}]),
     [[Upload]] = query(Config, "SELECT max(id) FROM upload", []),
     {303, Posted, _} = ike_browser:post(
-        Config, "/board/b/new", Writer, <<"held, then gone">>, [
+        Config, "/board/b/new", Writer, <<"to the trash">>, [
             {<<"upload">>, integer_to_binary(Upload)}
         ]
     ),
@@ -375,32 +374,19 @@ a_hold_ends(Config0) ->
     N = list_to_integer(Root),
     [[Hash]] = query(Config, "SELECT asset FROM post_image WHERE post = ? AND position = 0", [N]),
     Hex = binary_to_list(binary:encode_hex(Hash, lowercase)),
-    Assets = filename:join(?config(dir, Config), "assets"),
-    true = filelib:is_regular(filename:join(Assets, Hex)),
-    Moderator = moderator(Config, <<"hmoderator">>),
-    {303, _, _} = act(Config, Moderator, "/mod/post/" ++ Root, "delete", "rule 5"),
-    [] = wait(fun() -> query(Config, "SELECT id FROM post WHERE id = ?", [N]) end, 50),
-    [[0]] = query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [{blob, Hash}]),
-    false = filelib:is_regular(filename:join(Assets, Hex)),
-    [] = filelib:wildcard(
-        binary_to_list(filename:join(?config(dir, Config), "media")) ++ "/" ++ Hex ++ "*"
-    ),
-    %% ike did it, and says so: no account, the role system
-    [[<<"system">>, undefined, Entry]] = query(
-        Config, "SELECT role, actor, entry FROM action WHERE kind = 'purge' AND post = ?", [N]
-    ),
-    {303, H, _} = request(Config, get, "/p/" ++ integer_to_list(Entry), [], none),
-    {200, _, Log} = request(Config, get, page(H), [], none),
-    {_, _} = binary:match(Log, <<"<span class=\"name role\">system</span>">>),
-    {_, _} = binary:match(Log, <<"<span class=\"name role\">moderator</span>">>).
-
-wait(Fun, 0) ->
-    Fun();
-wait(Fun, N) ->
-    case Fun() of
-        [] ->
-            [];
-        _ ->
-            timer:sleep(200),
-            wait(Fun, N - 1)
-    end.
+    Moderator = moderator(Config, <<"tmod2">>),
+    {303, _, _} = act(Config, Moderator, "/mod/post/" ++ Root, "trash", "off topic"),
+    404 = status(Config, "/p/" ++ Root),
+    [[2]] = query(Config, "SELECT state FROM post WHERE id = ?", [N]),
+    %% the image is kept, and its hash is free
+    true = filelib:is_regular(filename:join([?config(dir, Config), "assets", Hex])),
+    [[0]] = query(Config, "SELECT count(*) FROM blocklist WHERE hash = ?", [{blob, Hash}]),
+    {200, _, Mod} = request(Config, get, "/mod", cookies(Moderator), none),
+    {_, _} = binary:match(Mod, list_to_binary(">&gt;&gt;" ++ Root ++ " on /b/, trashed<")),
+    {303, _, _} = act(Config, Moderator, "/mod/post/" ++ Root, "restore", "on second look"),
+    303 = status(Config, "/p/" ++ Root),
+    [[<<"trash >>", _/binary>>]] = query(
+        Config,
+        "SELECT p.body FROM action a JOIN post p ON p.id = a.entry WHERE a.kind = 'trash' AND a.post = ?",
+        [N]
+    ).

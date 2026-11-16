@@ -40,7 +40,6 @@
 					moderator => <<${builtins.toJSON cfg.roles.moderator}/utf8>>,
 					janitor => <<${builtins.toJSON cfg.roles.janitor}/utf8>>
 				}},
-				{hold_seconds, ${toString cfg.holdSeconds}},
 				{strip, #{
 					socket => <<"${stripSocket}">>,
 					max_bytes => ${toString cfg.strip.maxBytes},
@@ -250,15 +249,6 @@ in {
 				default = "ike-janitor-";
 				description = "The prefix of the groups whose accounts may hide and unhide posts on one board: `ike-janitor-b` for /b/.";
 			};
-		};
-
-		holdSeconds = lib.mkOption {
-			type = lib.types.ints.positive;
-			default = 14 * 86400;
-			description = ''
-				How long a deleted post is kept, out of sight, before ike
-				purges it. An open decision in planning.md; this is a stub.
-			'';
 		};
 
 		media = {

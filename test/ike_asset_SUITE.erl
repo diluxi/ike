@@ -235,7 +235,7 @@ a_blocked_image_does_not_come_back(Config) ->
     end,
     [<<"hide">>] = Offered(Janitor),
     %% unsigned, and still the account behind the image can be suspended
-    [<<"hide">>, <<"delete">>, <<"ban">>, <<"block">>] = Offered(Moderator),
+    [<<"hide">>, <<"trash">>, <<"ban">>, <<"block">>] = Offered(Moderator),
     %% (an image's rung needs to know which image)
     #{csrf := ModCsrf} = Moderator,
     {409, _, _} = request(

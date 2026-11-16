@@ -3,7 +3,7 @@
 -module(ike_view).
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
--export([moderation/3, moderated/3, upload/4, upload_locked/0, account/1]).
+-export([moderation/4, moderated/3, upload/4, upload_locked/0, account/1]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -35,7 +35,7 @@
     id := integer(),
     thread := integer(),
     board := binary(),
-    state := shown | hidden | deleted,
+    state := shown | hidden | trashed,
     time := integer(),
     body := binary(),
     name := binary() | none,
@@ -342,9 +342,10 @@ post_form(Action, {csrf, Csrf, Name, Staged}) ->
 -spec moderation(
     {Csrf :: binary(), ike_role:role()},
     [{Name :: binary(), Title :: binary(), Locked :: boolean()}],
-    [{Account :: integer(), Name :: binary(), Rank :: 0..3}]
+    [{Account :: integer(), Name :: binary(), Rank :: 0..3}],
+    [{pos_integer(), binary(), hidden | trashed}]
 ) -> ike_html:html().
-moderation({Csrf, Role}, Boards, Suspended) ->
+moderation({Csrf, Role}, Boards, Suspended, Down) ->
     layout(<<"moderation">>, [
         ike_html:el(h1, [ike_html:text(<<"moderation">>)]),
         ike_html:el(p, [
@@ -405,6 +406,17 @@ moderation({Csrf, Role}, Boards, Suspended) ->
                 )
             ])
          || {Account, Name, Rank} <- Suspended
+        ]),
+        %% what is out of sight and kept, to be looked at again
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                anchor(
+                    <<"/mod/post/", (integer_to_binary(Id))/binary>>,
+                    <<">>", (integer_to_binary(Id))/binary, " on /", Board/binary, "/, ",
+                        (atom_to_binary(State))/binary>>
+                )
+            ])
+         || {Id, Board, State} <- Down
         ])
     ]).
 

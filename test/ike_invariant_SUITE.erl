@@ -927,8 +927,9 @@ inv08_purge_leaves_nothing(Config) ->
     %% and it does not come back
     {422, _, Again} = ike_browser:upload(Config, Writer, [{<<"again.webp">>, Webp}]),
     {_, _} = binary:match(Again, <<"file 1: not taken">>),
-    %% a post with an image, purged as a post: the image goes with it
-    %% when nothing else shows it, its hashes onto the blocklist
+    %% a post with an image, purged as a post: its text goes, and its
+    %% image stays, kept, out of sight, its hash free. the image is not
+    %% the post's content (lux, 2026-11-16); purge_image erases one
     Lossy = read(?config(data_dir, Config), "lossy.webp"),
     {303, _, _} = ike_browser:upload(Config, Writer, [{<<"l.webp">>, Lossy}]),
     [[Staged2]] = ike_browser:query(
@@ -949,7 +950,7 @@ inv08_purge_leaves_nothing(Config) ->
         ]
     ),
     WholeHex = binary_to_list(binary:encode_hex(WholeHash, lowercase)),
-    {200, _, WholeImage} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
+    {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
     {303, _, _} = ike_browser:request(
         Config,
         post,
@@ -958,15 +959,17 @@ inv08_purge_leaves_nothing(Config) ->
         {form,
             uri_string:compose_query([{"csrf", ImageCsrf}, {"kind", "purge"}, {"reason", "rule 2"}])}
     ),
-    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [
+    [[1]] = ike_browser:query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [
         {blob, WholeHash}
     ]),
-    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM upload WHERE asset = ?", [
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM blocklist WHERE hash = ?", [
         {blob, WholeHash}
     ]),
-    [[1]] = ike_browser:query(Config, "SELECT count(*) FROM blocklist WHERE hash = ?", [
-        {blob, WholeHash}
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE id = ?", [
+        list_to_integer(Whole)
     ]),
+    {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
+    true = filelib:is_regular(filename:join([?config(dir, Config), "assets", WholeHex])),
     %% and every file but the snapshots: the write-ahead log is folded
     %% back after a purge, and secure_delete overwrote the pages it freed
     Dir = binary_to_list(?config(dir, Config)),
@@ -976,8 +979,7 @@ inv08_purge_leaves_nothing(Config) ->
          || F <- files(Dir),
             not lists:prefix(filename:join(Dir, "backups"), F),
             holds(F, Marker) orelse holds(F, Kept) orelse holds(F, StoredImage) orelse
-                string:find(F, ImageHex) =/= nomatch orelse holds(F, WholeImage) orelse
-                string:find(F, WholeHex) =/= nomatch
+                string:find(F, ImageHex) =/= nomatch orelse holds(F, <<"a post to purge">>)
         ]
     end,
     [] = eventually(Searched, 50),

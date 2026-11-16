@@ -727,3 +727,30 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **Caddy's unit names the `ike` group** (`SupplementaryGroups`), so
   the switch that adds it restarts Caddy; a reload had kept the old
   groups, and media answered 403 while pages fell through to ike.
+
+## Words for taking things down (lux, 2026-11-16)
+
+- **erasure:** the data is made unreadable on the server, shredded.
+  Only a purge erases.
+- **hide:** out of every view but moderators' (janitors and up).
+- **trash** (was "delete"): hidden, and marked as trash. Kept with no
+  end; restore puts it back; `/mod` lists what is hidden or trashed.
+  No hold, nothing after it. `post.purge_at` keeps its name, since
+  SQLite alters no check, and now says when a post was trashed.
+- **deletion:** what a reader sees of a trashed post: gone. On the
+  server it is trash.
+- **retraction:** a poster trashes their own post; not a moderation,
+  not in the public log (next slice).
+- **purge:** the data is illegal or malware, and is erased. A purged
+  post's text is erased; its images are not its content and stay, kept
+  and out of sight unless another post shows them. `purge_image` erases
+  an image and blocks its hashes. This takes back what 36626e0 did, and
+  what a hold's end did, by lux's word; invariant 8's "content" is now
+  read as the post, and an image only when it is purged itself.
+- **Nothing expires.** No hold, no sweeper, no staged uploads collected.
+  Planning's Delete row ("then purged"), its retention table and the GC
+  sweep (lines 167, 183–205, 200) and the Upload row's "collected after
+  a time limit" are wording for lux's documents.
+- **Also lux's word:** SVG beside SWF, in the same milestone, against
+  P5's "never"; meshes, Live2D and MMD as downloads only, for now; the
+  wiki before the public launch, which lifts S2 for M3.
