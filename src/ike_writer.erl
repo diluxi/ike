@@ -125,9 +125,10 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
     {ok, Upload :: pos_integer()} | error().
 upload(#{actor := Actor, original := Original, stripped := Stripped}) ->
     #{type := Type, width := W, height := H, stored := Stored, thumb := Thumb} = Stripped,
+    Traits = spaced([atom_to_binary(T) || T <- maps:get(traits, Stripped, [])]),
     Request =
         {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
-            H, Stored, Thumb},
+            H, Stored, Thumb, Traits},
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
@@ -276,6 +277,7 @@ init([]) ->
                             ok = swept(Conn),
                             ok = unkept(Conn),
                             ok = backfilled(Conn),
+                            ok = inherited(Conn),
                             ok = republished(Conn),
                             _ = erlang:send_after(?CHECKPOINT, self(), checkpoint),
                             {ok, Conn};
@@ -505,8 +507,8 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
             {Held, {ok, Rung}} -> moderated(Conn, {By, Held}, Rung, Target, Reason)
         end,
     {reply, Reply, Conn};
-handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) when
-    is_integer(Actor), is_binary(Original), is_binary(Stored), is_binary(Thumb)
+handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb, Traits}, _From, Conn) when
+    is_integer(Actor), is_binary(Original), is_binary(Stored), is_binary(Thumb), is_binary(Traits)
 ->
     %% the name is what the bytes are, worked out here and not taken
     %% from the stripper's word
@@ -525,8 +527,8 @@ handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) w
                 case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
                     {ok, ok} ->
                         Insert = <<
-                            "INSERT INTO asset (hash, type, format, width, height) VALUES"
-                            " (?1, CASE WHEN ?2 IN ('jpeg', 'png', 'webp') THEN ?2 END, ?2, ?3, ?4)"
+                            "INSERT INTO asset (hash, type, format, width, height, traits) VALUES"
+                            " (?1, CASE WHEN ?2 IN ('jpeg', 'png', 'webp') THEN ?2 END, ?2, ?3, ?4, ?5)"
                             " ON CONFLICT (hash) DO NOTHING"
                         >>,
                         Staged = <<
@@ -536,7 +538,7 @@ handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) w
                         Time = erlang:system_time(second),
                         committed(
                             ike_db:transaction(Conn, fun() ->
-                                case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H]) of
+                                case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H, Traits]) of
                                     {ok, _} ->
                                         case
                                             ike_db:q(Conn, Staged, [
@@ -1604,8 +1606,11 @@ entered(Conn, [Hash | Hashes], Time, Acc) ->
                         " VALUES (?1, 0, ?2, ?3)"
                     >>,
                     case ike_db:q(Conn, Version, [Id, {blob, Hash}, Time]) of
-                        {ok, _} -> entered(Conn, Hashes, Time, [Id | Acc]);
-                        {error, _} = Error -> Error
+                        {ok, _} ->
+                            ok = inherent(Conn, Id, Hash),
+                            entered(Conn, Hashes, Time, [Id | Acc]);
+                        {error, _} = Error ->
+                            Error
                     end;
                 {ok, Other} ->
                     {error, {unexpected, Other}};
@@ -1617,6 +1622,46 @@ entered(Conn, [Hash | Hashes], Time, Acc) ->
     end;
 entered(_Conn, [], _Time, Acc) ->
     {ok, Acc}.
+
+%% the tags an entry has by what its asset is (lux): image and raster,
+%% animation, video, audio. never one for what it lacks. ike puts them on,
+%% so no one's history line says so
+-spec inherent(ike_db:writer(), integer(), binary()) -> ok.
+inherent(Conn, Entry, Hash) ->
+    case ike_db:q(Conn, <<"SELECT format, traits FROM asset WHERE hash = ?1">>, [{blob, Hash}]) of
+        {ok, [[Format, Traits]]} when is_binary(Format), is_binary(Traits) ->
+            Words = binary:split(Traits, <<" ">>, [global, trim_all]),
+            Names =
+                case Format of
+                    _ when Format =:= <<"webm">>; Format =:= <<"mp4">> ->
+                        [<<"video">>] ++ [<<"audio">> || lists:member(<<"audio">>, Words)];
+                    _ ->
+                        [<<"image">>, <<"raster">>] ++
+                            [<<"animation">> || lists:member(<<"animated">>, Words)]
+                end,
+            _ = [put_tag(Conn, Entry, N) || N <- Names],
+            ok;
+        _ ->
+            ok
+    end.
+
+%% at start: every entry's inherent tags, for entries made before them
+-spec inherited(ike_db:writer()) -> ok.
+inherited(Conn) ->
+    Sql = <<
+        "SELECT b.id, (SELECT v.asset FROM booru_version v WHERE v.booru = b.id"
+        " ORDER BY v.position DESC LIMIT 1) FROM booru b"
+    >>,
+    case ike_db:q(Conn, Sql, []) of
+        {ok, Rows} ->
+            _ = ike_db:transaction(Conn, fun() ->
+                _ = [inherent(Conn, E, H) || [E, H] <- Rows, is_integer(E), is_binary(H)],
+                {ok, []}
+            end),
+            ok;
+        {error, _} ->
+            ok
+    end.
 
 %% at start: an entry for every posted image that has none, numbered in
 %% the order the images were first posted

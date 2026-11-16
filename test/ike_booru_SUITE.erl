@@ -13,7 +13,8 @@
     pointed_at_with_hashes/1,
     a_purged_image_leaves_a_gap/1,
     entries_for_older_images/1,
-    tagged_and_found/1
+    tagged_and_found/1,
+    tags_by_what_it_is/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1, upload/3]).
@@ -25,7 +26,8 @@ all() ->
         pointed_at_with_hashes,
         a_purged_image_leaves_a_gap,
         entries_for_older_images,
-        tagged_and_found
+        tagged_and_found,
+        tags_by_what_it_is
     ].
 
 init_per_suite(Config) ->
@@ -220,7 +222,8 @@ tagged_and_found(Config) ->
     %% is dropped
     303 = tag(Config, cookies(Session) ++ Here, E1, "Blue_Hair long_hair rating:s <b> x\"y"),
     303 = tag(Config, cookies(Session) ++ Here, E2, "blue_eyes long_hair"),
-    [[<<"blue_hair">>], [<<"long_hair">>], [<<"rating:s">>]] = query(
+    %% (beside what it is: image, raster)
+    [[<<"blue_hair">>], [<<"image">>], [<<"long_hair">>], [<<"raster">>], [<<"rating:s">>]] = query(
         Config,
         "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ? ORDER BY 1",
         [list_to_integer(E1)]
@@ -256,3 +259,37 @@ tagged_and_found(Config) ->
     303 = tag(Config, cookies(Session) ++ Here, E1, "-long_hair"),
     S6 = search(Config, "long_hair"),
     {false, true} = {Has(S6, E1), Has(S6, E2)}.
+
+%% what an entry is, it is tagged as: no one tagged it, nothing tags an
+%% absence, and a search can tell a silent video from one with sound
+tags_by_what_it_is(Config) ->
+    Session = login(Config, <<"inherent">>),
+    Png = posted(Config, Session, <<"inherent">>, "base.png", <<"still">>),
+    Webm = posted(Config, Session, <<"inherent">>, "base.webm", <<"moving">>),
+    Tags = fun(Post) ->
+        [
+            T
+         || [T] <- query(
+                Config,
+                "SELECT t.name FROM booru_version v JOIN booru_tag bt ON bt.booru = v.booru"
+                " JOIN tag t ON t.id = bt.tag JOIN post_image pi ON pi.asset = v.asset"
+                " WHERE pi.post = ? ORDER BY 1",
+                [Post]
+            )
+        ]
+    end,
+    true = [<<"image">>, <<"raster">>] -- Tags(Png) =:= [],
+    [] =
+        [<<"video">>, <<"audio">>, <<"animation">>] --
+            ([<<"video">>, <<"audio">>, <<"animation">>] -- Tags(Png)) -- [],
+    [<<"audio">>, <<"video">>] = [
+        T
+     || T <- Tags(Webm), lists:member(T, [<<"audio">>, <<"video">>, <<"image">>])
+    ],
+    E = integer_to_list(entry_of(Config, Webm)),
+    Has = fun(Page, X) ->
+        binary:match(Page, list_to_binary("href=\"/booru/" ++ X ++ "\"")) =/= nomatch
+    end,
+    true = Has(search(Config, "video audio"), E),
+    false = Has(search(Config, "video -audio"), E),
+    [[0]] = query(Config, "SELECT count(*) FROM tag_change WHERE booru = ?", [list_to_integer(E)]).

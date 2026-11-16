@@ -2,8 +2,9 @@
 # ike-strip MAX_BYTES MAX_SIDE MAX_PIXELS THUMB [MAX_SECONDS]
 #
 # One upload on stdin, one answer on stdout. Either
-#	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH
-# followed by the stored bytes and then the thumbnail's, or
+#	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH TRAITS
+# (TRAITS: "audio" for a video with sound, else "-") followed by the
+# stored bytes and then the thumbnail's, or
 #	no REASON
 # and nothing more. The stored bytes are the upload with its metadata
 # stripped losslessly (hazards P4, P7), the colour profile and an animated
@@ -85,8 +86,10 @@ if [ "$type" = webm ] || [ "$type" = mp4 ]; then
 		no unreadable
 	vipsthumbnail "$work/first.png" --size "${thumb}x${thumb}" \
 		-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
-	printf 'ok %s %s %s %s %s\n' "$type" "$w" "$h" \
-		"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")"
+	traits=-
+	[ -n "$acodec" ] && traits=audio
+	printf 'ok %s %s %s %s %s %s\n' "$type" "$w" "$h" \
+		"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")" "$traits"
 	cat "$work/out" "$work/thumb.webp"
 	exit 0
 fi
@@ -120,6 +123,6 @@ dimensions "$work/out"
 vipsthumbnail "$work/out" --size "${thumb}x${thumb}" \
 	-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
 
-printf 'ok %s %s %s %s %s\n' "$type" "$w" "$h" \
+printf 'ok %s %s %s %s %s -\n' "$type" "$w" "$h" \
 	"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")"
 cat "$work/out" "$work/thumb.webp"

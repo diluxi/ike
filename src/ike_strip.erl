@@ -14,7 +14,9 @@
     width := pos_integer(),
     height := pos_integer(),
     stored := binary(),
-    thumb := binary()
+    thumb := binary(),
+    %% a video with sound, an animated png
+    traits := [audio | animated]
 }.
 
 %% milliseconds, for the whole exchange
@@ -74,7 +76,7 @@ parse(Bytes, Max) ->
     case binary:split(Bytes, <<"\n">>) of
         [Line, Rest] ->
             case binary:split(Line, <<" ">>, [global]) of
-                [<<"ok">>, Type0, W0, H0, S0, T0] ->
+                [<<"ok">>, Type0, W0, H0, S0, T0, Traits0] ->
                     case {type(Type0), int(W0), int(H0), int(S0), int(T0)} of
                         {{ok, Type}, W, H, S, T} when
                             W > 0,
@@ -88,12 +90,16 @@ parse(Bytes, Max) ->
                             S + T =:= byte_size(Rest)
                         ->
                             <<Stored:S/binary, Thumb:T/binary>> = Rest,
+                            Animated =
+                                Type =:= png andalso binary:match(Stored, <<"acTL">>) =/= nomatch,
                             {ok, #{
                                 type => Type,
                                 width => W,
                                 height => H,
                                 stored => Stored,
-                                thumb => Thumb
+                                thumb => Thumb,
+                                traits =>
+                                    [audio || Traits0 =:= <<"audio">>] ++ [animated || Animated]
                             }};
                         _ ->
                             {error, unavailable}

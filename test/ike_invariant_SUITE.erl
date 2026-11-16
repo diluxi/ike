@@ -1391,7 +1391,7 @@ strip_bytes(Work, Bytes, Caps) ->
     {ok, Answer} = file:read_file(Out),
     [Line, Rest] = binary:split(Answer, <<"\n">>),
     case binary:split(Line, <<" ">>, [global]) of
-        [<<"ok">>, Type, W, H, L1, L2] ->
+        [<<"ok">>, Type, W, H, L1, L2, _Traits] ->
             S = binary_to_integer(L1),
             T = binary_to_integer(L2),
             S = byte_size(Rest) - T,

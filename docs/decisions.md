@@ -945,3 +945,16 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   default; lux, against A1 as written): still images only, an animated
   PNG refused, posted at once as uploads of the anonymous actor, never
   staged (invariant 10 has nothing of nobody's to guard).
+
+## Tags by what an entry is (lux, 2026-11-16)
+
+- **Inherent tags:** an entry is tagged `image` and `raster` for a still
+  or animated image, `animation` for an animated PNG, `video` for WebM
+  and MP4, `audio` for a video with sound; never a tag for an absence
+  (lux, on Danbooru's `original`), so `video -audio` finds the silent
+  ones. ike puts them on when an entry is made, and on every entry at
+  start; no history line names anyone for them.
+- **`asset.traits`** keeps what the stripper found beyond the format
+  (`audio`, `animated`); ike-strip's answer has a seventh field for it,
+  and an animated PNG is told by its `acTL` chunk.
+- *Not yet:* `vector` and `mesh`, with SVG and meshes (M6 and later).
