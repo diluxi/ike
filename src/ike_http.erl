@@ -5,7 +5,7 @@
 -export([child_spec/0]).
 -export([headers/0]).
 -export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1, pairs/1]).
--export([same_origin/1]).
+-export([same_origin/1, guarded/1]).
 
 %% what a form may weigh; caddy caps bodies at the same size
 -define(FORM_BYTES, 65536).
@@ -43,7 +43,9 @@ dispatch() ->
             {"/", ike_http_page, front},
             {"/board", ike_http_page, boards},
             {"/booru", ike_http_page, booru},
+            {"/booru/search", ike_http_search, []},
             {"/booru/:booru", [{booru, int}], ike_http_page, entry},
+            {"/booru/:booru/tags", [{booru, int}], ike_http_tag, []},
             {"/board/:board", [Board], ike_http_page, board},
             {"/board/:board/new", [Board], ike_http_post, []},
             {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
@@ -129,6 +131,13 @@ forbidden(Req) ->
         <<"not allowed">>, <<"log in at /login, and send forms from this site's own pages.">>
     ),
     page(403, Html, Req).
+
+%% what stands in for a session's token on the forms of pages that are
+%% the same for everyone (/act, tagging): one place to change, should
+%% those forms carry a token later
+-spec guarded(cowboy_req:req()) -> boolean().
+guarded(Req) ->
+    same_origin(Req).
 
 %% whether a form was sent from one of this site's own pages: a form on a
 %% page that is the same for everyone carries no session's token, so the

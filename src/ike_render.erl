@@ -401,16 +401,26 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
         "SELECT l.source FROM link l JOIN shown s ON s.id = l.source"
         " WHERE l.booru = ?1 ORDER BY l.source"
     >>,
+    Tags = <<
+        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
+        " ORDER BY t.name"
+    >>,
+    %% what was changed, and when; not who
+    Changes = <<
+        "SELECT time, added, removed FROM tag_change WHERE booru = ?1 ORDER BY id DESC LIMIT 20"
+    >>,
     case ike_db:q(Conn, <<"SELECT time FROM shown_entry WHERE id = ?1">>, [Entry]) of
         {ok, [[Time]]} when is_integer(Time) ->
             case
                 {
                     ike_db:q(Conn, Versions, [Entry]),
                     ike_db:q(Conn, Shown, [Entry]),
-                    ike_db:q(Conn, Linked, [Entry])
+                    ike_db:q(Conn, Linked, [Entry]),
+                    ike_db:q(Conn, Tags, [Entry]),
+                    ike_db:q(Conn, Changes, [Entry])
                 }
             of
-                {{ok, Vs}, {ok, Ps}, {ok, Ls}} ->
+                {{ok, Vs}, {ok, Ps}, {ok, Ls}, {ok, Ts}, {ok, Cs}} ->
                     Page = ike_view:entry(#{
                         id => Entry,
                         time => Time,
@@ -423,7 +433,12 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                          || [Position, Hash, Type, W, H] <- Vs, is_integer(Position)
                         ],
                         shown_in => [P || [P] <- Ps, is_integer(P)],
-                        linked_from => [L || [L] <- Ls, is_integer(L)]
+                        linked_from => [L || [L] <- Ls, is_integer(L)],
+                        tags => [T || [T] <- Ts, is_binary(T)],
+                        changes => [
+                            {W, A, R}
+                         || [W, A, R] <- Cs, is_integer(W), is_binary(A), is_binary(R)
+                        ]
                     }),
                     write(Dir, <<"booru/", (integer_to_binary(Entry))/binary, ".html">>, Page);
                 Other ->

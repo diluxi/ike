@@ -31,7 +31,7 @@ init(Req0, State) ->
 %% Origin (missing or "null" is no)
 -spec guard(cowboy_req:req()) -> boolean().
 guard(Req) ->
-    ike_http:same_origin(Req).
+    ike_http:guarded(Req).
 
 -spec read(cowboy_req:req()) -> cowboy_req:req().
 read(Req0) ->

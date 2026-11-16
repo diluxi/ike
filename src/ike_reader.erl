@@ -6,7 +6,7 @@
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
--export([entry_state/1]).
+-export([entry_state/1, search/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -148,6 +148,35 @@ post(Post) ->
             none
     end.
 
+%% entries with every name in Must, none in Not, and for each prefix a
+%% name that starts with it; newest first, at most a hundred
+-spec search({[binary()], [binary()], [binary()]}) ->
+    [
+        {
+            pos_integer(),
+            binary() | undefined,
+            binary() | undefined,
+            integer() | undefined,
+            integer() | undefined
+        }
+    ].
+search(Query) ->
+    case gen_server:call(?MODULE, {search, Query}) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                {Id, Hash, Type, W, H}
+             || [Id, Hash, Type, W, H] <- Rows,
+                is_integer(Id),
+                Id > 0,
+                is_binary(Hash) orelse Hash =:= undefined,
+                is_binary(Type) orelse Type =:= undefined,
+                is_integer(W) orelse W =:= undefined,
+                is_integer(H) orelse H =:= undefined
+            ];
+        _ ->
+            []
+    end.
+
 %% an entry's state, for a moderator
 -spec entry_state(Entry :: integer()) -> {ok, shown | hidden | trashed} | none.
 entry_state(Entry) ->
@@ -281,6 +310,35 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
+    is_list(Must), is_list(Not), is_list(Prefixes)
+->
+    Has = <<
+        " AND EXISTS (SELECT 1 FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+        " WHERE bt.booru = e.id AND t.name = ?)"
+    >>,
+    Lacks = <<
+        " AND NOT EXISTS (SELECT 1 FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+        " WHERE bt.booru = e.id AND t.name = ?)"
+    >>,
+    Starts = <<
+        " AND EXISTS (SELECT 1 FROM booru_tag bt JOIN tag_search s ON s.rowid = bt.tag"
+        " WHERE bt.booru = e.id AND tag_search MATCH ?)"
+    >>,
+    Sql = iolist_to_binary([
+        <<
+            "SELECT e.id, x.hash, x.type, x.width, x.height FROM shown_entry e"
+            " LEFT JOIN asset x ON x.hash = e.asset WHERE 1"
+        >>,
+        [Has || _ <- Must],
+        [Lacks || _ <- Not],
+        [Starts || _ <- Prefixes],
+        <<" ORDER BY e.id DESC LIMIT 100">>
+    ]),
+    %% a name is from a closed set without quotes, so a quoted prefix is
+    %% only ever itself
+    Args = Must ++ Not ++ [<<"\"", P/binary, "\"*">> || P <- Prefixes, is_binary(P)],
+    {reply, ike_db:q(Conn, Sql, Args), Conn};
 handle_call({entry_state, Entry}, _From, Conn) when is_integer(Entry) ->
     {reply, ike_db:q(Conn, <<"SELECT state FROM booru WHERE id = ?1">>, [Entry]), Conn};
 handle_call(reports, _From, Conn) ->

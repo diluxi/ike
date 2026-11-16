@@ -838,3 +838,23 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - *Not yet:* tags, search, entries from `/upload`, versions and
   upgrades, video (ffmpeg, a dependency to ask for), hover cards (they
   need a script).
+
+## M2: tags and search (2026-11-16)
+
+- **A tag name** is 1 to 64 of `a-z 0-9 _ ( ) ! ? : . ' -`, not starting
+  with `-`, `~` or `*`, lowercased as typed; the schema checks the same.
+  What is not a name is dropped. So a name sits in a link or a search
+  with nothing to escape there.
+- **`tag`, `booru_tag`, `tag_change`:** a name once, an entry's tags, and
+  a history (entry, account, time, added, removed). Entry pages show
+  what changed and when, not who; the history keeps who (Q34).
+- **Accounts tag directly** (until proposals, M4; Q34): `-name` takes
+  one off, on a form on the entry's page, guarded as the thread form is
+  (`ike_http:guarded/1`, now shared by both). An entry out of sight is
+  not tagged.
+- **Search,** `/booru/search?tags=a b -c d*`, made per request: every
+  name, none of the minus ones, and for each `d*` a name that starts
+  with it, through an FTS5 index of tag names (prefixes of 2 to 4 are
+  indexed). The newest hundred; no paging yet.
+- *Not yet:* tag categories, counts, aliases and implications (BURs are
+  M4), paging.

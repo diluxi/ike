@@ -4,7 +4,7 @@
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
--export([entry/1, entries/1, moderated_entry/4]).
+-export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -808,9 +808,15 @@ account({Csrf, Name, Role}) ->
     time := integer(),
     versions := [{non_neg_integer(), image() | gone}],
     shown_in := [pos_integer()],
-    linked_from := [pos_integer()]
+    linked_from := [pos_integer()],
+    tags := [binary()],
+    changes := [{integer(), binary(), binary()}]
 }) -> ike_html:html().
-entry(#{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_from := Linked}) ->
+entry(
+    #{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_from := Linked} =
+        Entry
+) ->
+    #{tags := Tags, changes := Changes} = Entry,
     N = integer_to_binary(Id),
     Stamp = stamp(Time),
     Newest =
@@ -852,6 +858,26 @@ entry(#{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_
                     ])
                  || {Position, Image} <- Versions
                 ]),
+                ike_html:el(p, [ike_html:text(<<"tags ">>) | spaced([tag_link(T) || T <- Tags])]),
+                %% a plain form for accounts, on a page the same for
+                %% everyone: guarded as the thread's is
+                ike_html:el(
+                    form, [{method, <<"post">>}, {action, <<"/booru/", N/binary, "/tags">>}], [
+                        ike_html:el(p, [
+                            ike_html:el(label, [{for, <<"tags">>}], [
+                                ike_html:text(<<"tag (accounts; -name takes one off) ">>)
+                            ]),
+                            ike_html:el(
+                                input,
+                                [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}],
+                                []
+                            ),
+                            ike_html:text(<<" ">>),
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"tag">>)])
+                        ])
+                    ]
+                ),
+                ike_html:el(ul, [changed(C) || C <- Changes]),
                 ike_html:el(p, [
                     ike_html:text(<<"shown in ">>) | spaced([permalink(P, <<>>) || P <- Shown])
                 ]),
@@ -861,6 +887,80 @@ entry(#{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_
                 ])
             ]
     ).
+
+%% one change to an entry's tags: when, and what; not who
+-spec changed({integer(), binary(), binary()}) -> ike_html:html().
+changed({When, Added, Removed}) ->
+    Plus =
+        case Added of
+            <<>> -> <<>>;
+            _ -> <<" +", Added/binary>>
+        end,
+    Minus =
+        case Removed of
+            <<>> -> <<>>;
+            _ -> <<" -", Removed/binary>>
+        end,
+    ike_html:el(li, [
+        ike_html:el(time, [{datetime, stamp(When)}], [ike_html:text(stamp(When))]),
+        ike_html:text(<<Plus/binary, Minus/binary>>)
+    ]).
+
+-spec tag_link(binary()) -> ike_html:html().
+tag_link(Name) ->
+    anchor(<<"/booru/search?tags=", Name/binary>>, Name).
+
+%% entries by their tags: the form, what it was asked, and what it found
+-spec search(
+    Said :: binary(),
+    [
+        {
+            pos_integer(),
+            binary() | undefined,
+            binary() | undefined,
+            integer() | undefined,
+            integer() | undefined
+        }
+    ]
+) -> ike_html:html().
+search(Said, Found) ->
+    layout(<<"search">>, [
+        ike_html:el(h1, [ike_html:text(<<"search">>)]),
+        ike_html:el(form, [{method, <<"get">>}, {action, <<"/booru/search">>}], [
+            ike_html:el(p, [
+                ike_html:el(
+                    input, [{name, <<"tags">>}, {value, Said}, {maxlength, <<"1000">>}], []
+                ),
+                ike_html:text(<<" ">>),
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"search">>)])
+            ])
+        ]),
+        ike_html:el(ul, [found(F) || F <- Found])
+    ]).
+
+-spec found(
+    {
+        pos_integer(),
+        binary() | undefined,
+        binary() | undefined,
+        integer() | undefined,
+        integer() | undefined
+    }
+) -> ike_html:html().
+found({Id, Hash, Type, _W, _H}) ->
+    I = integer_to_binary(Id),
+    Href = <<"/booru/", I/binary>>,
+    ike_html:el(li, [
+        case {Hash, Type} of
+            {<<_/binary>>, <<_/binary>>} ->
+                Thumb = ike_media:thumb_url(binary:encode_hex(Hash, lowercase)),
+                ike_html:el(a, [{href, Href}], [
+                    ike_html:el(img, [{src, Thumb}, {alt, <<"##", I/binary>>}], [])
+                ]);
+            _ ->
+                anchor(Href, <<"##", I/binary>>)
+        end
+    ]).
 
 %% a booru entry on its moderation page
 -spec moderated_entry(binary(), pos_integer(), shown | hidden | trashed, [ike_role:kind()]) ->

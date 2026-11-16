@@ -6,7 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
--export([report/2, dismiss/1]).
+-export([report/2, dismiss/1, tag/3]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -164,6 +164,12 @@ retract(Post, By) ->
         true -> done(call({retract, N, Who}));
         false -> {error, not_yours}
     end.
+
+%% an account adds and takes away an entry's tags; the history keeps who
+-spec tag(ike_id:booru(), ike_id:actor(), {[binary()], [binary()]}) ->
+    ok | {error, no_such_entry | nothing} | error().
+tag(Entry, Actor, {Add, Remove}) ->
+    done(call({tag, ike_id:to_integer(Entry), ike_id:to_integer(Actor), Add, Remove})).
 
 %% a reader's word that a post needs a moderator's eye. nothing of who
 %% said it is kept
@@ -353,6 +359,21 @@ handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
                 end;
             false ->
                 {error, bad_text}
+        end,
+    {reply, Reply, Conn};
+handle_call({tag, Entry, Actor, Add, Remove}, _From, Conn) when
+    is_integer(Entry), is_integer(Actor), is_list(Add), is_list(Remove)
+->
+    Result = ike_db:transaction(Conn, fun() -> tagged(Conn, Entry, Actor, Add, Remove) end),
+    Reply =
+        case Result of
+            {ok, changed} ->
+                ike_render:dirty_booru(Entry),
+                ok;
+            {error, _} = Error ->
+                Error;
+            Other ->
+                {error, {unexpected, Other}}
         end,
     {reply, Reply, Conn};
 handle_call({report, Post, Reason}, _From, Conn) when is_integer(Post), is_binary(Reason) ->
@@ -1285,6 +1306,73 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
             Error;
         {_, {error, _} = Error} ->
             Error
+    end.
+
+%% tags on, tags off, and a line in the history saying what changed; an
+%% entry out of sight is not tagged
+-spec tagged(ike_db:writer(), integer(), integer(), [term()], [term()]) ->
+    {ok, changed} | error().
+tagged(Conn, Entry, Actor, Add, Remove) ->
+    case ike_db:q(Conn, <<"SELECT 1 FROM shown_entry WHERE id = ?1">>, [Entry]) of
+        {ok, [_]} ->
+            Added = [
+                N
+             || N <- Add, is_binary(N), not lists:member(N, Remove), put_tag(Conn, Entry, N)
+            ],
+            Removed = [N || N <- Remove, is_binary(N), take_tag(Conn, Entry, N)],
+            case {Added, Removed} of
+                {[], []} ->
+                    {error, nothing};
+                _ ->
+                    Line = <<
+                        "INSERT INTO tag_change (booru, actor, time, added, removed)"
+                        " VALUES (?1, ?2, ?3, ?4, ?5)"
+                    >>,
+                    Join = fun(Names) -> spaced([N || N <- Names, is_binary(N)]) end,
+                    case
+                        ike_db:q(Conn, Line, [
+                            Entry, Actor, erlang:system_time(second), Join(Added), Join(Removed)
+                        ])
+                    of
+                        {ok, _} -> {ok, changed};
+                        {error, _} = Error -> Error
+                    end
+            end;
+        {ok, _} ->
+            {error, no_such_entry};
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec spaced([binary()]) -> binary().
+spaced([N]) -> N;
+spaced([N | Ns]) -> <<N/binary, " ", (spaced(Ns))/binary>>;
+spaced([]) -> <<>>.
+
+%% whether the tag went on: false if it was on already
+-spec put_tag(ike_db:writer(), integer(), binary()) -> boolean().
+put_tag(Conn, Entry, Name) ->
+    _ = ike_db:q(Conn, <<"INSERT INTO tag (name) VALUES (?1) ON CONFLICT (name) DO NOTHING">>, [
+        Name
+    ]),
+    Sql = <<
+        "INSERT INTO booru_tag (booru, tag) SELECT ?1, id FROM tag WHERE name = ?2"
+        " ON CONFLICT DO NOTHING RETURNING tag"
+    >>,
+    case ike_db:q(Conn, Sql, [Entry, Name]) of
+        {ok, [_]} -> true;
+        _ -> false
+    end.
+
+-spec take_tag(ike_db:writer(), integer(), binary()) -> boolean().
+take_tag(Conn, Entry, Name) ->
+    Sql = <<
+        "DELETE FROM booru_tag WHERE booru = ?1 AND tag = (SELECT id FROM tag WHERE name = ?2)"
+        " RETURNING tag"
+    >>,
+    case ike_db:q(Conn, Sql, [Entry, Name]) of
+        {ok, [_]} -> true;
+        _ -> false
     end.
 
 %% trashed by its poster: what trash does, with no entry in the log

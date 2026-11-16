@@ -356,6 +356,7 @@ inv02_works_without_scripts(Config) ->
         {get, "/account", []},
         {get, "/booru", []},
         {get, "/booru/1", []},
+        {get, "/booru/search?tags=a+-b+c*", []},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
         {post, "/board/b/new", []}
@@ -580,7 +581,8 @@ inv04_text_is_escaped(Config) ->
             "/board/b/" ++ Attack,
             "/board/b/1/reply?x=" ++ Attack,
             "/upload?x=" ++ Attack,
-            "/account?x=" ++ Attack
+            "/account?x=" ++ Attack,
+            "/booru/search?tags=" ++ Attack
         ]
     ).
 
@@ -1468,6 +1470,8 @@ known_routes() ->
         [<<"act">>],
         [<<"booru">>],
         [<<"booru">>, booru],
+        [<<"booru">>, <<"search">>],
+        [<<"booru">>, booru, <<"tags">>],
         [<<"mod">>, <<"booru">>, booru],
         [<<"mod">>, <<"report">>, report],
         [<<"login">>],
@@ -1497,6 +1501,7 @@ known_tables(Config) ->
         [<<"blocklist">>],
         [<<"board">>],
         [<<"booru">>],
+        [<<"booru_tag">>],
         [<<"booru_version">>],
         [<<"link">>],
         [<<"migration">>],
@@ -1506,6 +1511,13 @@ known_tables(Config) ->
         [<<"session">>],
         [<<"shown">>],
         [<<"shown_entry">>],
+        [<<"tag">>],
+        [<<"tag_change">>],
+        [<<"tag_search">>],
+        [<<"tag_search_config">>],
+        [<<"tag_search_data">>],
+        [<<"tag_search_docsize">>],
+        [<<"tag_search_idx">>],
         [<<"thread">>],
         [<<"upload">>]
     ] = Tables.

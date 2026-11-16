@@ -12,7 +12,8 @@
     one_entry_for_one_image/1,
     pointed_at_with_hashes/1,
     a_purged_image_leaves_a_gap/1,
-    entries_for_older_images/1
+    entries_for_older_images/1,
+    tagged_and_found/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1, upload/3]).
@@ -23,7 +24,8 @@ all() ->
         one_entry_for_one_image,
         pointed_at_with_hashes,
         a_purged_image_leaves_a_gap,
-        entries_for_older_images
+        entries_for_older_images,
+        tagged_and_found
     ].
 
 init_per_suite(Config) ->
@@ -188,3 +190,69 @@ eventually(Fun, N) ->
             timer:sleep(100),
             eventually(Fun, N - 1)
     end.
+
+tag(Config, Headers, E, Words) ->
+    element(
+        1,
+        request(
+            Config,
+            post,
+            "/booru/" ++ E ++ "/tags",
+            Headers,
+            {form, uri_string:compose_query([{"tags", Words}])}
+        )
+    ).
+
+search(Config, Query) ->
+    {200, _, Page} = request(
+        Config, get, "/booru/search?" ++ uri_string:compose_query([{"tags", Query}]), [], none
+    ),
+    Page.
+
+tagged_and_found(Config) ->
+    Session = login(Config, <<"tagger">>),
+    Here = [{"origin", ?config(base, Config)}],
+    P1 = posted(Config, Session, <<"tagger">>, "base.jpg", <<"one">>),
+    P2 = posted(Config, Session, <<"tagger">>, "base.png", <<"two">>),
+    E1 = integer_to_list(entry_of(Config, P1)),
+    E2 = integer_to_list(entry_of(Config, P2)),
+    %% an account, from this site: names are lowercased, what is no name
+    %% is dropped
+    303 = tag(Config, cookies(Session) ++ Here, E1, "Blue_Hair long_hair rating:s <b> x\"y"),
+    303 = tag(Config, cookies(Session) ++ Here, E2, "blue_eyes long_hair"),
+    [[<<"blue_hair">>], [<<"long_hair">>], [<<"rating:s">>]] = query(
+        Config,
+        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ? ORDER BY 1",
+        [list_to_integer(E1)]
+    ),
+    %% nobody, or from elsewhere, tags nothing
+    403 = tag(Config, Here, E1, "nobody_tag"),
+    403 = tag(Config, cookies(Session), E1, "no_origin"),
+    [[0]] = query(Config, "SELECT count(*) FROM tag WHERE name IN ('nobody_tag', 'no_origin')", []),
+    %% the entry's page lists them, linked to a search, and what changed
+    {200, _, Page} = request(Config, get, "/booru/" ++ E1, [], none),
+    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=blue_hair\"">>),
+    {_, _} = binary:match(Page, <<"+blue_hair long_hair rating:s">>),
+    nomatch = binary:match(Page, <<"tagger">>),
+    %% the history keeps who
+    [[_Actor]] = query(Config, "SELECT actor FROM tag_change WHERE booru = ? LIMIT 1", [
+        list_to_integer(E1)
+    ]),
+    %% search: every name, none of the minus, a name by its start
+    Has = fun(Page1, E) ->
+        binary:match(Page1, list_to_binary("href=\"/booru/" ++ E ++ "\"")) =/= nomatch
+    end,
+    S1 = search(Config, "long_hair"),
+    {true, true} = {Has(S1, E1), Has(S1, E2)},
+    S2 = search(Config, "long_hair -blue_eyes"),
+    {true, false} = {Has(S2, E1), Has(S2, E2)},
+    S3 = search(Config, "blue*"),
+    {true, true} = {Has(S3, E1), Has(S3, E2)},
+    S4 = search(Config, "blue_e*"),
+    {false, true} = {Has(S4, E1), Has(S4, E2)},
+    S5 = search(Config, "rating:s long_hair"),
+    {true, false} = {Has(S5, E1), Has(S5, E2)},
+    %% taken off
+    303 = tag(Config, cookies(Session) ++ Here, E1, "-long_hair"),
+    S6 = search(Config, "long_hair"),
+    {false, true} = {Has(S6, E1), Has(S6, E2)}.
