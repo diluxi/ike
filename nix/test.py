@@ -77,7 +77,7 @@ machine.succeed("install -m 0640 -o ike -g ike /etc/ike-test/base.png /var/cache
 machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i '^content-type: image/png'")
 machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i \"^content-security-policy: default-src 'none'; sandbox\"")
 machine.succeed("rm /var/cache/ike/media/" + "a" * 64 + ".png")
-machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; img-src http://media.localhost;\"")
+machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; style-src 'self'; img-src http://media.localhost; media-src http://media.localhost;\"")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
 machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")
