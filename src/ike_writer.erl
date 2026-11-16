@@ -31,7 +31,11 @@
     kind := ike_role:kind(),
     %% an image is its post and its place among the post's images, from 0
     target :=
-        ike_id:post() | {image, ike_id:post(), non_neg_integer()} | ike_id:actor() | binary(),
+        ike_id:post()
+        | {image, ike_id:post(), non_neg_integer()}
+        | {entry, ike_id:booru()}
+        | ike_id:actor()
+        | binary(),
     reason := binary()
 }.
 
@@ -49,7 +53,10 @@
     %% assets whose being shown may have changed
     assets := [binary()],
     %% assets purged, by hex: their files go
-    unlinked := [binary()]
+    unlinked := [binary()],
+    %% booru entries whose pages change, and those whose pages go
+    entries := [integer()],
+    gone_entries := [integer()]
 }.
 
 %% long enough for a write queued behind a few others; a caller that gives
@@ -179,6 +186,7 @@ moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Rea
         case Target of
             _ when is_binary(Target) -> Target;
             {image, Post, Image} -> {ike_id:to_integer(Post), Image};
+            {entry, Entry} -> {entry, ike_id:to_integer(Entry)};
             _ -> ike_id:to_integer(Target)
         end,
     done(call({moderate, ike_id:to_integer(By), Role, ike_role:to_binary(Kind), Subject, Reason})).
@@ -240,6 +248,7 @@ init([]) ->
                         ok ->
                             ok = swept(Conn),
                             ok = unkept(Conn),
+                            ok = backfilled(Conn),
                             ok = republished(Conn),
                             _ = erlang:send_after(?CHECKPOINT, self(), checkpoint),
                             {ok, Conn};
@@ -315,8 +324,18 @@ handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
                                             _ -> ike_db:q(Conn, Sealed, [Id, {blob, Password}])
                                         end,
                                     case attach(Conn, Id, Upload, Time) of
-                                        {ok, Assets} -> {ok, {Id, Threads, Assets}};
-                                        {error, _} = Error -> Error
+                                        {ok, Assets} ->
+                                            case entered(Conn, Assets, Time) of
+                                                {ok, Entries} ->
+                                                    {ok,
+                                                        {Id,
+                                                            Threads ++ [{booru, E} || E <- Entries],
+                                                            Assets}};
+                                                {error, _} = Error ->
+                                                    Error
+                                            end;
+                                        {error, _} = Error ->
+                                            Error
                                     end;
                                 Other ->
                                     Other
@@ -547,6 +566,7 @@ settled(_) -> ok.
 -spec committed(term()) -> term().
 committed({ok, {Id, Threads}}) when is_integer(Id), is_list(Threads) ->
     [ike_render:dirty(Thread) || Thread <- Threads, is_integer(Thread)],
+    [ike_render:dirty_booru(E) || {booru, E} <- Threads, is_integer(E)],
     {ok, Id};
 committed(Other) ->
     Other.
@@ -577,7 +597,9 @@ moderated(Conn, Who, Kind, Target, Reason) ->
                     drop := D,
                     scrub := S,
                     assets := A,
-                    unlinked := U
+                    unlinked := U,
+                    entries := E,
+                    gone_entries := GE
                 }} when
                     is_list(T),
                     is_list(G),
@@ -585,10 +607,16 @@ moderated(Conn, Who, Kind, Target, Reason) ->
                     is_list(D),
                     is_boolean(S),
                     is_list(A),
-                    is_list(U)
+                    is_list(U),
+                    is_list(E),
+                    is_list(GE)
                 ->
                     ok = published(Conn, [H || H <- A, is_binary(H)]),
                     ok = unlinked([X || X <- U, is_binary(X)]),
+                    ok = entries_followed([X || X <- E, is_integer(X)], [
+                        X
+                     || X <- GE, is_integer(X)
+                    ]),
                     followed(Conn, T, G, B, D, S);
                 {error, _} = Error ->
                     Error;
@@ -616,6 +644,7 @@ followed(Conn, Threads, Gone, Boards, Drop, Scrub) ->
      || {Board, Root} <- Gone, is_binary(Board), is_integer(Root)
     ],
     [ike_render:dirty(Thread) || Thread <- Threads, is_integer(Thread)],
+    [ike_render:dirty_booru(E) || {booru, E} <- Threads, is_integer(E)],
     [ike_render:dirty_board(Board) || Board <- Boards, is_binary(Board)],
     [ike_session:drop(Actor) || Actor <- Drop, is_integer(Actor)],
     case Scrub of
@@ -644,10 +673,24 @@ swept(Conn) ->
                     page(Pages, Board, integer_to_binary(Root)) => true
                  || [Board, Root] <- Rows, is_binary(Board), is_integer(Root)
                 },
-            Found = filelib:wildcard(binary_to_list(<<Pages/binary, "/board/*/*.html">>)),
+            Entries =
+                case ike_db:q(Conn, <<"SELECT id FROM shown_entry">>, []) of
+                    {ok, Es} ->
+                        #{
+                            <<Pages/binary, "/booru/", (integer_to_binary(E))/binary, ".html">> =>
+                                true
+                         || [E] <- Es, is_integer(E)
+                        };
+                    {error, _} ->
+                        #{}
+                end,
+            Found =
+                filelib:wildcard(binary_to_list(<<Pages/binary, "/board/*/*.html">>)) ++
+                    filelib:wildcard(binary_to_list(<<Pages/binary, "/booru/*.html">>)),
             [
                 file:delete(File)
-             || File <- Found, not maps:is_key(unicode:characters_to_binary(File), Kept)
+             || File <- Found,
+                not maps:is_key(unicode:characters_to_binary(File), maps:merge(Kept, Entries))
             ],
             ok;
         {error, _} ->
@@ -816,6 +859,84 @@ act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
     end;
 act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     act(Conn, Who, Kind, {Post, -1}, Reason, Time);
+act(Conn, Who, Kind, {entry, Entry}, Reason, Time) when
+    is_integer(Entry),
+    (Kind =:= hide orelse Kind =:= unhide orelse Kind =:= trash orelse Kind =:= restore)
+->
+    %% an entry is moderated as a post is, on the booru as a board would
+    %% be (a janitor of /booru/ keeps it)
+    Sql = <<
+        "SELECT b.state, (SELECT role FROM action WHERE booru = b.id AND kind IN ('hide', 'trash')"
+        " ORDER BY entry DESC LIMIT 1),"
+        " (SELECT v.asset FROM booru_version v WHERE v.booru = b.id ORDER BY v.position DESC LIMIT 1)"
+        " FROM booru b WHERE b.id = ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [Entry]) of
+        {ok, [[State, Undo, Asset]]} when is_integer(State) ->
+            Facts = #{board => <<"booru">>, account => 0, undo => ike_role:rank_of(Undo)},
+            To =
+                case {Kind, State} of
+                    {hide, 0} -> {ok, 1};
+                    {unhide, 1} -> {ok, 0};
+                    {trash, S} when S < 2 -> {ok, 2};
+                    {restore, 2} -> {ok, 0};
+                    _ -> not_now
+                end,
+            case {permits(Who, Kind, Facts, 0), To} of
+                {false, _} ->
+                    {error, not_allowed};
+                {true, not_now} ->
+                    {error, not_now};
+                {true, {ok, New}} ->
+                    E = integer_to_binary(Entry),
+                    Text = <<(ike_role:to_binary(Kind))/binary, " ##", E/binary>>,
+                    case
+                        log(
+                            Conn,
+                            Who,
+                            Kind,
+                            Text,
+                            Reason,
+                            Time,
+                            {undefined, undefined, undefined, Entry},
+                            entry
+                        )
+                    of
+                        {ok, Logged} ->
+                            case
+                                ike_db:q(Conn, <<"UPDATE booru SET state = ?2 WHERE id = ?1">>, [
+                                    Entry, New
+                                ])
+                            of
+                                {ok, _} ->
+                                    %% the posts that point at it show it, or not
+                                    Pointing = <<
+                                        "SELECT DISTINCT p.thread FROM link l JOIN post p ON p.id = l.source"
+                                        " WHERE l.booru = ?1"
+                                    >>,
+                                    Threads =
+                                        case ike_db:q(Conn, Pointing, [Entry]) of
+                                            {ok, Rows} -> [T || [T] <- Rows, is_integer(T)];
+                                            {error, _} -> []
+                                        end,
+                                    {ok, (effects())#{
+                                        threads := Logged ++ Threads,
+                                        assets := [A || A <- [Asset], is_binary(A)],
+                                        entries := [Entry],
+                                        gone_entries := [Entry || New =/= 0]
+                                    }};
+                                {error, _} = Error ->
+                                    Error
+                            end;
+                        {error, _} = Error ->
+                            Error
+                    end
+            end;
+        {ok, _} ->
+            {error, no_such_post};
+        {error, _} = Error ->
+            Error
+    end;
 act(Conn, Who, Kind, {Post, Position}, Reason, Time) when is_integer(Post), is_integer(Position) ->
     %% nothing on the log is ever taken down. undo: who put the post in
     %% the state it is in, by role
@@ -974,13 +1095,23 @@ image(Conn, Who, Kind, {Post, Position, Thread, Hash}, {Reason, Time}) when
         _ ->
             case log(Conn, Who, Kind, Text, Reason, Time, {Post, undefined, undefined}) of
                 {ok, Logged} ->
+                    Holding =
+                        case
+                            ike_db:q(Conn, <<"SELECT booru FROM booru_version WHERE asset = ?1">>, [
+                                {blob, Hash}
+                            ])
+                        of
+                            {ok, Bs} -> [B || [B] <- Bs, is_integer(B)];
+                            {error, _} -> []
+                        end,
                     case imaged(Conn, Kind, Hash, Hashes, Time) of
                         {ok, Threads} ->
                             Purged = Kind =:= purge_image,
                             {ok, (effects())#{
                                 threads := [Thread | Logged] ++ Threads,
                                 scrub := Purged,
-                                unlinked := [binary:encode_hex(Hash, lowercase) || Purged]
+                                unlinked := [binary:encode_hex(Hash, lowercase) || Purged],
+                                entries := Holding
                             }};
                         {error, _} = Error ->
                             Error
@@ -1021,6 +1152,8 @@ imaged(Conn, purge_image, Hash, Hashes, Time) ->
         {{ok, _}, {ok, Rows}} ->
             Steps = [
                 <<"UPDATE post_image SET asset = NULL, gone = 1 WHERE asset = ?1">>,
+                %% an entry keeps the version, empty: a gap
+                <<"UPDATE booru_version SET asset = NULL WHERE asset = ?1">>,
                 <<"DELETE FROM upload WHERE asset = ?1">>,
                 <<"DELETE FROM asset WHERE hash = ?1">>
             ],
@@ -1063,7 +1196,9 @@ effects() ->
         drop => [],
         scrub => false,
         assets => [],
-        unlinked => []
+        unlinked => [],
+        entries => [],
+        gone_entries => []
     }.
 
 -spec logged({ok, [term()]} | error(), effects()) -> {ok, effects()} | error().
@@ -1136,7 +1271,9 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                                 drop => [],
                                 scrub => To =:= purge,
                                 assets => [A || [A] <- Assets, is_binary(A)],
-                                unlinked => Destroyed
+                                unlinked => Destroyed,
+                                entries => [],
+                                gone_entries => []
                             }};
                         {error, _} = Error ->
                             Error
@@ -1232,6 +1369,80 @@ attach(_Conn, _Post, _Account, [], _Position, _Time, Acc) ->
 attach(_Conn, _Post, _Account, _Uploads, _Position, _Time, _Acc) ->
     {error, bad_request}.
 
+%% the entries of these images, made for each that has none, at once
+%% (planning leaves
+%% open whether at once or only when tagged: booru_at_once, a stub). an
+%% entry says nothing of who brought its image
+-spec entered(ike_db:writer(), [binary()], integer()) -> {ok, [pos_integer()]} | error().
+entered(Conn, Hashes, Time) ->
+    case ike_config:booru_at_once() of
+        true -> entered(Conn, Hashes, Time, []);
+        false -> {ok, []}
+    end.
+
+-spec entered(ike_db:writer(), [binary()], integer(), [pos_integer()]) ->
+    {ok, [pos_integer()]} | error().
+entered(Conn, [Hash | Hashes], Time, Acc) ->
+    %% one that has an entry is shown in one more post: its page changes
+    Has = <<"SELECT booru FROM booru_version WHERE asset = ?1">>,
+    case ike_db:q(Conn, Has, [{blob, Hash}]) of
+        {ok, [[Known] | _]} when is_integer(Known), Known > 0 ->
+            entered(Conn, Hashes, Time, [Known | Acc]);
+        {ok, [_ | _]} ->
+            entered(Conn, Hashes, Time, Acc);
+        {ok, []} ->
+            case ike_db:q(Conn, <<"INSERT INTO booru (time) VALUES (?1) RETURNING id">>, [Time]) of
+                {ok, [[Id]]} when is_integer(Id), Id > 0 ->
+                    Version = <<
+                        "INSERT INTO booru_version (booru, position, asset, time)"
+                        " VALUES (?1, 0, ?2, ?3)"
+                    >>,
+                    case ike_db:q(Conn, Version, [Id, {blob, Hash}, Time]) of
+                        {ok, _} -> entered(Conn, Hashes, Time, [Id | Acc]);
+                        {error, _} = Error -> Error
+                    end;
+                {ok, Other} ->
+                    {error, {unexpected, Other}};
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end;
+entered(_Conn, [], _Time, Acc) ->
+    {ok, Acc}.
+
+%% at start: an entry for every posted image that has none, numbered in
+%% the order the images were first posted
+-spec backfilled(ike_db:writer()) -> ok.
+backfilled(Conn) ->
+    Sql = <<
+        "SELECT pi.asset, min(p.time) FROM post_image pi JOIN post p ON p.id = pi.post"
+        " WHERE pi.asset IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM booru_version v WHERE v.asset = pi.asset)"
+        " GROUP BY pi.asset ORDER BY min(pi.post)"
+    >>,
+    case ike_db:q(Conn, Sql, []) of
+        {ok, []} ->
+            ok;
+        {ok, Rows} ->
+            _ = ike_db:transaction(Conn, fun() ->
+                each_entry(Conn, [{H, T} || [H, T] <- Rows, is_binary(H), is_integer(T)])
+            end),
+            ok;
+        {error, _} ->
+            ok
+    end.
+
+-spec each_entry(ike_db:writer(), [{binary(), integer()}]) -> {ok, []} | error().
+each_entry(Conn, [{Hash, Time} | Rest]) ->
+    case entered(Conn, [Hash], Time) of
+        {ok, _} -> each_entry(Conn, Rest);
+        {error, _} = Error -> Error
+    end;
+each_entry(_Conn, []) ->
+    {ok, []}.
+
 %% the media origin's files are the assets some shown post shows, and
 %% no others: each asset named is copied there or taken away to match.
 %% derived, like the pages, and made again whole at start
@@ -1239,7 +1450,7 @@ attach(_Conn, _Post, _Account, _Uploads, _Position, _Time, _Acc) ->
 published(Conn, [Hash | Hashes]) ->
     Sql = <<
         "SELECT x.type, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
-        " WHERE pa.asset = x.hash)"
+        " WHERE pa.asset = x.hash) OR EXISTS (SELECT 1 FROM shown_entry e WHERE e.asset = x.hash)"
         " FROM asset x WHERE x.hash = ?1"
     >>,
     case ike_db:q(Conn, Sql, [{blob, Hash}]) of
@@ -1288,6 +1499,26 @@ kept_name(Name, Keep) when is_binary(Name) ->
 kept_name(_, _) ->
     false.
 
+%% entries' pages: made again, or, for one out of sight now, unlinked
+%% once the renderer has nothing of it left to write
+-spec entries_followed([integer()], [integer()]) -> ok.
+entries_followed(Entries, Gone) ->
+    Pages = ike_config:pages_dir(),
+    [
+        begin
+            _ =
+                try
+                    ike_render:settle({booru, G})
+                catch
+                    exit:_ -> ok
+                end,
+            file:delete(<<Pages/binary, "/booru/", (integer_to_binary(G))/binary, ".html">>)
+        end
+     || G <- Gone
+    ],
+    [ike_render:dirty_booru(E) || E <- Entries],
+    ok.
+
 %% a purged asset's files, wherever ike put them (invariant 8)
 -spec unlinked([binary()]) -> ok.
 unlinked([Hex | Rest]) ->
@@ -1312,7 +1543,7 @@ republished(Conn) ->
     _ = filelib:ensure_path(ike_config:media_dir()),
     Sql = <<
         "SELECT DISTINCT pa.asset FROM post_image pa JOIN shown s ON s.id = pa.post"
-        " WHERE pa.asset IS NOT NULL"
+        " WHERE pa.asset IS NOT NULL UNION SELECT asset FROM shown_entry WHERE asset IS NOT NULL"
     >>,
     case ike_db:q(Conn, Sql, []) of
         {ok, Rows} ->
@@ -1390,14 +1621,29 @@ each(_Conn, _Args, []) ->
 ) ->
     {ok, Threads :: [term()]} | error().
 log(Conn, Who, Kind, Text, Reason, Time, {Post, Account, Board}) ->
+    log(Conn, Who, Kind, Text, Reason, Time, {Post, Account, Board, undefined}, entry).
+
+%% the same, for what a booru entry had done to it
+-spec log(
+    ike_db:writer(),
+    who(),
+    ike_role:kind(),
+    binary(),
+    binary(),
+    integer(),
+    {integer() | undefined, integer() | undefined, integer() | undefined, integer() | undefined},
+    entry
+) ->
+    {ok, Threads :: [term()]} | error().
+log(Conn, Who, Kind, Text, Reason, Time, {Post, Account, Board, Booru}, entry) ->
     {Actor, Role} =
         case Who of
             system -> {undefined, system};
             {By, Held} -> {By, Held}
         end,
     Insert = <<
-        "INSERT INTO action (entry, actor, role, kind, post, account, board)"
-        " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        "INSERT INTO action (entry, actor, role, kind, post, account, board, booru)"
+        " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     >>,
     case month(Conn, Time) of
         {ok, Root} ->
@@ -1410,7 +1656,8 @@ log(Conn, Who, Kind, Text, Reason, Time, {Post, Account, Board}) ->
                         ike_role:to_binary(Kind),
                         Post,
                         Account,
-                        Board
+                        Board,
+                        Booru
                     ],
                     case ike_db:q(Conn, Insert, Row) of
                         {ok, _} -> {ok, Threads};
@@ -1531,14 +1778,32 @@ insert(Conn, Actor, Home, Time, Body) ->
     >>,
     case ike_db:q(Conn, Insert, [Home, Actor, Time, Body]) of
         {ok, [[Id]]} when is_integer(Id) ->
-            case link(Conn, Id, ike_text:targets(Body)) of
-                ok -> touched(Conn, Id, Home);
-                {error, _} = Error -> Error
+            Entries = ike_text:entries(Body),
+            case {link(Conn, Id, ike_text:targets(Body)), entry_links(Conn, Id, Entries)} of
+                {ok, ok} ->
+                    case touched(Conn, Id, Home) of
+                        {ok, {Id, Threads}} -> {ok, {Id, Threads ++ [{booru, E} || E <- Entries]}};
+                        Other -> Other
+                    end;
+                {{error, _} = Error, _} ->
+                    Error;
+                {_, {error, _} = Error} ->
+                    Error
             end;
         {ok, Rows} ->
             {error, {unexpected, Rows}};
         {error, _} = Error ->
             Error
+    end.
+
+%% ##N, kept as links too: an entry's page shows who points at it
+-spec entry_links(ike_db:writer(), integer(), [pos_integer()]) -> ok | error().
+entry_links(_Conn, _Source, []) ->
+    ok;
+entry_links(Conn, Source, [Entry | Entries]) ->
+    case ike_db:q(Conn, <<"INSERT INTO link (source, booru) VALUES (?1, ?2)">>, [Source, Entry]) of
+        {ok, _} -> entry_links(Conn, Source, Entries);
+        {error, _} = Error -> Error
     end.
 
 %% the reverse links, with the post they are read from (hazard d1). a

@@ -1,6 +1,6 @@
 # ike — status
 
-Updated 2026-11-16. Milestone: **M1 Board**, started on lux's word.
+Updated 2026-11-16. Milestone: **M2 Booru**, begun on lux's word while M1 still owes a little (below).
 
 ## M0
 

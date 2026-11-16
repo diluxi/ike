@@ -354,6 +354,8 @@ inv02_works_without_scripts(Config) ->
         {get, "/upload", []},
         {get, "/account", Cookies},
         {get, "/account", []},
+        {get, "/booru", []},
+        {get, "/booru/1", []},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
         {post, "/board/b/new", []}
@@ -517,7 +519,8 @@ inv04_text_is_escaped(Config) ->
             <<">>>/b/../../login >>>/../1 >>>/b/1/../../../logout">>,
             <<">>>/b:alert(1)/1 >>1:alert(1) >>>/b/1:alert(1)">>,
             <<">>999999999<img src=x onerror=alert(1)> >>>/meta/999999999<svg onload=alert(1)>">>,
-            <<"<a href=\"/p/1\">>>1</a> &gt;&gt;1 >>&#49;">>
+            <<"<a href=\"/p/1\">>>1</a> &gt;&gt;1 >>&#49;">>,
+            <<"##1\"><script>alert(1)</script> ###1 ##>>1 ##0 ##-1 ##1'onmouseover='x">>
         ]
     ),
     %% a moderator's pages are made per request from the same text, and
@@ -999,7 +1002,12 @@ inv08_purge_leaves_nothing(Config) ->
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE id = ?", [
         list_to_integer(Whole)
     ]),
-    {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
+    %% (and stays public through its booru entry: the image is the
+    %% archive's, not the post's, until the entry is taken down too)
+    {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
+    [[1]] = ike_browser:query(
+        Config, "SELECT count(*) FROM shown_entry WHERE asset = ?", [{blob, WholeHash}]
+    ),
     true = filelib:is_regular(filename:join([?config(dir, Config), "assets", WholeHex])),
     %% and every file but the snapshots: the write-ahead log is folded
     %% back after a purge, and secure_delete overwrote the pages it freed
@@ -1458,6 +1466,9 @@ known_routes() ->
         [<<"board">>, board, thread, <<"reply">>],
         [<<"p">>, post],
         [<<"act">>],
+        [<<"booru">>],
+        [<<"booru">>, booru],
+        [<<"mod">>, <<"booru">>, booru],
         [<<"mod">>, <<"report">>, report],
         [<<"login">>],
         [<<"login">>, <<"callback">>],
@@ -1485,6 +1496,8 @@ known_tables(Config) ->
         [<<"asset_reference">>],
         [<<"blocklist">>],
         [<<"board">>],
+        [<<"booru">>],
+        [<<"booru_version">>],
         [<<"link">>],
         [<<"migration">>],
         [<<"post">>],
@@ -1492,6 +1505,7 @@ known_tables(Config) ->
         [<<"report">>],
         [<<"session">>],
         [<<"shown">>],
+        [<<"shown_entry">>],
         [<<"thread">>],
         [<<"upload">>]
     ] = Tables.

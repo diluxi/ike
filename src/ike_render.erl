@@ -4,7 +4,7 @@
 -module(ike_render).
 -behaviour(gen_server).
 
--export([start_link/0, dirty/1, dirty_board/1, settle/1, sync/0]).
+-export([start_link/0, dirty/1, dirty_board/1, dirty_booru/1, settle/1, sync/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -14,7 +14,10 @@
     %% and the pages that list boards
     threads = [] :: [integer()],
     boards = [] :: [binary()],
-    lists = false :: boolean()
+    lists = false :: boolean(),
+    %% booru entries by number, and the booru's own page
+    boorus = [] :: [integer()],
+    booru = false :: boolean()
 }).
 
 %% threads on a board's page; there is no paging yet
@@ -30,6 +33,11 @@ start_link() ->
 dirty(Thread) ->
     gen_server:cast(?MODULE, {dirty, Thread}).
 
+%% a booru entry's page, and the booru's, which lists entries
+-spec dirty_booru(Entry :: integer()) -> ok.
+dirty_booru(Entry) ->
+    gen_server:cast(?MODULE, {dirty_booru, Entry}).
+
 %% a board's own page, when no thread's page says it changed
 -spec dirty_board(Name :: binary()) -> ok.
 dirty_board(Name) ->
@@ -38,7 +46,7 @@ dirty_board(Name) ->
 %% asked by the writer before it unlinks a thread's page: once this
 %% returns, no page read before the writer's last commit is still to be
 %% written, since the pages are written one at a time, here
--spec settle(Thread :: integer()) -> ok.
+-spec settle(Thread :: integer() | {booru, integer()}) -> ok.
 settle(Thread) ->
     case gen_server:call(?MODULE, {settle, Thread}, ?SYNC_TIMEOUT) of
         ok -> ok;
@@ -57,19 +65,26 @@ sync() ->
 init([]) ->
     process_flag(trap_exit, true),
     Dir = ike_config:pages_dir(),
-    case filelib:ensure_path(<<Dir/binary, "/board">>) of
-        ok ->
+    case
+        {
+            filelib:ensure_path(<<Dir/binary, "/board">>),
+            filelib:ensure_path(<<Dir/binary, "/booru">>)
+        }
+    of
+        {ok, ok} ->
             case ike_db:open_reader(ike_config:db_path()) of
                 {ok, Conn} ->
                     case everything(Conn) of
-                        {ok, Threads, Boards} ->
+                        {ok, Threads, Boards, Entries} ->
                             self() ! render,
                             {ok, #state{
                                 conn = Conn,
                                 dir = Dir,
                                 threads = Threads,
                                 boards = Boards,
-                                lists = true
+                                lists = true,
+                                boorus = Entries,
+                                booru = true
                             }};
                         {error, Reason} ->
                             _ = ike_db:close(Conn),
@@ -78,7 +93,9 @@ init([]) ->
                 {error, Reason} ->
                     {stop, Reason}
             end;
-        {error, Reason} ->
+        {{error, Reason}, _} ->
+            {stop, {pages_dir, Reason}};
+        {_, {error, Reason}} ->
             {stop, {pages_dir, Reason}}
     end.
 
@@ -88,6 +105,10 @@ handle_call({settle, Thread}, _From, #state{threads = Threads} = State) when
     is_integer(Thread)
 ->
     {reply, ok, State#state{threads = ordsets:del_element(Thread, Threads)}};
+handle_call({settle, {booru, Entry}}, _From, #state{boorus = Entries} = State) when
+    is_integer(Entry)
+->
+    {reply, ok, State#state{boorus = ordsets:del_element(Entry, Entries), booru = true}};
 handle_call(sync, _From, State) ->
     {reply, ok, drain(State)};
 handle_call(_Request, _From, State) ->
@@ -102,6 +123,9 @@ handle_cast({dirty, Thread}, #state{threads = Threads} = State) when
 handle_cast({dirty_board, Name}, #state{boards = Boards} = State) when is_binary(Name) ->
     self() ! render,
     {noreply, State#state{boards = ordsets:add_element(Name, Boards)}};
+handle_cast({dirty_booru, Entry}, #state{boorus = Entries} = State) when is_integer(Entry) ->
+    self() ! render,
+    {noreply, State#state{boorus = ordsets:add_element(Entry, Entries), booru = true}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -118,8 +142,10 @@ terminate(_Reason, #state{conn = Conn}) ->
     ok.
 
 -spec drain(#state{}) -> #state{}.
-drain(#state{threads = [], boards = [], lists = false} = State) -> State;
-drain(State) -> drain(step(State)).
+drain(#state{threads = [], boards = [], lists = false, boorus = [], booru = false} = State) ->
+    State;
+drain(State) ->
+    drain(step(State)).
 
 %% a thread's page first, then its board's: the board lists what exists
 -spec step(#state{}) -> #state{}.
@@ -131,27 +157,43 @@ step(#state{threads = [Thread | Threads], boards = Boards} = State) ->
         none ->
             State#state{threads = Threads}
     end;
+step(#state{threads = [], boorus = [Entry | Entries]} = State) ->
+    _ = render_entry(State, Entry),
+    self() ! render,
+    State#state{boorus = Entries, booru = true};
 step(#state{threads = [], boards = [Board | Boards]} = State) ->
     ok = render_board(State, Board),
     self() ! render,
     State#state{boards = Boards};
+step(#state{threads = [], boards = [], booru = true} = State) ->
+    ok = render_entries(State),
+    self() ! render,
+    State#state{booru = false};
 step(#state{threads = [], boards = [], lists = true} = State) ->
     ok = render_lists(State),
     State#state{lists = false};
 step(State) ->
     State.
 
--spec everything(ike_db:reader()) -> {ok, [integer()], [binary()]} | ike_db:error().
+-spec everything(ike_db:reader()) -> {ok, [integer()], [binary()], [integer()]} | ike_db:error().
 everything(Conn) ->
     case ike_db:q(Conn, <<"SELECT id FROM shown WHERE id = thread ORDER BY id">>, []) of
         {ok, Threads} ->
-            case ike_db:q(Conn, <<"SELECT name FROM board ORDER BY name">>, []) of
-                {ok, Boards} ->
-                    {ok, [Root || [Root] <- Threads, is_integer(Root)], [
-                        Name
-                     || [Name] <- Boards, is_binary(Name)
-                    ]};
-                {error, _} = Error ->
+            case
+                {
+                    ike_db:q(Conn, <<"SELECT name FROM board ORDER BY name">>, []),
+                    ike_db:q(Conn, <<"SELECT id FROM shown_entry ORDER BY id">>, [])
+                }
+            of
+                {{ok, Boards}, {ok, Entries}} ->
+                    {ok, [Root || [Root] <- Threads, is_integer(Root)],
+                        [Name || [Name] <- Boards, is_binary(Name)], [
+                            E
+                         || [E] <- Entries, is_integer(E)
+                        ]};
+                {{error, _} = Error, _} ->
+                    Error;
+                {_, {error, _} = Error} ->
                     Error
             end;
         {error, _} = Error ->
@@ -212,7 +254,7 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
 
 %% the posts this thread's posts point at, those that are there to be
 %% shown, and the board each is on
--spec links(ike_db:reader(), integer()) -> #{integer() => binary()}.
+-spec links(ike_db:reader(), integer()) -> #{integer() | {booru, integer()} => binary()}.
 links(Conn, Thread) ->
     Sql = <<
         "SELECT DISTINCT l.post, b.name FROM post s"
@@ -220,10 +262,20 @@ links(Conn, Thread) ->
         " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " WHERE s.thread = ?1"
     >>,
-    case ike_db:q(Conn, Sql, [Thread]) of
-        {ok, Rows} ->
-            #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)};
-        {error, Reason} ->
+    %% and the entries they point at that are there to be shown
+    Entries = <<
+        "SELECT DISTINCT l.booru FROM post s JOIN link l ON l.source = s.id"
+        " JOIN shown_entry e ON e.id = l.booru WHERE s.thread = ?1"
+    >>,
+    case {ike_db:q(Conn, Sql, [Thread]), ike_db:q(Conn, Entries, [Thread])} of
+        {{ok, Rows}, {ok, Shown}} ->
+            maps:merge(
+                #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)},
+                #{{booru, E} => <<>> || [E] <- Shown, is_integer(E)}
+            );
+        {{error, Reason}, _} ->
+            error({render, Thread, Reason});
+        {_, {error, Reason}} ->
             error({render, Thread, Reason})
     end.
 
@@ -330,6 +382,79 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
             write(Dir, <<"board/", Name/binary, ".html">>, ike_view:board(Board, Threads));
         Other ->
             error({render, Name, Other})
+    end.
+
+%% a booru entry's page: its versions, newest first, the posts that show
+%% it and those that point at it. one not to be shown has no page; the
+%% writer unlinks it
+-spec render_entry(#state{}, integer()) -> ok | none.
+render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
+    Versions = <<
+        "SELECT v.position, x.hash, x.type, x.width, x.height FROM booru_version v"
+        " LEFT JOIN asset x ON x.hash = v.asset WHERE v.booru = ?1 ORDER BY v.position DESC"
+    >>,
+    Shown = <<
+        "SELECT DISTINCT pi.post FROM booru_version v JOIN post_image pi ON pi.asset = v.asset"
+        " JOIN shown s ON s.id = pi.post WHERE v.booru = ?1 ORDER BY pi.post"
+    >>,
+    Linked = <<
+        "SELECT l.source FROM link l JOIN shown s ON s.id = l.source"
+        " WHERE l.booru = ?1 ORDER BY l.source"
+    >>,
+    case ike_db:q(Conn, <<"SELECT time FROM shown_entry WHERE id = ?1">>, [Entry]) of
+        {ok, [[Time]]} when is_integer(Time) ->
+            case
+                {
+                    ike_db:q(Conn, Versions, [Entry]),
+                    ike_db:q(Conn, Shown, [Entry]),
+                    ike_db:q(Conn, Linked, [Entry])
+                }
+            of
+                {{ok, Vs}, {ok, Ps}, {ok, Ls}} ->
+                    Page = ike_view:entry(#{
+                        id => Entry,
+                        time => Time,
+                        versions => [
+                            {Position,
+                                case image(Hash, Type, W, H) of
+                                    #{} = Image -> Image;
+                                    none -> gone
+                                end}
+                         || [Position, Hash, Type, W, H] <- Vs, is_integer(Position)
+                        ],
+                        shown_in => [P || [P] <- Ps, is_integer(P)],
+                        linked_from => [L || [L] <- Ls, is_integer(L)]
+                    }),
+                    write(Dir, <<"booru/", (integer_to_binary(Entry))/binary, ".html">>, Page);
+                Other ->
+                    error({render, {booru, Entry}, Other})
+            end;
+        {ok, _} ->
+            none;
+        {error, Reason} ->
+            error({render, {booru, Entry}, Reason})
+    end.
+
+%% the booru's page: the newest entries, as thumbnails
+-spec render_entries(#state{}) -> ok.
+render_entries(#state{conn = Conn, dir = Dir}) ->
+    Sql = <<
+        "SELECT e.id, x.hash, x.type, x.width, x.height FROM shown_entry e"
+        " LEFT JOIN asset x ON x.hash = e.asset ORDER BY e.id DESC LIMIT ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [?INDEX]) of
+        {ok, Rows} ->
+            Entries = [
+                {Id,
+                    case image(Hash, Type, W, H) of
+                        #{} = Image -> Image;
+                        none -> gone
+                    end}
+             || [Id, Hash, Type, W, H] <- Rows, is_integer(Id)
+            ],
+            write(Dir, <<"booru.html">>, ike_view:entries(Entries));
+        {error, Reason} ->
+            error({render, booru, Reason})
     end.
 
 %% the list of boards, and the page in front of everything

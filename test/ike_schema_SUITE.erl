@@ -222,6 +222,12 @@ reachability_covers_every_asset_column(Config) ->
             Root, {blob, Hash}
         ]
     ),
+    [] = esqlite3:q(Conn, "INSERT INTO booru (id, time) VALUES (1, 0)"),
+    [] = esqlite3:q(
+        Conn,
+        "INSERT INTO booru_version (booru, position, asset, time) VALUES (1, 0, ?1, 0)",
+        [{blob, Hash}]
+    ),
     Seen = [Via || [Via] <- esqlite3:q(Conn, "SELECT via FROM asset_reference")],
     lists:foreach(
         fun({Table, Column}) ->

@@ -6,6 +6,7 @@
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
+-export([entry_state/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -147,6 +148,16 @@ post(Post) ->
             none
     end.
 
+%% an entry's state, for a moderator
+-spec entry_state(Entry :: integer()) -> {ok, shown | hidden | trashed} | none.
+entry_state(Entry) ->
+    case gen_server:call(?MODULE, {entry_state, Entry}) of
+        {ok, [[0]]} -> {ok, shown};
+        {ok, [[1]]} -> {ok, hidden};
+        {ok, [[2]]} -> {ok, trashed};
+        _ -> none
+    end.
+
 %% reports not yet looked at, oldest first, with the board each is on
 -spec reports() ->
     [{Id :: pos_integer(), Post :: pos_integer(), Board :: binary(), Reason :: binary()}].
@@ -270,6 +281,8 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({entry_state, Entry}, _From, Conn) when is_integer(Entry) ->
+    {reply, ike_db:q(Conn, <<"SELECT state FROM booru WHERE id = ?1">>, [Entry]), Conn};
 handle_call(reports, _From, Conn) ->
     Sql = <<
         "SELECT r.id, r.post, b.name, r.reason FROM report r JOIN post p ON p.id = r.post"

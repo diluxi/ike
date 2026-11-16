@@ -7,7 +7,7 @@
 
 -export([init/2]).
 
--type what() :: front | post | board | account | report.
+-type what() :: front | post | board | account | report | booru.
 -type who() :: {ike_id:actor(), Csrf :: binary(), ike_role:role()}.
 
 -spec init(cowboy_req:req(), what()) -> {ok, cowboy_req:req(), what()}.
@@ -23,6 +23,7 @@ init(Req, What) ->
                     {post, <<"GET">>} -> look(Who, Req);
                     {front, _} -> ike_http:reply(405, Req);
                     {report, <<"POST">>} -> dismiss(Who, Req);
+                    {booru, <<"GET">>} -> look_entry(Who, Req);
                     {_, <<"POST">>} -> submit(What, Who, Req);
                     _ -> ike_http:reply(405, Req)
                 end;
@@ -197,8 +198,32 @@ dismiss({_, Csrf, _}, Req0) ->
             ike_http:reply(Status, Req)
     end.
 
+%% a booru entry, as a moderator sees it
+-spec look_entry(who(), cowboy_req:req()) -> cowboy_req:req().
+look_entry({_, Csrf, Role}, Req) ->
+    case cowboy_req:binding(booru, Req) of
+        N when is_integer(N), N > 0 ->
+            case ike_reader:entry_state(N) of
+                {ok, State} ->
+                    Ladder =
+                        case State of
+                            shown -> [hide, trash];
+                            hidden -> [unhide, trash];
+                            trashed -> [restore]
+                        end,
+                    Facts = #{board => <<"booru">>, self => false, account => 0, undo => 0},
+                    Kinds = [K || K <- Ladder, ike_role:permits(Role, K, Facts)],
+                    ike_http:page(200, ike_view:moderated_entry(Csrf, N, State, Kinds), Req);
+                none ->
+                    ike_http:not_found(Req)
+            end;
+        _ ->
+            ike_http:not_found(Req)
+    end.
+
 -spec target(what(), cowboy_req:req()) ->
-    {ok, ike_id:post() | ike_id:actor() | binary(), Back :: binary()} | none.
+    {ok, ike_id:post() | {entry, ike_id:booru()} | ike_id:actor() | binary(), Back :: binary()}
+    | none.
 target(post, Req) ->
     case cowboy_req:binding(post, Req) of
         N when is_integer(N), N > 0 ->
@@ -215,6 +240,13 @@ target(account, Req) ->
     case cowboy_req:binding(account, Req) of
         N when is_integer(N), N > 0 -> {ok, ike_id:actor(N), <<"/mod">>};
         _ -> none
+    end;
+target(booru, Req) ->
+    case cowboy_req:binding(booru, Req) of
+        N when is_integer(N), N > 0 ->
+            {ok, {entry, ike_id:booru(N)}, <<"/mod/booru/", (integer_to_binary(N))/binary>>};
+        _ ->
+            none
     end;
 target(_, _Req) ->
     none.
@@ -233,6 +265,8 @@ fits(board, Kind) ->
     Kind =:= lock orelse Kind =:= unlock;
 fits(account, Kind) ->
     Kind =:= unban;
+fits(booru, Kind) ->
+    lists:member(Kind, [hide, unhide, trash, restore]);
 fits(front, _) ->
     false.
 

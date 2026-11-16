@@ -173,21 +173,37 @@ the_media_follow_what_is_shown(Config) ->
     {File, _} = image(Config, page(H2)),
     Act("hide"),
     {200, _, _} = media(Config, File),
-    %% and with that one hidden too, it is gone from the media origin
+    %% with that one hidden too, its booru entry still shows it: the image
+    %% is the archive's (lux)
     Root2 = lists:last(string:split(page(H2), "/", all)),
     #{csrf := Csrf2} = Moderator,
-    {303, _, _} = request(
+    Mod = fun(Path, Kind) ->
+        {303, _, _} = request(
+            Config,
+            post,
+            Path,
+            cookies(Moderator),
+            {form, uri_string:compose_query([{"csrf", Csrf2}, {"kind", Kind}, {"reason", "x"}])}
+        )
+    end,
+    Mod("/mod/post/" ++ Root2, "hide"),
+    {200, _, _} = media(Config, File),
+    %% and with the entry hidden as well, it is gone from the media origin
+    "http://media.test/" ++ Name = File,
+    [[Entry]] = query(
         Config,
-        post,
-        "/mod/post/" ++ Root2,
-        cookies(Moderator),
-        {form, uri_string:compose_query([{"csrf", Csrf2}, {"kind", "hide"}, {"reason", "x"}])}
+        "SELECT booru FROM booru_version WHERE asset = ?",
+        [{blob, binary:decode_hex(list_to_binary(filename:rootname(Name)))}]
     ),
+    Mod("/mod/booru/" ++ integer_to_list(Entry), "hide"),
     {404, _, _} = media(Config, File),
     {404, _, _} = media(Config, Thumb),
+    {404, _, _} = request(Config, get, "/booru/" ++ integer_to_list(Entry), [], none),
     Act("unhide"),
     {200, _, _} = media(Config, File),
-    {200, _, _} = media(Config, Thumb).
+    {200, _, _} = media(Config, Thumb),
+    Mod("/mod/booru/" ++ integer_to_list(Entry), "unhide"),
+    {200, _, _} = request(Config, get, "/booru/" ++ integer_to_list(Entry), [], none).
 
 a_restart_makes_them_again(Config) ->
     Session = login(Config, <<"restarted">>),

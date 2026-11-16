@@ -4,6 +4,7 @@
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
+-export([entry/1, entries/1, moderated_entry/4]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -14,7 +15,7 @@
     time := integer(),
     body := binary(),
     name := {account | nobody | role, binary()},
-    links := #{integer() => binary()},
+    links := #{integer() | {booru, pos_integer()} => binary()},
     replies := [integer()],
     images => [image() | gone]
 }.
@@ -223,13 +224,19 @@ permalink(Post, Board) ->
 gone(Text) ->
     ike_html:el(span, [{class, <<"gone">>}], [ike_html:text(Text)]).
 
--spec piece(ike_text:piece(), #{integer() => binary()}) -> ike_html:html().
+-spec piece(ike_text:piece(), #{integer() | {booru, integer()} => binary()}) -> ike_html:html().
 piece({text, Text}, _Links) ->
     ike_html:text(Text);
 piece({post, N}, Links) ->
     case Links of
         #{N := _} -> permalink(N, <<>>);
         _ -> gone(<<">>", (integer_to_binary(N))/binary>>)
+    end;
+piece({booru, N}, Links) ->
+    Text = <<"##", (integer_to_binary(N))/binary>>,
+    case Links of
+        #{{booru, N} := _} -> anchor(<<"/booru/", (integer_to_binary(N))/binary>>, Text);
+        _ -> gone(Text)
     end;
 piece({post, Board, N}, Links) ->
     case Links of
@@ -278,7 +285,10 @@ board_link(#{name := Name, title := Title}) ->
 index() ->
     layout(<<"ike">>, [
         ike_html:el(h1, [ike_html:text(<<"ike">>)]),
-        ike_html:el(ul, [ike_html:el(li, [anchor(<<"/board">>, <<"board">>)])])
+        ike_html:el(ul, [
+            ike_html:el(li, [anchor(<<"/board">>, <<"board">>)]),
+            ike_html:el(li, [anchor(<<"/booru">>, <<"booru">>)])
+        ])
     ]).
 
 %% the form for a new thread or a reply, for whoever is logged in; anyone
@@ -791,6 +801,106 @@ account({Csrf, Name, Role}) ->
         ])
     ]).
 
+%% a booru entry: its newest version large enough to look at, every
+%% version, and where on the boards it is shown and pointed at
+-spec entry(#{
+    id := pos_integer(),
+    time := integer(),
+    versions := [{non_neg_integer(), image() | gone}],
+    shown_in := [pos_integer()],
+    linked_from := [pos_integer()]
+}) -> ike_html:html().
+entry(#{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_from := Linked}) ->
+    N = integer_to_binary(Id),
+    Stamp = stamp(Time),
+    Newest =
+        case Versions of
+            [{_, Image} | _] -> figure(Image);
+            [] -> []
+        end,
+    layout(
+        <<"##", N/binary>>,
+        [
+            ike_html:el(h1, [ike_html:text(<<"##", N/binary>>)]),
+            ike_html:el(p, [
+                anchor(<<"/booru">>, <<"booru">>),
+                ike_html:text(<<", since ">>),
+                ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
+            ])
+            | Newest
+        ] ++
+            [
+                ike_html:el(p, [ike_html:text(<<"versions">>)]),
+                ike_html:el(ol, [
+                    ike_html:el(li, [
+                        ike_html:text(
+                            case Image of
+                                #{type := Type, width := W, height := H} ->
+                                    <<
+                                        (integer_to_binary(Position + 1))/binary,
+                                        ": ",
+                                        Type/binary,
+                                        ", ",
+                                        (integer_to_binary(W))/binary,
+                                        "x",
+                                        (integer_to_binary(H))/binary
+                                    >>;
+                                gone ->
+                                    <<(integer_to_binary(Position + 1))/binary, ": purged">>
+                            end
+                        )
+                    ])
+                 || {Position, Image} <- Versions
+                ]),
+                ike_html:el(p, [
+                    ike_html:text(<<"shown in ">>) | spaced([permalink(P, <<>>) || P <- Shown])
+                ]),
+                ike_html:el(p, [
+                    ike_html:text(<<"pointed at by ">>)
+                    | spaced([permalink(P, <<>>) || P <- Linked])
+                ])
+            ]
+    ).
+
+%% a booru entry on its moderation page
+-spec moderated_entry(binary(), pos_integer(), shown | hidden | trashed, [ike_role:kind()]) ->
+    ike_html:html().
+moderated_entry(Csrf, Id, State, Kinds) ->
+    N = integer_to_binary(Id),
+    layout(<<"moderating ##", N/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<"##", N/binary>>)]),
+        ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
+        ike_html:el(p, [ike_html:text(atom_to_binary(State))])
+        | act(<<"/mod/booru/", N/binary>>, Csrf, Kinds, [])
+    ]).
+
+%% the booru: the newest entries, each its thumbnail, linking to it
+-spec entries([{pos_integer(), image() | gone}]) -> ike_html:html().
+entries(Entries) ->
+    layout(<<"booru">>, [
+        ike_html:el(h1, [ike_html:text(<<"booru">>)]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                case Image of
+                    #{thumb := Thumb} ->
+                        ike_html:el(a, [{href, <<"/booru/", (integer_to_binary(Id))/binary>>}], [
+                            ike_html:el(
+                                img,
+                                [{src, Thumb}, {alt, <<"##", (integer_to_binary(Id))/binary>>}],
+                                []
+                            )
+                        ]);
+                    gone ->
+                        anchor(
+                            <<"/booru/", (integer_to_binary(Id))/binary>>,
+                            <<"##", (integer_to_binary(Id))/binary>>
+                        )
+                end
+            ])
+         || {Id, Image} <- Entries
+        ])
+    ]).
+
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().
 message(Title, Text) ->
@@ -815,7 +925,8 @@ anchor(Href, Text) ->
     ike_html:el(a, [{href, Href}], [ike_html:text(Text)]).
 
 %% each line's pieces, with a br between lines
--spec lines([[ike_text:piece()]], #{integer() => binary()}) -> [ike_html:html()].
+-spec lines([[ike_text:piece()]], #{integer() | {booru, integer()} => binary()}) ->
+    [ike_html:html()].
 lines([], _Links) ->
     [];
 lines([Line], Links) ->

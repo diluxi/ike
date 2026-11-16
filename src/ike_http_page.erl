@@ -15,6 +15,13 @@ init(Req, State) ->
         case {cowboy_req:binding(board, Req), cowboy_req:binding(thread, Req), State} of
             {undefined, undefined, front} ->
                 <<"index">>;
+            {undefined, undefined, booru} ->
+                <<"booru">>;
+            {undefined, undefined, entry} ->
+                case cowboy_req:binding(booru, Req) of
+                    E when is_integer(E), E > 0 -> <<"booru/", (integer_to_binary(E))/binary>>;
+                    _ -> none
+                end;
             {undefined, undefined, boards} ->
                 <<"board">>;
             {Board, undefined, _} when is_binary(Board) ->

@@ -5,7 +5,7 @@
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0]).
 -export([assets_dir/0, media_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
--export([images/0]).
+-export([images/0, booru_at_once/0]).
 -export_type([oidc/0, limit/0, strip/0]).
 
 %% the stripper's socket, and the caps it was started with: ike reads no
@@ -213,6 +213,15 @@ media_host() ->
     case uri_string:parse(media_origin()) of
         #{host := Host} when is_binary(Host) -> Host;
         _ -> error({badenv, media_origin})
+    end.
+
+%% whether every posted image gets a booru entry at once, or only when
+%% someone tags it: open in planning (line 243); at once, for now
+-spec booru_at_once() -> boolean().
+booru_at_once() ->
+    case application:get_env(ike, booru_at_once) of
+        {ok, false} -> false;
+        _ -> true
     end.
 
 %% the most images one post shows; a stub for planning's open caps

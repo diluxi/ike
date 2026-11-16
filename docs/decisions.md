@@ -805,3 +805,36 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   with a dismiss form. A purge takes a post's reports with it, since a
   reason may quote what it reports.
 - *Not built:* vichan's "file" box, retracting only a post's images.
+
+## M2: the booru, first slice (2026-11-16)
+
+- **lux, on meshes:** accounts may upload any mesh, MMD and Live2D zips
+  included, without zip checks, since accounts are trusted; uploads
+  without an account (when that switch is on) take only static formats,
+  points and textures (`.glb`, `.stl`, `.ply`, `.obj`). Not built yet.
+- **M2 begun on lux's word,** with M1 still owing files on the post form,
+  the anonymous switch and vichan's "file" box.
+- **An entry, `##N`,** is `booru` (its own number, its time, a state as a
+  post's) over `booru_version` (append-only, position from 0, asset or
+  a gap). One entry per asset, by a unique index. Every posted image
+  gets one at once (`booru_at_once`, true: planning line 243 is open);
+  the entry names no one. Images posted before the booru get entries at
+  start, numbered in the order they were first posted.
+- **`shown_entry`** is an entry as pages show it: shown, with its newest
+  version. Media now follows shown posts *or* shown entries: hiding or
+  purging a post leaves its image public on its entry until the entry
+  is taken down too (lux: the image is the archive's). That flips what
+  the asset suite and invariant 8 asserted before.
+- **Pages:** `/booru` (the newest 100, thumbnails) and `/booru/N` (the
+  newest version, every version, the posts that show it, the posts
+  that point at it), static like threads; the writer unlinks the page
+  of an entry taken down, after the renderer settles it.
+- **`##N`** in post text links to `/booru/N`, kept in `link.booru`;
+  to nothing it reads as every other link to nothing.
+- **Entries are moderated as posts are** (hide, unhide, trash, restore
+  at `/mod/booru/N`, logged as "hide ##N" with `action.booru`), on a
+  board called `booru`: a janitor of `/booru/` keeps them.
+- **`purge_image`** leaves the entry's version empty, a gap.
+- *Not yet:* tags, search, entries from `/upload`, versions and
+  upgrades, video (ffmpeg, a dependency to ask for), hover cards (they
+  need a script).

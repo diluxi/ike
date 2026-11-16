@@ -42,6 +42,8 @@ dispatch() ->
             {"/health", ike_http_health, []},
             {"/", ike_http_page, front},
             {"/board", ike_http_page, boards},
+            {"/booru", ike_http_page, booru},
+            {"/booru/:booru", [{booru, int}], ike_http_page, entry},
             {"/board/:board", [Board], ike_http_page, board},
             {"/board/:board/new", [Board], ike_http_post, []},
             {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
@@ -58,6 +60,7 @@ dispatch() ->
             {"/mod/board/:board", [Board], ike_http_mod, board},
             {"/mod/account/:account", [{account, int}], ike_http_mod, account},
             {"/mod/report/:report", [{report, int}], ike_http_mod, report},
+            {"/mod/booru/:booru", [{booru, int}], ike_http_mod, booru},
             %% everything else, so that a miss is answered by ike and not
             %% by cowboy's bare 404
             {'_', ike_http_page, missing}

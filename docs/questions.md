@@ -88,6 +88,12 @@ here.
   the thread form guarded by Origin. Open: which mesh formats (a list is
   proposed in the reply of 2026-11-16), and an exemption in invariant
   11's wording for files nothing can strip.
+- **Q34 The booru's open items (planning).** An entry for every posted
+  image at once, or only once tagged (line 243): at once, behind
+  `booru_at_once`. Whether a board post pins the version it showed
+  (line 190): it shows its own asset, which is the version it posted.
+  Who may tag before proposals (M4): to be stubbed as accounts, with a
+  history of who changed what.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 
