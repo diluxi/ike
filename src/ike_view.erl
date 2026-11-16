@@ -483,8 +483,9 @@ upload(Csrf, Refused, Staged) ->
             ike_html:text(
                 <<"images wait here until they are posted, seen by you alone. jpeg, png or",
                     " webp; what a file says about itself (place, camera, time) is taken out.",
-                    " an upload is tied to your account, which moderators can see; a post that",
-                    " uses it shows no name unless you sign it.">>
+                    " an upload is tied to your account: a post that uses it shows no name",
+                    " unless you sign it, but a moderator can suspend the account behind an",
+                    " image without being shown whose it is.">>
             )
         ]),
         ike_html:el(

@@ -66,6 +66,10 @@ here.
   trigger read-only, etc." Which logs (the `action` rows naming the
   account, the journal?), and what read-only means (no posts at all, or
   no posts by nobody)? Not built.
+- **Q30 Blocklisting when a hold ends.** Planning's Purge row puts the
+  hash on the blocklist, so a deleted post whose hold ends blocks its
+  image for good, even one deleted only as off-topic. Built that way;
+  should a hold's end destroy the image without blocking it?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

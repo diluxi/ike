@@ -900,6 +900,44 @@ inv08_purge_leaves_nothing(Config) ->
     %% and it does not come back
     {422, _, Again} = ike_browser:upload(Config, Writer, [{<<"again.webp">>, Webp}]),
     {_, _} = binary:match(Again, <<"file 1: not taken">>),
+    %% a post with an image, purged as a post: the image goes with it
+    %% when nothing else shows it, its hashes onto the blocklist
+    Lossy = read(?config(data_dir, Config), "lossy.webp"),
+    {303, _, _} = ike_browser:upload(Config, Writer, [{<<"l.webp">>, Lossy}]),
+    [[Staged2]] = ike_browser:query(
+        Config,
+        "SELECT max(u.id) FROM upload u JOIN actor a ON a.id = u.actor"
+        " WHERE a.subject = 'purgee' AND u.posted IS NULL",
+        []
+    ),
+    {303, H6, _} = ike_browser:post(
+        Config, "/board/b/new", Writer, <<"a post to purge">>, [
+            {<<"upload">>, integer_to_binary(Staged2)}
+        ]
+    ),
+    "#p" ++ Whole = string:find(proplists:get_value("location", H6), "#"),
+    [[WholeHash]] = ike_browser:query(Config, "SELECT asset FROM post WHERE id = ?", [
+        list_to_integer(Whole)
+    ]),
+    WholeHex = binary_to_list(binary:encode_hex(WholeHash, lowercase)),
+    {200, _, WholeImage} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/mod/post/" ++ Whole,
+        ike_browser:cookies(Admin),
+        {form,
+            uri_string:compose_query([{"csrf", ImageCsrf}, {"kind", "purge"}, {"reason", "rule 2"}])}
+    ),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [
+        {blob, WholeHash}
+    ]),
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM upload WHERE asset = ?", [
+        {blob, WholeHash}
+    ]),
+    [[1]] = ike_browser:query(Config, "SELECT count(*) FROM blocklist WHERE hash = ?", [
+        {blob, WholeHash}
+    ]),
     %% and every file but the snapshots: the write-ahead log is folded
     %% back after a purge, and secure_delete overwrote the pages it freed
     Dir = binary_to_list(?config(dir, Config)),
@@ -909,7 +947,8 @@ inv08_purge_leaves_nothing(Config) ->
          || F <- files(Dir),
             not lists:prefix(filename:join(Dir, "backups"), F),
             holds(F, Marker) orelse holds(F, Kept) orelse holds(F, StoredImage) orelse
-                string:find(F, ImageHex) =/= nomatch
+                string:find(F, ImageHex) =/= nomatch orelse holds(F, WholeImage) orelse
+                string:find(F, WholeHex) =/= nomatch
         ]
     end,
     [] = eventually(Searched, 50),

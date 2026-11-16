@@ -50,6 +50,9 @@ machine.wait_for_unit("ike-strip.socket")
 # (the answer whole into a file first: head would cut the pipe short)
 machine.succeed("socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png >/tmp/stripped")
 machine.succeed("head -n1 /tmp/stripped | grep '^ok png 61 47 '")
+# and ike's own user may ask it, as ike does
+machine.succeed("su -s /bin/sh ike -c \"$(command -v socat) -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png >/tmp/as-ike\"")
+machine.succeed("head -n1 /tmp/as-ike | grep '^ok png 61 47 '")
 machine.succeed("echo not-an-image | socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock | grep -x 'no not-an-image'")
 for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes"]:
 	machine.succeed(f"systemctl show -p {prop.split('=')[0]} ike-strip@probe.service | grep -x '{prop}'")

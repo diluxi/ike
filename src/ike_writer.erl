@@ -700,13 +700,18 @@ act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     %% nothing on the log is ever taken down. undo: who put the post in
     %% the state it is in, by role
     Sql = <<
-        "SELECT p.thread, p.state, p.actor, a.kind = 'local', a.banned, b.name, a.rank,"
+        "SELECT p.thread, p.state, t.id, t.kind = 'local', t.banned, b.name, t.rank,"
         " (SELECT role FROM action WHERE post = p.id AND kind IN ('hide', 'delete')"
         " ORDER BY entry DESC LIMIT 1),"
         " (SELECT role FROM action WHERE post = p.id AND kind = 'block'"
         " ORDER BY entry DESC LIMIT 1), p.asset"
-        " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
-        " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
+        " FROM post p JOIN thread h ON h.root = p.thread JOIN board b ON b.id = h.board"
+        " JOIN actor a ON a.id = p.actor LEFT JOIN upload u ON u.post = p.id"
+        %% the account a ban reaches: the signer, or the one behind the
+        %% image of an unsigned post
+        " JOIN actor t ON t.id ="
+        " CASE WHEN a.kind = 'local' THEN p.actor ELSE coalesce(u.actor, p.actor) END"
+        " WHERE p.id = ?1 AND b.log = 0"
     >>,
     case ike_db:q(Conn, Sql, [Post]) of
         {ok, [[Thread, State, Actor, Local, Banned, Board, Rank, Undo0, Blocker, Asset]]} when
@@ -983,7 +988,7 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
             case log(Conn, Who, Kind, Text, Reason, Time, {Post, undefined, undefined}) of
                 {ok, Logged} ->
                     case changed(Conn, Post, Thread, To) of
-                        ok ->
+                        {ok, Destroyed} ->
                             Gone =
                                 case Post =:= Thread andalso To =/= {0, undefined} of
                                     true -> [{Board, Thread}];
@@ -996,7 +1001,7 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                                 drop => [],
                                 scrub => To =:= purge,
                                 assets => [A || [A] <- Assets, is_binary(A)],
-                                unlinked => []
+                                unlinked => Destroyed
                             }};
                         {error, _} = Error ->
                             Error
@@ -1018,10 +1023,10 @@ attach(_Conn, _Post, none, _Time) ->
     {ok, []};
 attach(Conn, Post, {Account, Upload}, Time) when is_integer(Account), is_integer(Upload) ->
     Take = <<
-        "UPDATE upload SET posted = ?3 WHERE id = ?1 AND actor = ?2 AND posted IS NULL"
-        " RETURNING asset"
+        "UPDATE upload SET posted = ?3, post = ?4"
+        " WHERE id = ?1 AND actor = ?2 AND posted IS NULL RETURNING asset"
     >>,
-    case ike_db:q(Conn, Take, [Upload, Account, Time]) of
+    case ike_db:q(Conn, Take, [Upload, Account, Time, Post]) of
         {ok, [[Hash]]} when is_binary(Hash) ->
             case
                 ike_db:q(Conn, <<"UPDATE post SET asset = ?1 WHERE id = ?2">>, [{blob, Hash}, Post])
@@ -1113,6 +1118,7 @@ unlinked([]) ->
 %% at start: the media origin's files made to match what is shown
 -spec republished(ike_db:writer()) -> ok.
 republished(Conn) ->
+    _ = filelib:ensure_path(ike_config:media_dir()),
     case ike_db:q(Conn, <<"SELECT DISTINCT asset FROM shown WHERE asset IS NOT NULL">>, []) of
         {ok, Rows} ->
             Shown = [H || [H] <- Rows, is_binary(H)],
@@ -1136,24 +1142,86 @@ republished(Conn) ->
 -spec changed(
     ike_db:writer(), integer(), integer(), {0 | 1 | 2, integer() | undefined} | purge
 ) ->
-    ok | error().
+    {ok, Destroyed :: [binary()]} | error().
 changed(Conn, Post, Thread, purge) ->
-    %% invariant 8: the rows, and every link to or from them. what the
-    %% log says of them stays, and names them by number only
+    %% invariant 8: the rows, and every link to or from them, and the
+    %% uploads that went into them. what the log says of them stays, and
+    %% names them by number only
     These = <<"(SELECT id FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2))">>,
-    each(Conn, [Post, Thread], [
-        <<"DELETE FROM link WHERE post IN ", These/binary>>,
-        <<"DELETE FROM link WHERE source IN ", These/binary>>,
-        <<"UPDATE post SET parent = NULL WHERE parent IN ", These/binary>>,
-        <<"DELETE FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2)">>,
-        <<"DELETE FROM thread WHERE root = ?1 AND ?1 = ?2">>
-    ]);
+    Pictured =
+        <<"SELECT DISTINCT asset FROM post WHERE asset IS NOT NULL AND id IN ", These/binary>>,
+    Originals = <<"SELECT DISTINCT original FROM upload WHERE asset = ?1">>,
+    case ike_db:q(Conn, Pictured, [Post, Thread]) of
+        {ok, Rows} ->
+            Assets = [A || [A] <- Rows, is_binary(A)],
+            %% every hash each image came as, before its uploads go
+            Hashes = [
+                {A, [
+                    A
+                    | [
+                        O
+                     || {ok, Os} <- [ike_db:q(Conn, Originals, [{blob, A}])],
+                        [O] <- Os,
+                        is_binary(O)
+                    ]
+                ]}
+             || A <- Assets
+            ],
+            Done = each(Conn, [Post, Thread], [
+                <<"DELETE FROM link WHERE post IN ", These/binary>>,
+                <<"DELETE FROM link WHERE source IN ", These/binary>>,
+                <<"UPDATE post SET parent = NULL WHERE parent IN ", These/binary>>,
+                <<"DELETE FROM upload WHERE post IN ", These/binary>>,
+                <<"DELETE FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2)">>,
+                <<"DELETE FROM thread WHERE root = ?1 AND ?1 = ?2">>
+            ]),
+            case Done of
+                ok -> orphaned(Conn, Hashes, []);
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
+    end;
 changed(Conn, Post, _Thread, {State, Until}) ->
     Update = <<"UPDATE post SET state = ?2, purge_at = ?3 WHERE id = ?1">>,
     case ike_db:q(Conn, Update, [Post, State, Until]) of
-        {ok, _} -> ok;
+        {ok, _} -> {ok, []};
         {error, _} = Error -> Error
     end.
+
+%% an image no post shows and no upload waits with any more goes too,
+%% and its hashes onto the blocklist, as planning's Purge has it (an
+%% image another post still shows stays, with that post)
+-spec orphaned(ike_db:writer(), [{binary(), [binary()]}], [binary()]) ->
+    {ok, [binary()]} | error().
+orphaned(Conn, [{Hash, Hashes} | Rest], Acc) ->
+    Used = <<"SELECT 1 FROM asset_reference WHERE asset = ?1 LIMIT 1">>,
+    case ike_db:q(Conn, Used, [{blob, Hash}]) of
+        {ok, [_]} ->
+            orphaned(Conn, Rest, Acc);
+        {ok, []} ->
+            Insert =
+                <<"INSERT INTO blocklist (hash, time) VALUES (?1, ?2) ON CONFLICT DO NOTHING">>,
+            case each_hash(Conn, Insert, Hashes, [erlang:system_time(second)]) of
+                ok ->
+                    case
+                        each(Conn, [{blob, Hash}], [
+                            <<"DELETE FROM upload WHERE asset = ?1">>,
+                            <<"UPDATE post SET asset = NULL, asset_gone = 1 WHERE asset = ?1">>,
+                            <<"DELETE FROM asset WHERE hash = ?1">>
+                        ])
+                    of
+                        ok -> orphaned(Conn, Rest, [binary:encode_hex(Hash, lowercase) | Acc]);
+                        {error, _} = Error -> Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end;
+orphaned(_Conn, [], Acc) ->
+    {ok, Acc}.
 
 -spec each(ike_db:writer(), [term()], [binary()]) -> ok | error().
 each(Conn, Args, [Sql | Rest]) ->

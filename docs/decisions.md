@@ -684,3 +684,13 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   row has its hash, and the blocklist does, which lux kept on purpose
   (C3). Its thumbnail's bytes are not searched for, since another image
   of the same pixels has the same thumbnail.
+- **An upload records the post it went into** (`upload.post`, a number).
+  Through it `ban` on an unsigned post with an image reaches the account
+  behind the image, rank-checked like any ban; the moderator is not
+  shown whose it is. A post signed by an account still bans that one.
+- **Purging a post takes its image with it** when nothing else uses the
+  image any more (no other post, no staged upload): the uploads that
+  went into the purged posts go, the asset and its files go, and its
+  hashes go onto the blocklist, as planning's Purge row says. That
+  includes a hold that ends (Q30). An image another post shows stays.
+- **The media directory is made at start,** not only on the first image.

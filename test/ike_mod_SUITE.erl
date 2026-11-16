@@ -352,11 +352,29 @@ a_hold_ends(Config0) ->
     ike_browser:stop(),
     Config = ike_browser:start(Config0, [{hold_seconds, 1}]),
     Writer = login(Config, <<"hwriter">>),
-    {_, Root} = thread(Config, Writer, <<"held, then gone">>),
+    %% with an image, which goes with it
+    {ok, Png} = file:read_file(filename:join(?config(data_dir, Config0), "base.png")),
+    {303, _, _} = ike_browser:upload(Config, Writer, [{<<"h.png">>, Png}]),
+    [[Upload]] = query(Config, "SELECT max(id) FROM upload", []),
+    {303, Posted, _} = ike_browser:post(
+        Config, "/board/b/new", Writer, <<"held, then gone">>, [
+            {<<"upload">>, integer_to_binary(Upload)}
+        ]
+    ),
+    Root = number(Posted),
     N = list_to_integer(Root),
+    [[Hash]] = query(Config, "SELECT asset FROM post WHERE id = ?", [N]),
+    Hex = binary_to_list(binary:encode_hex(Hash, lowercase)),
+    Assets = filename:join(?config(dir, Config), "assets"),
+    true = filelib:is_regular(filename:join(Assets, Hex)),
     Moderator = moderator(Config, <<"hmoderator">>),
     {303, _, _} = act(Config, Moderator, "/mod/post/" ++ Root, "delete", "rule 5"),
     [] = wait(fun() -> query(Config, "SELECT id FROM post WHERE id = ?", [N]) end, 50),
+    [[0]] = query(Config, "SELECT count(*) FROM asset WHERE hash = ?", [{blob, Hash}]),
+    false = filelib:is_regular(filename:join(Assets, Hex)),
+    [] = filelib:wildcard(
+        binary_to_list(filename:join(?config(dir, Config), "media")) ++ "/" ++ Hex ++ "*"
+    ),
     %% ike did it, and says so: no account, the role system
     [[<<"system">>, undefined, Entry]] = query(
         Config, "SELECT role, actor, entry FROM action WHERE kind = 'purge' AND post = ?", [N]

@@ -206,13 +206,17 @@ handle_call(suspended, _From, Conn) ->
     {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call({post, Post}, _From, Conn) when is_integer(Post) ->
     Sql = <<
-        "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, a.kind = 'local', a.banned,"
-        " p.actor, a.rank, (SELECT role FROM action WHERE post = p.id"
+        "SELECT p.thread, b.name, p.state, p.time, p.body, a.name, t.kind = 'local', t.banned,"
+        " t.id, t.rank, (SELECT role FROM action WHERE post = p.id"
         " AND kind IN ('hide', 'delete') ORDER BY entry DESC LIMIT 1),"
         " CASE WHEN p.asset IS NULL THEN NULL"
         " ELSE EXISTS (SELECT 1 FROM blocklist WHERE hash = p.asset) END"
-        " FROM post p JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
-        " JOIN actor a ON a.id = p.actor WHERE p.id = ?1 AND b.log = 0"
+        " FROM post p JOIN thread h ON h.root = p.thread JOIN board b ON b.id = h.board"
+        " JOIN actor a ON a.id = p.actor LEFT JOIN upload u ON u.post = p.id"
+        %% the account a ban would reach, as the writer finds it
+        " JOIN actor t ON t.id ="
+        " CASE WHEN a.kind = 'local' THEN p.actor ELSE coalesce(u.actor, p.actor) END"
+        " WHERE p.id = ?1 AND b.log = 0"
     >>,
     {reply, ike_db:q(Conn, Sql, [Post]), Conn};
 handle_call(_Request, _From, Conn) ->

@@ -14,7 +14,8 @@
     only_ones_own_once/1,
     the_media_follow_what_is_shown/1,
     a_restart_makes_them_again/1,
-    a_blocked_image_does_not_come_back/1
+    a_blocked_image_does_not_come_back/1,
+    the_uploader_can_be_suspended/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/5, request/5, query/3, cookies/1, upload/3, media/2]).
@@ -26,7 +27,8 @@ all() ->
         only_ones_own_once,
         the_media_follow_what_is_shown,
         a_restart_makes_them_again,
-        a_blocked_image_does_not_come_back
+        a_blocked_image_does_not_come_back,
+        the_uploader_can_be_suspended
     ].
 
 init_per_suite(Config) ->
@@ -221,8 +223,12 @@ a_blocked_image_does_not_come_back(Config) ->
         [K || [K] <- Kinds]
     end,
     [<<"hide">>] = Offered(Janitor),
-    %% (unsigned: no account to ban)
-    [<<"hide">>, <<"delete">>, <<"block">>] = Offered(Moderator),
+    %% unsigned, and still the account behind the image can be suspended
+    [<<"hide">>, <<"delete">>, <<"ban">>, <<"block">>] = Offered(Moderator),
+    %% a janitor's own unsigned image is the janitor's, and below a
+    %% moderator; nobody sees whose it is
+    {200, _, Look} = request(Config, get, Path, cookies(Moderator), none),
+    nomatch = binary:match(Look, <<"blocked">>),
     403 = Act(Janitor, "block"),
     403 = Act(Moderator, "purge_image"),
     303 = Act(Moderator, "block"),
@@ -247,3 +253,33 @@ a_blocked_image_does_not_come_back(Config) ->
     {200, _, Page} = request(Config, get, page(H), [], none),
     {_, _} = binary:match(Page, <<"<span class=\"gone\">image</span>">>),
     {422, _, _} = upload(Config, Other, [{<<"e.jpg">>, Jpg}]).
+
+the_uploader_can_be_suspended(Config) ->
+    Uploader = login(Config, <<"suspendable">>),
+    Peer = login(Config, <<"suspend-mod">>, #{groups => [<<"ike-moderator">>]}),
+    Other = login(Config, <<"suspend-mod2">>, #{groups => [<<"ike-moderator">>]}),
+    Act = fun(#{csrf := Csrf} = Who, Path) ->
+        Form = uri_string:compose_query([{"csrf", Csrf}, {"kind", "ban"}, {"reason", "x"}]),
+        element(1, request(Config, post, Path, cookies(Who), {form, Form}))
+    end,
+    %% a moderator's own unsigned image: not by a peer, nor by itself
+    {303, _, _} = upload(Config, Other, [{<<"m.png">>, read(Config, "base.png")}]),
+    {303, H1, _} = with(
+        Config, Other, "/board/b/new", <<"unsigned">>, latest(Config, <<"suspend-mod2">>)
+    ),
+    "#p" ++ N1 = string:find(proplists:get_value("location", H1), "#"),
+    403 = Act(Peer, "/mod/post/" ++ N1),
+    403 = Act(Other, "/mod/post/" ++ N1),
+    %% an account's unsigned image: banned through it, unseen
+    {303, _, _} = upload(Config, Uploader, [{<<"s.png">>, read(Config, "base.png")}]),
+    {303, H2, _} = with(
+        Config, Uploader, "/board/b/new", <<"unsigned">>, latest(Config, <<"suspendable">>)
+    ),
+    "#p" ++ N2 = string:find(proplists:get_value("location", H2), "#"),
+    {200, _, Look} = request(Config, get, "/mod/post/" ++ N2, cookies(Peer), none),
+    {_, _} = binary:match(Look, <<"unsigned">>),
+    nomatch = binary:match(Look, <<"suspendable">>),
+    303 = Act(Peer, "/mod/post/" ++ N2),
+    [[1]] = query(Config, "SELECT banned FROM actor WHERE subject = 'suspendable'", []),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Uploader), none),
+    nomatch = binary:match(Form, <<"/logout">>).
