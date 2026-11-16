@@ -1010,10 +1010,15 @@ router reads both back. The invariant suite's href check admits exactly
   revision's links are read again from the new text, and every page
   either text pointed at is made again.
 - *Simplification:* "the same author" is a signed account only. An
-  unsigned edit is the anonymous actor's, which is everyone's: folding
-  one into another would fold strangers' edits together, and nothing
-  else (no address, by rule) tells two anonymous editors apart. So
-  unsigned edits are never folded, nor folded into.
+  unsigned edit is the anonymous actor's, which is everyone's, so the
+  actor alone would fold strangers' edits together. lux wrote
+  "user/anon": the one thing that could tell two unsigned edits apart is
+  the password, a new edit's opening the seal of the one before (never an
+  address, by rule). Not built unasked (Q36).
+- **A page whose first revision is out of view** (retracted, hidden or
+  trashed: it is the thread's first post, so the thread goes with it)
+  reads as missing, and an edit to it is refused with 409, "taken down",
+  rather than written into a thread nobody sees (Q39).
 - *Not yet:* amend for tags (Q37), which needs the curation's thread
   first.
 - What a folded revision said before is gone, as a retracted post's is

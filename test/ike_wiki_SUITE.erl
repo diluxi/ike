@@ -11,6 +11,8 @@
     edits_stack/1,
     signed_edits_are_amended/1,
     retracted_by_password/1,
+    amend_reads_links_again/1,
+    first_revision_retracted/1,
     pointed_at_by_name/1,
     accounts_write/1,
     names/1,
@@ -26,6 +28,8 @@ all() ->
         edits_stack,
         signed_edits_are_amended,
         retracted_by_password,
+        amend_reads_links_again,
+        first_revision_retracted,
         pointed_at_by_name,
         accounts_write,
         names,
@@ -252,3 +256,66 @@ missing_pages_are_asked_for(Config) ->
     {_, _} = binary:match(Why, <<"because.">>),
     {200, _, Again} = request(Config, get, Thread, [], none),
     {_, _} = binary:match(Again, <<"<a href=\"/wiki/why%3F\">ask</a>">>).
+
+%% a folded revision's links are read again from its new text: the post
+%% it no longer points at loses the reply, the one it points at gains it
+amend_reads_links_again(Config) ->
+    A = login(Config, <<"relinker">>),
+    Signed = [{"signed", "1"}],
+    {303, H1, _} = ike_browser:post(Config, "/board/b/new", A, <<"first target">>),
+    {303, H2, _} = ike_browser:post(Config, "/board/b/new", A, <<"second target">>),
+    T1 = hd(string:split(proplists:get_value("location", H1), "#")),
+    T2 = hd(string:split(proplists:get_value("location", H2), "#")),
+    "/board/b/" ++ N1 = T1,
+    "/board/b/" ++ N2 = T2,
+    {303, _, _} = save(
+        Config, A, "relinked", list_to_binary(">>" ++ N1 ++ " [[relink_gone]]"), Signed
+    ),
+    {303, _, _} = save(
+        Config, A, "relinked", list_to_binary(">>" ++ N2 ++ " [[relinked]]"), Signed
+    ),
+    [[1]] = query(
+        Config,
+        "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
+        " WHERE pg.name = 'relinked' AND p.revision = 1",
+        []
+    ),
+    [[Rev]] = query(
+        Config,
+        "SELECT p.id FROM post p JOIN page pg ON pg.thread = p.id WHERE pg.name = 'relinked'",
+        []
+    ),
+    Reply = list_to_binary("href=\"/p/" ++ integer_to_list(Rev) ++ "\""),
+    {200, _, Old} = request(Config, get, T1, [], none),
+    nomatch = binary:match(Old, Reply),
+    {200, _, New} = request(Config, get, T2, [], none),
+    {_, _} = binary:match(New, Reply),
+    {200, _, Page} = request(Config, get, "/wiki/relinked", [], none),
+    nomatch = binary:match(Page, <<"relink_gone">>),
+    {_, _} = binary:match(Page, <<"<a href=\"/wiki/relinked\">[[relinked]]</a>">>).
+
+%% the first revision is the thread's first post: retracted, the page and
+%% its thread are out of view, and an edit is refused rather than
+%% written where nobody sees it, until lux says otherwise (Q39)
+first_revision_retracted(Config) ->
+    A = login(Config, <<"rooter">>),
+    B = login(Config, <<"rooter-b">>),
+    {303, _, _} = save(Config, A, "rooted", <<"root">>, [{"password", "pw"}]),
+    {303, _, _} = save(Config, B, "rooted", <<"over it">>),
+    [[Root]] = query(Config, "SELECT thread FROM page WHERE name = 'rooted'", []),
+    Act = uri_string:compose_query([
+        {"post", integer_to_list(Root)}, {"kind", "retract"}, {"password", "pw"}
+    ]),
+    {200, _, Said} = request(
+        Config, post, "/act", [{"origin", ?config(base, Config)}], {form, Act}
+    ),
+    {_, _} = binary:match(Said, <<": retracted">>),
+    {404, _, _} = request(Config, get, "/wiki/rooted", [], none),
+    %% an edit is refused, saying why, and nothing is written (Q39)
+    {409, _, Refused} = save(Config, A, "rooted", <<"again">>),
+    {_, _} = binary:match(Refused, <<"taken down">>),
+    [[2]] = query(
+        Config,
+        "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'rooted'",
+        []
+    ).

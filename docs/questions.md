@@ -103,11 +103,22 @@ here.
   page, not a report made on it. A report on a revision that is folded
   after it reads the new text. Keep the old text for moderators (as
   trash), or is this fine? And is there a time limit past which an edit
-  is a revision of its own (git's amend has none)?
+  is a revision of its own (git's amend has none)? Only shown posts count
+  as "between": a retracted or hidden post after the revision does not,
+  so if it is restored it sits under text written after it. And should
+  unsigned edits fold when the new edit's password opens the last
+  one's (lux wrote "user/anon")?
 - **Q37 Amending tags.** lux: a change to "anything" right after its
   author's own is folded in. Tag changes have their history
   (`tag_change`), but no curation thread yet to tell "nothing between";
   built with that thread.
+- **Q39 Retracting a page's first revision.** The first revision is the
+  thread's first post, so retracting it (or hiding it) takes the whole
+  page and its thread out of view, others' revisions with it, as with
+  any thread. Edits are then refused ("taken down") until a moderator
+  restores it. Should retracting the first revision only step the page
+  back where later revisions exist, or should a new edit start the page
+  afresh?
 - **Q38 A meta's page.** lux finds Danbooru's media asset page hard to
   justify. Is `/trunk` a list only, or does each meta have a page?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,

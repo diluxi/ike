@@ -182,7 +182,7 @@ retract(Post, By) ->
 -spec wiki(#{
     name := binary(), actor := ike_id:actor(), body := binary(), password => binary()
 }) ->
-    {ok, ike_id:post()} | {error, bad_text} | error().
+    {ok, ike_id:post()} | {error, bad_text | taken_down} | error().
 wiki(#{name := Name, actor := Actor, body := Body} = Edit) ->
     Password =
         case Edit of
@@ -1400,6 +1400,9 @@ revised(Conn, Name, Actor, Body, Password, Time) ->
             end;
         {ok, [[Thread]]} when is_integer(Thread) ->
             case newest(Conn, Thread) of
+                %% its first revision, which is its thread, out of view
+                {ok, {undefined, undefined}} ->
+                    {error, taken_down};
                 {ok, {Base, Last}} when Actor =/= ?NOBODY, is_integer(Last), Base =:= Last ->
                     case ike_db:q(Conn, <<"SELECT actor FROM post WHERE id = ?1">>, [Last]) of
                         {ok, [[Actor]]} -> amended(Conn, Last, Thread, Body, Time);
@@ -1417,10 +1420,10 @@ revised(Conn, Name, Actor, Body, Password, Time) ->
             Error
     end.
 
-%% a page's newest revision there to be shown (null if none is), and its
-%% thread's newest post
+%% a page's newest revision there to be shown, and its thread's newest
+%% post (undefined, the SQL null, where none is)
 -spec newest(ike_db:writer(), integer()) ->
-    {ok, {integer() | null, integer() | null}} | error().
+    {ok, {integer() | undefined, integer() | undefined}} | error().
 newest(Conn, Thread) ->
     Sql = <<
         "SELECT (SELECT max(p.id) FROM shown s JOIN post p ON p.id = s.id"
@@ -1429,7 +1432,8 @@ newest(Conn, Thread) ->
     >>,
     case ike_db:q(Conn, Sql, [Thread]) of
         {ok, [[Base, Last]]} when
-            (is_integer(Base) orelse Base =:= null), (is_integer(Last) orelse Last =:= null)
+            (is_integer(Base) orelse Base =:= undefined),
+            (is_integer(Last) orelse Last =:= undefined)
         ->
             {ok, {Base, Last}};
         {ok, Rows} ->
@@ -1445,7 +1449,7 @@ newest(Conn, Thread) ->
     integer(),
     binary(),
     binary() | undefined,
-    integer() | null,
+    integer() | undefined,
     integer()
 ) ->
     {ok, {integer(), [term()]}} | error().
