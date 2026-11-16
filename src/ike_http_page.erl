@@ -9,13 +9,9 @@
 init(Req, missing = State) ->
     {ok, ike_http:not_found(Req), State};
 init(Req, style = State) ->
-    case file:read_file(<<(ike_config:pages_dir())/binary, "/style.css">>) of
-        {ok, Css} ->
-            Headers = (ike_http:headers())#{<<"content-type">> => <<"text/css; charset=utf-8">>},
-            {ok, cowboy_req:reply(200, Headers, Css, Req), State};
-        {error, _} ->
-            {ok, ike_http:not_found(Req), State}
-    end;
+    {ok, plain(<<"style.css">>, <<"text/css; charset=utf-8">>, Req), State};
+init(Req, script = State) ->
+    {ok, plain(<<"ike.js">>, <<"text/javascript; charset=utf-8">>, Req), State};
 init(Req, State) ->
     %% from what the route bound, never from the path as it was sent: the
     %% router resolves dots and escapes, a file name must not have to
@@ -50,4 +46,14 @@ init(Req, State) ->
             end;
         _ ->
             {ok, ike_http:reply(405, Req), State}
+    end.
+
+%% the stylesheet or the script, as the renderer wrote them
+-spec plain(binary(), binary(), cowboy_req:req()) -> cowboy_req:req().
+plain(Name, Type, Req) ->
+    case file:read_file(<<(ike_config:pages_dir())/binary, "/", Name/binary>>) of
+        {ok, Bytes} ->
+            cowboy_req:reply(200, (ike_http:headers())#{<<"content-type">> => Type}, Bytes, Req);
+        {error, _} ->
+            ike_http:not_found(Req)
     end.

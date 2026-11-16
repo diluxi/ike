@@ -10,6 +10,19 @@
 -type tag() ::
     a
     | article
+    | b
+    | blockquote
+    | code
+    | h2
+    | h3
+    | h4
+    | h5
+    | h6
+    | i
+    | pre
+    | s
+    | script
+    | u
     | body
     | br
     | button
@@ -72,6 +85,7 @@
     | multiple
     | controls
     | reversed
+    | defer
     | open.
 
 -opaque html() :: {text, binary()} | {el, tag(), [attr()], [html()]}.
@@ -101,7 +115,9 @@ document(Title, Body) ->
             ),
             el(title, [text(Title)]),
             %% plain looks, from this origin; nothing depends on them
-            el(link, [{rel, <<"stylesheet">>}, {href, <<"/style.css">>}], [])
+            el(link, [{rel, <<"stylesheet">>}, {href, <<"/style.css">>}], []),
+            %% keys for the text box, and nothing a page needs (invariant 2)
+            el(script, [{src, <<"/ike.js">>}, defer], [])
         ]),
         el(body, Body)
     ]).
@@ -129,6 +145,7 @@ attr(required) -> <<" required">>;
 attr(multiple) -> <<" multiple">>;
 attr(controls) -> <<" controls">>;
 attr(reversed) -> <<" reversed">>;
+attr(defer) -> <<" defer">>;
 attr(open) -> <<" open">>;
 attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 
@@ -156,6 +173,19 @@ escape_byte(B) -> <<B>>.
 
 -spec tag(tag()) -> binary().
 tag(a) -> <<"a">>;
+tag(b) -> <<"b">>;
+tag(blockquote) -> <<"blockquote">>;
+tag(code) -> <<"code">>;
+tag(h2) -> <<"h2">>;
+tag(h3) -> <<"h3">>;
+tag(h4) -> <<"h4">>;
+tag(h5) -> <<"h5">>;
+tag(h6) -> <<"h6">>;
+tag(i) -> <<"i">>;
+tag(pre) -> <<"pre">>;
+tag(s) -> <<"s">>;
+tag(script) -> <<"script">>;
+tag(u) -> <<"u">>;
 tag(article) -> <<"article">>;
 tag(body) -> <<"body">>;
 tag(br) -> <<"br">>;

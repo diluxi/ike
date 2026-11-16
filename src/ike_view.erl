@@ -6,7 +6,7 @@
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/6, wiki_history/2]).
--export([style/0, user/2]).
+-export([style/0, script/0, user/2]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
@@ -240,7 +240,7 @@ post(
                     [],
                     case Body of
                         <<>> -> [];
-                        _ -> [ike_html:el(p, lines(ike_text:parse(Body), Links))]
+                        _ -> blocks(ike_markup:parse(Body), Links)
                     end
                 }
         end,
@@ -341,6 +341,12 @@ piece({page, Name}, Links) ->
         #{{page, Name} := <<"page">>} -> anchor(<<"/wiki/", Name/binary>>, Text);
         #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Text);
         _ -> gone(Text)
+    end;
+piece({page, Name, Label}, Links) ->
+    case Links of
+        #{{page, Name} := <<"page">>} -> anchor(<<"/wiki/", Name/binary>>, Label);
+        #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Label);
+        _ -> gone(Label)
     end;
 piece({booru, N}, Links) ->
     Text = <<"##", (integer_to_binary(N))/binary>>,
@@ -1151,22 +1157,26 @@ wiki_index(Names) ->
 wiki_page(Name, #{thread := Thread, revision := Revision, time := Time, body := Body}, Links) ->
     Stamp = stamp(Time),
     layout(Name, [
-        ike_html:el(h1, [ike_html:text(Name)]),
-        ike_html:el(p, lines(ike_text:parse(Body), Links)),
-        ike_html:el(p, [
-            ike_html:text(<<"as of ">>),
-            permalink(Revision, <<>>),
-            ike_html:text(<<", ">>),
-            ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
-        ]),
-        ike_html:el(
-            p,
-            spaced([
-                anchor(<<"/wiki/", Name/binary, "/edit">>, <<"edit">>),
-                anchor(<<"/wiki/", Name/binary, "/history">>, <<"history">>),
-                anchor(<<"/board/wiki/", (integer_to_binary(Thread))/binary>>, <<"discussion">>)
-            ])
-        )
+        ike_html:el(h1, [ike_html:text(Name)])
+        | blocks(ike_markup:parse(Body), Links) ++
+            [
+                ike_html:el(p, [
+                    ike_html:text(<<"as of ">>),
+                    permalink(Revision, <<>>),
+                    ike_html:text(<<", ">>),
+                    ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
+                ]),
+                ike_html:el(
+                    p,
+                    spaced([
+                        anchor(<<"/wiki/", Name/binary, "/edit">>, <<"edit">>),
+                        anchor(<<"/wiki/", Name/binary, "/history">>, <<"history">>),
+                        anchor(
+                            <<"/board/wiki/", (integer_to_binary(Thread))/binary>>, <<"discussion">>
+                        )
+                    ])
+                )
+            ]
     ]).
 
 %% a name with no page yet
@@ -1328,8 +1338,40 @@ style() ->
         "header details { display: inline; }\n"
         "header details[open] { display: block; }\n"
         "header details > summary { display: inline; cursor: pointer; }\n"
+        ".spoiler { background: #24292f; color: #24292f; }\n"
+        ".spoiler:hover { color: #ffffff; }\n"
         ".gone { color: #6e7781; }\n"
         ".title { font-weight: bold; }\n"
+    >>.
+
+%% keys for a text box, for whoever runs scripts: ctrl+enter sends the
+%% form, ctrl+b and ctrl+i put [b] and [i] around what is selected.
+%% nothing a page needs (invariant 2); no library, ike's own
+-spec script() -> iodata().
+script() ->
+    <<
+        "'use strict';\n"
+        "document.addEventListener('keydown', function (e) {\n"
+        "  var t = e.target;\n"
+        "  if (!t || t.tagName !== 'TEXTAREA' || !(e.ctrlKey || e.metaKey)) return;\n"
+        "  if (e.key === 'Enter') {\n"
+        "    e.preventDefault();\n"
+        "    if (t.form) t.form.requestSubmit();\n"
+        "    return;\n"
+        "  }\n"
+        "  var tag = e.key === 'b' ? 'b' : e.key === 'i' ? 'i' : null;\n"
+        "  if (!tag) return;\n"
+        "  e.preventDefault();\n"
+        "  var start = t.selectionStart, end = t.selectionEnd;\n"
+        "  var inside = t.value.slice(start, end);\n"
+        "  var text = '[' + tag + ']' + inside + '[/' + tag + ']';\n"
+        "  t.focus();\n"
+        "  if (!document.execCommand || !document.execCommand('insertText', false, text)) {\n"
+        "    t.setRangeText(text, start, end, 'end');\n"
+        "  }\n"
+        "  t.selectionStart = start + tag.length + 2;\n"
+        "  t.selectionEnd = t.selectionStart + inside.length;\n"
+        "});\n"
     >>.
 
 %% an account's own page: the posts it signed, newest first
@@ -1364,14 +1406,77 @@ anchor(Href, Text) ->
     ike_html:el(a, [{href, Href}], [ike_html:text(Text)]).
 
 %% each line's pieces, with a br between lines
--spec lines([[ike_text:piece()]], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+%% a text's blocks, from its markup; every leaf is text (invariant 4)
+-spec blocks([ike_markup:block()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
     [ike_html:html()].
-lines([], _Links) ->
-    [];
-lines([Line], Links) ->
-    [piece(P, Links) || P <- Line];
-lines([Line | Rest], Links) ->
-    [piece(P, Links) || P <- Line] ++ [ike_html:el(br, []) | lines(Rest, Links)].
+blocks([{para, Lines} | Rest], Links) ->
+    [ike_html:el(p, broken([inline(L, Links) || L <- Lines])) | blocks(Rest, Links)];
+blocks([{heading, Level, Inline} | Rest], Links) ->
+    %% the page's own title is h1; a text's headings come below it
+    Tag =
+        case Level of
+            1 -> h2;
+            2 -> h3;
+            3 -> h4;
+            4 -> h5;
+            _ -> h6
+        end,
+    [ike_html:el(Tag, inline(Inline, Links)) | blocks(Rest, Links)];
+blocks([{list, Items} | Rest], Links) ->
+    [ike_html:el(ul, [ike_html:el(li, inline(I, Links)) || I <- Items]) | blocks(Rest, Links)];
+blocks([{quote, Inner} | Rest], Links) ->
+    [ike_html:el(blockquote, blocks(Inner, Links)) | blocks(Rest, Links)];
+blocks([{code, Code} | Rest], Links) ->
+    [ike_html:el(pre, [ike_html:el(code, [ike_html:text(Code)])]) | blocks(Rest, Links)];
+blocks([], _Links) ->
+    [].
+
+-spec broken([[ike_html:html()]]) -> [ike_html:html()].
+broken([Line]) -> Line;
+broken([Line | Rest]) -> Line ++ [ike_html:el(br, []) | broken(Rest)];
+broken([]) -> [].
+
+-spec inline([ike_markup:inline()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+    [ike_html:html()].
+inline([{bold, C} | Rest], Links) ->
+    [ike_html:el(b, inline(C, Links)) | inline(Rest, Links)];
+inline([{italic, C} | Rest], Links) ->
+    [ike_html:el(i, inline(C, Links)) | inline(Rest, Links)];
+inline([{strike, C} | Rest], Links) ->
+    [ike_html:el(s, inline(C, Links)) | inline(Rest, Links)];
+inline([{under, C} | Rest], Links) ->
+    [ike_html:el(u, inline(C, Links)) | inline(Rest, Links)];
+inline([{spoiler, C} | Rest], Links) ->
+    [ike_html:el(span, [{class, <<"spoiler">>}], inline(C, Links)) | inline(Rest, Links)];
+inline([{mono, Code} | Rest], Links) ->
+    [ike_html:el(code, [ike_html:text(Code)]) | inline(Rest, Links)];
+inline([{url, Url, Label} | Rest], Links) ->
+    %% someone else's site: no referrer, and no weight given it
+    [
+        ike_html:el(a, [{href, Url}, {rel, <<"nofollow noreferrer">>}], inline(Label, Links))
+        | inline(Rest, Links)
+    ];
+inline([{search, Query} | Rest], Links) ->
+    Href =
+        case uri_string:quote(Query) of
+            Quoted when is_binary(Quoted) -> <<"/booru/search?tags=", Quoted/binary>>;
+            _ -> <<"/booru/search">>
+        end,
+    [anchor(Href, <<"{{", Query/binary, "}}">>) | inline(Rest, Links)];
+inline([{text, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{post, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{post, _, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{booru, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{page, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{page, _, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([], _Links) ->
+    [].
 
 %% the first line, cut at a character boundary
 -spec excerpt(binary()) -> binary().

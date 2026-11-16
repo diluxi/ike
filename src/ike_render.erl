@@ -523,6 +523,7 @@ render_lists(#state{conn = Conn, dir = Dir}) ->
         {ok, Boards} ->
             ok = write(Dir, <<"board.html">>, ike_view:boards(Boards)),
             ok = written(Dir, <<"style.css">>, ike_view:style()),
+            ok = written(Dir, <<"ike.js">>, ike_view:script()),
             write(Dir, <<"index.html">>, ike_view:index());
         {error, Reason} ->
             error({render, lists, Reason})

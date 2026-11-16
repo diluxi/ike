@@ -958,3 +958,27 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   (`audio`, `animated`); ike-strip's answer has a seventh field for it,
   and an animated PNG is told by its `acTL` chunk.
 - *Not yet:* `vector` and `mesh`, with SVG and meshes (M6 and later).
+
+## Markup (lux, 2026-11-16: "a danbooru-like wiki text")
+
+- **A subset of DText** (Danbooru), parsed by `ike_markup` into a tree
+  whose leaves are text: `h1.` to `h6.` (shown one level down, under the
+  page's own title), `* ` lists, `[quote]` and `[code]` on lines of their
+  own, paragraphs between empty lines; inline `[b] [i] [s] [u]
+  [spoiler] [code]`, `"label":[https://url]`, bare http(s) urls,
+  `{{tags}}` as a booru search, `[[name|label]]`. A tag left open, or a
+  close with nothing open, is text as typed. `>>N`, `##N` and `[[name]]`
+  are still ike_text's to find, inside the markup, so the writer and the
+  pages read links alike (D1).
+- **Addresses** are http or https, printable, without quotes, angle
+  brackets, backslashes or backticks, shown with `rel="nofollow
+  noreferrer"`. Invariant 4 now allows such hrefs, checks no tag holds a
+  `javascript:`, and posts markup made to break out.
+- **Keys:** `/ike.js`, ike's own and no library, for whoever runs
+  scripts: Ctrl+Enter sends the form, Ctrl+B and Ctrl+I put `[b]` and
+  `[i]` around the selection. Every page works without it; invariant 2
+  allows exactly that one deferred script from this origin, and the CSP
+  gains `script-src 'self'`.
+- *Not yet:* nested lists, tables, `[tn]`, `[expand]`, DText's other
+  link forms; markup in titles and on the moderator's page (plain text
+  there).

@@ -20,8 +20,9 @@
     | {post, Board :: binary(), pos_integer()}
     %% ##N, a booru entry
     | {booru, pos_integer()}
-    %% [[name]], a wiki page, or a tag
-    | {page, binary()}.
+    %% [[name]], a wiki page, or a tag; [[name|label]] with its own words
+    | {page, binary()}
+    | {page, binary(), Label :: binary()}.
 
 %% the text as lines, each as its pieces
 -spec parse(binary()) -> [[piece()]].
@@ -47,12 +48,18 @@ targets([[{post, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N =
 targets([[{post, _, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N => []});
 targets([[{text, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
 targets([[{booru, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
-targets([[{page, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen).
+targets([[{page, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
+targets([[{page, _, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen).
 
 %% every page name the text points at, once each
 -spec pages(binary()) -> [binary()].
 pages(Body) ->
-    maps:keys(#{N => [] || Line <- parse(Body), {page, N} <- Line, is_binary(N)}).
+    maps:keys(
+        maps:merge(
+            #{N => [] || Line <- parse(Body), {page, N} <- Line, is_binary(N)},
+            #{N => [] || Line <- parse(Body), {page, N, _} <- Line, is_binary(N)}
+        )
+    ).
 
 %% every booru entry the text points at, once each
 -spec entries(binary()) -> [pos_integer()].
@@ -80,10 +87,19 @@ line(<<">>>/", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
     end;
 line(<<"[[", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
     case binary:split(Rest, <<"]]">>) of
-        [Inside, Rest1] when byte_size(Inside) =< 64 ->
-            case ike_wiki:name(Inside) of
-                {ok, Name} -> line(Rest1, <<>>, [{page, Name} | text(Text, Pieces)], Left - 1);
-                error -> skip(All, Text, Pieces, Left)
+        [Inside, Rest1] when byte_size(Inside) =< 200 ->
+            {Target, Label} =
+                case binary:split(Inside, <<"|">>) of
+                    [T, L] when byte_size(L) > 0 -> {T, L};
+                    _ -> {Inside, none}
+                end,
+            case {byte_size(Target) =< 64 andalso ike_wiki:name(Target), Label} of
+                {{ok, Name}, none} ->
+                    line(Rest1, <<>>, [{page, Name} | text(Text, Pieces)], Left - 1);
+                {{ok, Name}, _} ->
+                    line(Rest1, <<>>, [{page, Name, Label} | text(Text, Pieces)], Left - 1);
+                _ ->
+                    skip(All, Text, Pieces, Left)
             end;
         _ ->
             skip(All, Text, Pieces, Left)

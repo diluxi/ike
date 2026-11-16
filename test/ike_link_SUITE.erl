@@ -10,7 +10,8 @@
     a_link_waits_for_its_target/1,
     what_is_not_a_link/1,
     only_so_many_links/1,
-    where_a_post_is/1
+    where_a_post_is/1,
+    marked_up/1
 ]).
 
 -import(ike_browser, [login/2, post/4, request/5, query/3]).
@@ -22,7 +23,8 @@ all() ->
         a_link_waits_for_its_target,
         what_is_not_a_link,
         only_so_many_links,
-        where_a_post_is
+        where_a_post_is,
+        marked_up
     ].
 
 init_per_suite(Config) ->
@@ -182,3 +184,33 @@ until(Fun, Tries) ->
             timer:sleep(50),
             until(Fun, Tries - 1)
     end.
+
+%% DText's subset: what each mark makes, and what is left as typed
+marked_up(Config) ->
+    Session = login(Config, <<"marker">>),
+    Text = <<
+        "h4. Clients\n"
+        "* [b]Gajim[/b] and [i]Dino[/i]\n"
+        "* [s]Pidgin[/s] [u]u[/u] [spoiler]end[/spoiler] [code]<x>[/code]\n"
+        "\n"
+        "\"XMPP\":[https://xmpp.org/about] and https://example.org/a.\n"
+        "{{blue_hair -x}} [[xmpp|the page]] [b]never closed\n"
+        "[quote]\nsaid [i]so[/i]\n[/quote]\n"
+        "[code]\nlet x = <y>;\n[/code]"
+    >>,
+    {Op, Op} = new(Config, Session, "b", Text),
+    [_, Article] = articles(page(Config, "b", Op)),
+    Has = fun(Bit) -> {_, _} = binary:match(Article, Bit) end,
+    Has(<<"<h5>Clients</h5>">>),
+    Has(
+        <<"<ul><li><b>Gajim</b> and <i>Dino</i></li><li><s>Pidgin</s> <u>u</u> <span class=\"spoiler\">end</span> <code>&lt;x&gt;</code></li></ul>">>
+    ),
+    Has(<<"<a href=\"https://xmpp.org/about\" rel=\"nofollow noreferrer\">XMPP</a>">>),
+    Has(
+        <<"<a href=\"https://example.org/a\" rel=\"nofollow noreferrer\">https://example.org/a</a>.">>
+    ),
+    Has(<<"<a href=\"/booru/search?tags=blue_hair%20-x\">{{blue_hair -x}}</a>">>),
+    Has(<<"<span class=\"gone\">the page</span>">>),
+    Has(<<"[b]never closed">>),
+    Has(<<"<blockquote><p>said <i>so</i></p></blockquote>">>),
+    Has(<<"<pre><code>let x = &lt;y&gt;;</code></pre>">>).

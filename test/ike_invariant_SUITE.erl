@@ -377,8 +377,13 @@ inv02_works_without_scripts(Config) ->
         end,
         Pages
     ),
-    %% and ike ships nothing a browser could run
-    Shipped = files(code:priv_dir(ike)) ++ files(filename:join(?config(dir, Config), "pages")),
+    %% and ike ships nothing a browser could run, but its own keys for
+    %% the text box (lux), which every page above works without
+    Shipped = [
+        F
+     || F <- files(code:priv_dir(ike)) ++ files(filename:join(?config(dir, Config), "pages")),
+        filename:basename(F) =/= "ike.js"
+    ],
     [] = [
         F
      || F <- Shipped,
@@ -505,11 +510,16 @@ inv04_text_is_escaped(Config) ->
             {match, Hrefs} = re:run(Page, "href=\"([^\"]*)\"", [
                 global, {capture, all_but_first, binary}
             ]),
+            %% ike's own paths, or someone else's site by http(s), with
+            %% nothing in it that ends an attribute
             [] = [
                 H
              || [H] <- Hrefs,
                 H =/= <<"/style.css">>,
-                re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match
+                re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match,
+                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~-]*$", [{capture, none}]) =/=
+                    match,
+                re:run(H, "^https?://[^\"<>\\s`]+$", [{capture, none}]) =/= match
             ],
             {match, Classes} = re:run(Page, "class=\"([^\"]*)\"", [
                 global, {capture, all_but_first, binary}
@@ -518,7 +528,12 @@ inv04_text_is_escaped(Config) ->
                 C
              || [C] <- Classes,
                 not lists:member(C, [
-                    <<"name">>, <<"name account">>, <<"name role">>, <<"gone">>, <<"title">>
+                    <<"name">>,
+                    <<"name account">>,
+                    <<"name role">>,
+                    <<"gone">>,
+                    <<"title">>,
+                    <<"spoiler">>
                 ])
             ]
         end,
@@ -531,7 +546,14 @@ inv04_text_is_escaped(Config) ->
             <<">>>/b:alert(1)/1 >>1:alert(1) >>>/b/1:alert(1)">>,
             <<">>999999999<img src=x onerror=alert(1)> >>>/meta/999999999<svg onload=alert(1)>">>,
             <<"<a href=\"/p/1\">>>1</a> &gt;&gt;1 >>&#49;">>,
-            <<"##1\"><script>alert(1)</script> ###1 ##>>1 ##0 ##-1 ##1'onmouseover='x">>
+            <<"##1\"><script>alert(1)</script> ###1 ##>>1 ##0 ##-1 ##1'onmouseover='x">>,
+            %% markup: tags around tags, links with attributes in them, and
+            %% addresses that are not http
+            <<"[b]<script>[/b] [i][b]x[/i][/b] [spoiler]\" onmouseover=\"x[/spoiler]">>,
+            <<"\"a\":[https://x.org/\"onmouseover=\"alert(1)] \"b\":[javascript:alert(1)]">>,
+            <<"https://x.org/a\"><script>alert(1)</script> http://y.org/<b>">>,
+            <<"{{\"><script>alert(1)</script>}} [[x|<b>label</b>]] [code]<script>[/code]">>,
+            <<"h1. <script>alert(1)</script>\n* <img src=x onerror=alert(1)>\n[quote]\n<b>\n[/quote]">>
         ]
     ),
     %% a moderator's pages are made per request from the same text, and
@@ -702,7 +724,9 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
     [_ | _] = Pages,
     [] = [
         F
-     || F <- Pages, filename:extension(F) =/= ".html", filename:basename(F) =/= "style.css"
+     || F <- Pages,
+        filename:extension(F) =/= ".html",
+        not lists:member(filename:basename(F), ["style.css", "ike.js"])
     ].
 
 %% 6. No decoder or metadata stripper runs inside the BEAM.
@@ -1586,6 +1610,7 @@ known_routes() ->
         [<<"booru">>, booru, <<"tags">>],
         [<<"wiki">>],
         [<<"style.css">>],
+        [<<"ike.js">>],
         [<<"user">>, name],
         [<<"wiki">>, name],
         [<<"wiki">>, name, <<"edit">>],
@@ -1697,9 +1722,14 @@ act(Config, Cookies, Html, Action, Kind, Reason) ->
     ike_browser:request(Config, post, Action, Cookies, {form, uri_string:compose_query(Fields)}).
 
 scriptless(Html) ->
-    Lower = string:lowercase(Html),
+    %% the one script, ike's own, from this origin, deferred; a page
+    %% works without it, which is what the rest of this suite shows
+    Lower = binary:replace(
+        string:lowercase(Html), <<"<script src=\"/ike.js\" defer></script>">>, <<>>, [global]
+    ),
     nomatch = binary:match(Lower, <<"<script">>),
-    nomatch = binary:match(Lower, <<"javascript:">>),
+    %% no script address in any tag: in text, escaped, the word runs nothing
+    nomatch = re:run(Lower, "<[^>]*javascript:[^>]*>", [{capture, none}]),
     %% an attribute named on-something, inside a tag
     nomatch = re:run(Lower, "<[^>]*\\son[a-z]+\\s*=", [{capture, none}]),
     nomatch = re:run(Lower, "<(iframe|object|embed|style|svg|math)[\\s>]", [
@@ -1756,15 +1786,24 @@ known_tag(Name) ->
     lists:member(Name, [
         <<"a">>,
         <<"article">>,
+        <<"b">>,
+        <<"blockquote">>,
         <<"body">>,
         <<"br">>,
         <<"button">>,
+        <<"code">>,
         <<"del">>,
         <<"details">>,
         <<"footer">>,
         <<"form">>,
         <<"h1">>,
+        <<"h2">>,
+        <<"h3">>,
+        <<"h4">>,
+        <<"h5">>,
+        <<"h6">>,
         <<"head">>,
+        <<"i">>,
         <<"img">>,
         <<"ins">>,
         <<"header">>,
@@ -1778,11 +1817,15 @@ known_tag(Name) ->
         <<"nav">>,
         <<"ol">>,
         <<"p">>,
+        <<"pre">>,
+        <<"s">>,
+        <<"script">>,
         <<"span">>,
         <<"summary">>,
         <<"textarea">>,
         <<"time">>,
         <<"title">>,
+        <<"u">>,
         <<"ul">>,
         <<"video">>
     ]).
