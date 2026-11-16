@@ -3,7 +3,17 @@
 %% (hazard P3), and its thumbnail <hash>.thumb.webp.
 -module(ike_media).
 
--export([file/2, thumb/1, url/2, thumb_url/1, parse/1]).
+-export([file/2, thumb/1, url/2, thumb_url/1, parse/1, mime/1, moving/1]).
+
+%% what a type is served as
+-spec mime(binary()) -> binary().
+mime(<<"webm">>) -> <<"video/webm">>;
+mime(<<"mp4">>) -> <<"video/mp4">>;
+mime(Type) -> <<"image/", Type/binary>>.
+
+%% whether a type is shown as a video
+-spec moving(binary()) -> boolean().
+moving(Type) -> Type =:= <<"webm">> orelse Type =:= <<"mp4">>.
 
 -spec file(Hex :: binary(), Type :: binary()) -> binary().
 file(Hex, Type) ->
@@ -25,6 +35,8 @@ thumb_url(Hex) ->
 ext(<<"jpeg">>) -> <<"jpg">>;
 ext(<<"png">>) -> <<"png">>;
 ext(<<"webp">>) -> <<"webp">>;
+ext(<<"webm">>) -> <<"webm">>;
+ext(<<"mp4">>) -> <<"mp4">>;
 ext(_) -> <<"bin">>.
 
 %% a file's name back to its asset and what it is served as; nothing
@@ -34,6 +46,8 @@ parse(<<Hex:64/binary, ".thumb.webp">>) -> hex(Hex, <<"image/webp">>);
 parse(<<Hex:64/binary, ".jpg">>) -> hex(Hex, <<"image/jpeg">>);
 parse(<<Hex:64/binary, ".png">>) -> hex(Hex, <<"image/png">>);
 parse(<<Hex:64/binary, ".webp">>) -> hex(Hex, <<"image/webp">>);
+parse(<<Hex:64/binary, ".webm">>) -> hex(Hex, <<"video/webm">>);
+parse(<<Hex:64/binary, ".mp4">>) -> hex(Hex, <<"video/mp4">>);
 parse(_) -> error.
 
 -spec hex(binary(), binary()) -> {ok, binary(), binary()} | error.

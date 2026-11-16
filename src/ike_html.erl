@@ -34,7 +34,8 @@
     | textarea
     | time
     | title
-    | ul.
+    | ul
+    | video.
 
 -type attr() ::
     {
@@ -54,6 +55,8 @@
         | maxlength
         | method
         | name
+        | poster
+        | preload
         | rows
         | src
         | type
@@ -62,7 +65,8 @@
         binary()
     }
     | required
-    | multiple.
+    | multiple
+    | controls.
 
 -opaque html() :: {text, binary()} | {el, tag(), [attr()], [html()]}.
 
@@ -115,6 +119,7 @@ render({el, Tag, Attrs, Children}) ->
 -spec attr(attr()) -> iodata().
 attr(required) -> <<" required">>;
 attr(multiple) -> <<" multiple">>;
+attr(controls) -> <<" controls">>;
 attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 
 %% void elements have no content and no end tag; children given to one
@@ -165,7 +170,8 @@ tag(summary) -> <<"summary">>;
 tag(textarea) -> <<"textarea">>;
 tag(time) -> <<"time">>;
 tag(title) -> <<"title">>;
-tag(ul) -> <<"ul">>.
+tag(ul) -> <<"ul">>;
+tag(video) -> <<"video">>.
 
 -spec name(atom()) -> binary().
 name(accept) -> <<"accept">>;
@@ -184,6 +190,8 @@ name(lang) -> <<"lang">>;
 name(maxlength) -> <<"maxlength">>;
 name(method) -> <<"method">>;
 name(name) -> <<"name">>;
+name(poster) -> <<"poster">>;
+name(preload) -> <<"preload">>;
 name(rows) -> <<"rows">>;
 name(src) -> <<"src">>;
 name(type) -> <<"type">>;

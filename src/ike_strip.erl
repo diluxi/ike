@@ -10,7 +10,7 @@
 -export_type([stripped/0]).
 
 -type stripped() :: #{
-    type := jpeg | png | webp,
+    type := jpeg | png | webp | webm | mp4,
     width := pos_integer(),
     height := pos_integer(),
     stored := binary(),
@@ -107,7 +107,9 @@ parse(Bytes, Max) ->
             {error, unavailable}
     end.
 
--spec type(binary()) -> {ok, jpeg | png | webp} | error.
+-spec type(binary()) -> {ok, jpeg | png | webp | webm | mp4} | error.
+type(<<"webm">>) -> {ok, webm};
+type(<<"mp4">>) -> {ok, mp4};
 type(<<"jpeg">>) -> {ok, jpeg};
 type(<<"png">>) -> {ok, png};
 type(<<"webp">>) -> {ok, webp};

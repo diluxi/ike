@@ -1237,6 +1237,62 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
     [] = secrets(Renamed),
     {_, _} = binary:match(Renamed, <<"ICC profile", 0, 0>>),
     Profile = profile(Work, Renamed),
+    %% video: remuxed with one video and one audio stream, no tags of the
+    %% uploader's, no chapters, nothing its encoder said of itself, and the
+    %% same bytes whatever metadata came with it
+    lists:foreach(
+        fun({Name, Type}) ->
+            Base = filename:join(Data, Name),
+            {ok, Type, 64, 48, Stored, Thumb} = strip(Work, Base),
+            Golden = maps:get(Name, golden()),
+            Golden = binary:encode_hex(crypto:hash(sha256, Stored), lowercase),
+            bare(Work, Thumb),
+            Meta = filename:join(Work, "meta.txt"),
+            ok = file:write_file(Meta, <<
+                ";FFMETADATA1\ntitle=SECRET-TITLE\ncomment=SECRET-COMMENT\n"
+                "location=+52.5160+013.3770/\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\n"
+                "title=SECRET-CHAPTER\n"
+            >>),
+            Remuxed = filename:join(Work, "laden-" ++ Name),
+            ffmpeg([
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                Base,
+                "-i",
+                Meta,
+                "-map",
+                "0",
+                "-map_metadata",
+                "1",
+                "-map_chapters",
+                "1",
+                "-metadata:s:v",
+                "title=SECRET-STREAM",
+                "-c",
+                "copy",
+                Remuxed
+            ]),
+            {_, _} = binary:match(read(Work, "laden-" ++ Name), <<"SECRET-CHAPTER">>),
+            {ok, Type, 64, 48, Stored, _} = strip(Work, Remuxed),
+            [] = secrets(Stored),
+            nomatch = binary:match(Stored, <<"x264">>),
+            [] =
+                video_tags(Work, Stored) --
+                    [
+                        <<"DURATION">>,
+                        <<"encoder">>,
+                        <<"language">>,
+                        <<"handler_name">>,
+                        <<"vendor_id">>,
+                        <<"major_brand">>,
+                        <<"minor_version">>,
+                        <<"compatible_brands">>
+                    ]
+        end,
+        [{"base.webm", <<"webm">>}, {"base.mp4", <<"mp4">>}]
+    ),
     %% an animated png: its frames stay, in order, its text goes
     Frames = apng(read(Data, "base.png")),
     {ok, <<"png">>, 61, 47, Animated, _} = strip_bytes(Work, Frames, caps()),
@@ -1283,6 +1339,10 @@ golden() ->
             <<"cba5288fc8f5b68745b95ccae1fe01737bd14d3aee4dbf7c5710b02e4717259a">>,
         "lossy.webp" =>
             <<"5a4de3595f1d3c5dc1bb846b15661f221f7638852705d4c363c3490ead92376a">>,
+        "base.webm" =>
+            <<"5d529e13dc4d1ec63651083b99a96792a2741badbfd2963180e24b7c7a18f153">>,
+        "base.mp4" =>
+            <<"efb8883bfa667674c911168e7af19ca38e01a127a243e3e9dab90e064a618f37">>,
         "lossless.webp" =>
             <<"12860a83c965555f000702cd5d7c7098662cd8c868a787448e7757f322e0e1d1">>
     }.
@@ -1429,6 +1489,38 @@ allowed() ->
 
 secrets(Bytes) ->
     [M || M <- [<<"SECRET">>, <<"TRAILING">>, <<"ExifTool">>], binary:match(Bytes, M) =/= nomatch].
+
+%% every tag ffprobe finds on the container or its streams, by name
+video_tags(Work, Bytes) ->
+    File = filename:join(Work, "probe"),
+    ok = file:write_file(File, Bytes),
+    Exe = os:find_executable("ffprobe"),
+    true = is_list(Exe),
+    Out = os:cmd(
+        lists:flatten(
+            lists:join(" ", [
+                quote(A)
+             || A <- [
+                    Exe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format_tags:stream_tags",
+                    "-of",
+                    "json",
+                    File
+                ]
+            ])
+        )
+    ),
+    #{<<"format">> := Format, <<"streams">> := Streams} = json:decode(list_to_binary(Out)),
+    Tags = [maps:get(<<"tags">>, S, #{}) || S <- [Format | Streams]],
+    lists:usort([K || T <- Tags, K := _ <- T]).
+
+ffmpeg(Args) ->
+    Exe = os:find_executable("ffmpeg"),
+    true = is_list(Exe),
+    os:cmd(lists:flatten(lists:join(" ", [quote(A) || A <- [Exe | Args]]))).
 
 exiftool(Args) ->
     Exe = os:find_executable("exiftool"),
@@ -1596,6 +1688,21 @@ scriptless(Html) ->
         I
      || I <- Images,
         re:run(I, "^<img src=\"http://media\\.test/[^\"]*\" alt=\"[^\"]*\">$") =:= nomatch
+    ],
+    %% and a video plays from there too, with controls and nothing fetched
+    %% before it is asked for
+    Videos =
+        case re:run(Lower, "<video[^>]*>", [global, {capture, first, binary}]) of
+            {match, Vs} -> [V || [V] <- Vs];
+            nomatch -> []
+        end,
+    [] = [
+        V
+     || V <- Videos,
+        re:run(
+            V,
+            "^<video src=\"http://media\\.test/[^\"]*\" poster=\"http://media\\.test/[^\"]*\" preload=\"none\" controls>$"
+        ) =:= nomatch
     ].
 
 %% the names of a page's tags, closing ones included, in order
@@ -1639,7 +1746,8 @@ known_tag(Name) ->
         <<"textarea">>,
         <<"time">>,
         <<"title">>,
-        <<"ul">>
+        <<"ul">>,
+        <<"video">>
     ]).
 
 %% the escaping, written a second time and on purpose not shared

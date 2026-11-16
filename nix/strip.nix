@@ -2,7 +2,7 @@
 # hazard P1). The driver sees no tool but those named here; libvips and
 # jpegtran are pinned with nixpkgs, and a bump that changes what they
 # write changes stored hashes (hazard P7)
-{ lib, stdenvNoCC, zig, makeWrapper, bash, coreutils, vips, libjpeg_turbo }:
+{ lib, stdenvNoCC, zig, makeWrapper, bash, coreutils, vips, libjpeg_turbo, ffmpeg-headless }:
 stdenvNoCC.mkDerivation {
 	pname = "ike-strip";
 	version = "0.0.0";
@@ -28,6 +28,7 @@ stdenvNoCC.mkDerivation {
 			coreutils
 			(lib.getBin vips)
 			(lib.getBin libjpeg_turbo)
+			(lib.getBin ffmpeg-headless)
 		]}:$out/libexec
 		runHook postInstall
 	'';

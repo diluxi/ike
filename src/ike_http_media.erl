@@ -75,7 +75,7 @@ serve(Upload, Expires, Sig, Part, Req) ->
         {ok, Hex, Type} ->
             {File, Mime} =
                 case Part of
-                    file -> {Hex, <<"image/", Type/binary>>};
+                    file -> {Hex, ike_media:mime(Type)};
                     thumb -> {<<Hex/binary, ".thumb">>, <<"image/webp">>}
                 end,
             case file:read_file(<<(ike_config:assets_dir())/binary, "/", File/binary>>) of

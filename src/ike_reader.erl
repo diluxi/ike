@@ -305,7 +305,7 @@ handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
     {reply, Reply, Conn};
 handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
     Sql = <<
-        "SELECT u.id, a.type, a.width, a.height, u.time FROM upload u"
+        "SELECT u.id, a.format, a.width, a.height, u.time FROM upload u"
         " JOIN asset a ON a.hash = u.asset"
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
@@ -327,7 +327,7 @@ handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
     >>,
     Sql = iolist_to_binary([
         <<
-            "SELECT e.id, x.hash, x.type, x.width, x.height FROM shown_entry e"
+            "SELECT e.id, x.hash, x.format, x.width, x.height FROM shown_entry e"
             " LEFT JOIN asset x ON x.hash = e.asset WHERE 1"
         >>,
         [Has || _ <- Must],
@@ -365,7 +365,7 @@ handle_call({posted, Actor}, _From, Conn) when is_integer(Actor) ->
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
 handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->
     Sql = <<
-        "SELECT a.hash, a.type FROM upload u JOIN asset a ON a.hash = u.asset"
+        "SELECT a.hash, a.format FROM upload u JOIN asset a ON a.hash = u.asset"
         " WHERE u.id = ?1 AND u.posted IS NULL"
     >>,
     {reply, ike_db:q(Conn, Sql, [Upload]), Conn};

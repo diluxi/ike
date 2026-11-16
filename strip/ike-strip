@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ike-strip MAX_BYTES MAX_SIDE MAX_PIXELS THUMB
+# ike-strip MAX_BYTES MAX_SIDE MAX_PIXELS THUMB [MAX_SECONDS]
 #
 # One upload on stdin, one answer on stdout. Either
 #	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH
@@ -7,7 +7,10 @@
 #	no REASON
 # and nothing more. The stored bytes are the upload with its metadata
 # stripped losslessly (hazards P4, P7), the colour profile and an animated
-# PNG's frames kept; the thumbnail is made from them.
+# PNG's frames kept; the thumbnail is made from them. A video (WebM, MP4)
+# is remuxed without metadata, one video and one audio stream, chapters
+# and data tracks dropped, never re-encoded; its thumbnail is its first
+# frame.
 # Run in its own unit, never in ike's VM (invariant 6, hazard P1).
 set -euo pipefail
 
@@ -15,6 +18,7 @@ max_bytes=$1
 max_side=$2
 max_pixels=$3
 thumb=$4
+max_seconds=${5:-600}
 
 # libvips loads nothing it does not trust with hostile input
 export VIPS_BLOCK_UNTRUSTED=1
@@ -37,8 +41,55 @@ case $magic in
 ffd8ff*) type=jpeg ;;
 89504e470d0a1a0a*) type=png ;;
 52494646????????57454250) type=webp ;;
+1a45dfa3*) type=webm ;;
+????????66747970*) type=mp4 ;;
 *) no not-an-image ;;
 esac
+
+# a video: what ffprobe reads of it, then the streams copied as they are
+video() {
+	probe() {
+		ffprobe -v error -select_streams "$2" -show_entries "$3" -of csv=p=0 "$1" 2>/dev/null | head -n1
+	}
+	vcodec=$(probe "$1" v:0 stream=codec_name) || no unreadable
+	acodec=$(probe "$1" a:0 stream=codec_name) || acodec=
+	w=$(probe "$1" v:0 stream=width) || no unreadable
+	h=$(probe "$1" v:0 stream=height) || no unreadable
+	seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null) || no unreadable
+	[ -n "$vcodec" ] && [ -n "$w" ] && [ -n "$h" ] || no unreadable
+	case $type:$vcodec in
+	webm:vp8 | webm:vp9 | webm:av1 | mp4:h264 | mp4:hevc | mp4:av1) ;;
+	*) no unplayable ;;
+	esac
+	case $type:$acodec in
+	*: | webm:opus | webm:vorbis | mp4:aac | mp4:mp3 | mp4:opus) ;;
+	*) no unplayable ;;
+	esac
+	[ "$w" -le "$max_side" ] && [ "$h" -le "$max_side" ] || no too-large
+	[ $((w * h)) -le "$max_pixels" ] || no too-large
+	[ "${seconds%%.*}" -lt "$max_seconds" ] 2>/dev/null || no too-long
+}
+
+if [ "$type" = webm ] || [ "$type" = mp4 ]; then
+	video "$work/in"
+	# what an encoder wrote into an h264 stream about itself (SEI) goes too
+	bsf=()
+	[ "$vcodec" = h264 ] && bsf=(-bsf:v filter_units=remove_types=6)
+	[ "$vcodec" = hevc ] && bsf=(-bsf:v filter_units=remove_types=39\|40)
+	ffmpeg -v error -nostdin -i "$work/in" -map 0:v:0 -map '0:a:0?' \
+		-map_metadata -1 -map_chapters -1 -c copy "${bsf[@]}" \
+		-fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+		-f "$type" "$work/out" 2>/dev/null || no unreadable
+	video "$work/out"
+	ffmpeg -v error -nostdin -i "$work/out" -frames:v 1 -f image2 "$work/first.png" 2>/dev/null ||
+		no unreadable
+	vipsthumbnail "$work/first.png" --size "${thumb}x${thumb}" \
+		-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
+	printf 'ok %s %s %s %s %s\n' "$type" "$w" "$h" \
+		"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")"
+	cat "$work/out" "$work/thumb.webp"
+	exit 0
+fi
 
 # the header's word on size, before anything is decoded (hazard P2)
 dimensions() {

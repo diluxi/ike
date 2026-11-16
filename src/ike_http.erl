@@ -96,7 +96,8 @@ headers() ->
 %% images come from the media origin, and from nowhere else
 -spec csp() -> binary().
 csp() ->
-    <<"default-src 'none'; img-src ", (ike_config:media_origin())/binary,
+    Media = ike_config:media_origin(),
+    <<"default-src 'none'; img-src ", Media/binary, "; media-src ", Media/binary,
         "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>.
 
 -spec html(cowboy:http_status(), iodata(), cowboy_req:req()) -> cowboy_req:req().

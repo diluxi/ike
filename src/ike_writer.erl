@@ -472,7 +472,8 @@ handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb}, _From, Conn) w
                 case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
                     {ok, ok} ->
                         Insert = <<
-                            "INSERT INTO asset (hash, type, width, height) VALUES (?1, ?2, ?3, ?4)"
+                            "INSERT INTO asset (hash, type, format, width, height) VALUES"
+                            " (?1, CASE WHEN ?2 IN ('jpeg', 'png', 'webp') THEN ?2 END, ?2, ?3, ?4)"
                             " ON CONFLICT (hash) DO NOTHING"
                         >>,
                         Staged = <<
@@ -1537,7 +1538,7 @@ each_entry(_Conn, []) ->
 -spec published(ike_db:writer(), [binary()]) -> ok.
 published(Conn, [Hash | Hashes]) ->
     Sql = <<
-        "SELECT x.type, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
+        "SELECT x.format, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset = x.hash) OR EXISTS (SELECT 1 FROM shown_entry e WHERE e.asset = x.hash)"
         " FROM asset x WHERE x.hash = ?1"
     >>,

@@ -25,6 +25,7 @@
 		# to ask the stripper's socket directly, with a fixture
 		environment.systemPackages = [ pkgs.socat ];
 		environment.etc."ike-test/base.png".source = ../test/ike_invariant_SUITE_data/base.png;
+		environment.etc."ike-test/base.webm".source = ../test/ike_invariant_SUITE_data/base.webm;
 	};
 
 	# a file of its own: nix strips spaces from indented strings, not tabs

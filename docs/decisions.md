@@ -858,3 +858,29 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   indexed). The newest hundred; no paging yet.
 - *Not yet:* tag categories, counts, aliases and implications (BURs are
   M4), paging.
+
+## Video (M2, lux 2026-11-16: "add ffmpeg")
+
+- **ffmpeg-headless** from the pinned nixpkgs (9.0.2), in `ike-strip`'s
+  PATH and the sandboxed unit, and in the tests and shell for the
+  corpus.
+- **WebM** (VP8, VP9, AV1; Opus, Vorbis) and **MP4** (H.264, HEVC, AV1;
+  AAC, MP3, Opus), by magic and then by what ffprobe reads. Anything else
+  is refused ("unplayable"): re-encoding is for other hardware, later.
+- **Remuxed, never re-encoded:** the first video stream and the first
+  audio stream if there is one (`-map 0:v:0 -map 0:a:0?`), so data
+  tracks such as GPMF go; `-map_metadata -1 -map_chapters -1`;
+  `+bitexact` so the muxer writes no version; for H.264 and HEVC the SEI
+  units, where an encoder writes about itself (x264's settings, a
+  camera's), are filtered out. The same video with other metadata comes
+  out as the same bytes (golden hashes in invariant 11).
+- **Caps:** side and pixels as images, and `maxSeconds` (600, a stub),
+  ike-strip's fifth argument. The thumbnail is the first frame.
+- **`asset.format`** holds the type now, since `asset.type`'s check names
+  images only and SQLite alters no check; `type` is kept for images and
+  no longer read.
+- **Shown as `<video src poster preload="none" controls>`,** which plays
+  without a script; the CSP gains `media-src` for the media origin, and
+  Caddy serves `.webm` and `.mp4` from it.
+- *Not yet:* GIF (planning lists it with video), duration on the page,
+  the moderator's page showing the video.

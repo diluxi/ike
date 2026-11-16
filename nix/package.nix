@@ -1,4 +1,4 @@
-{ lib, stdenv, beam, runCommand, zlib, erlang-language-platform, callPackage, exiftool }: let
+{ lib, stdenv, beam, runCommand, zlib, erlang-language-platform, callPackage, exiftool, ffmpeg-headless }: let
 	beamPackages = beam.packages.erlang_29;
 
 	# what rebar.lock names, fetched by hash; `nix/lock` writes the list
@@ -56,7 +56,8 @@
 			tests = ike.overrideAttrs (old: {
 				pname = "ike-tests";
 				# invariant 11 runs the stripper, and exiftool reads what it left
-				nativeBuildInputs = old.nativeBuildInputs ++ [ beamPackages.erlfmt strip exiftool ];
+				# and ffmpeg makes the video corpus's laden copies
+				nativeBuildInputs = old.nativeBuildInputs ++ [ beamPackages.erlfmt strip exiftool ffmpeg-headless ];
 				buildPhase = ''
 					runHook preBuild
 					erlfmt --check rebar.config config/*.config src/* test/*.erl

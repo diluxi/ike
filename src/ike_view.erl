@@ -186,16 +186,35 @@ figures([]) -> [].
 -spec figure(image() | gone) -> [ike_html:html()].
 figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) ->
     Size = <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>,
+    case ike_media:moving(Type) of
+        %% a video plays where it is, its first frame shown until then,
+        %% nothing fetched before it is asked for; works without a script
+        true ->
+            [
+                ike_html:el(p, [
+                    ike_html:el(
+                        video,
+                        [{src, File}, {poster, Thumb}, {preload, <<"none">>}, controls],
+                        [anchor(File, <<Type/binary, ", ", Size/binary>>)]
+                    )
+                ])
+            ];
+        false ->
+            still(File, Thumb, Type, Size)
+    end;
+figure(gone) ->
+    %% the words of every link to something taken down (hazard G5)
+    [ike_html:el(p, [gone(<<"image">>)])].
+
+-spec still(binary(), binary(), binary(), binary()) -> [ike_html:html()].
+still(File, Thumb, Type, Size) ->
     [
         ike_html:el(p, [
             ike_html:el(a, [{href, File}], [
                 ike_html:el(img, [{src, Thumb}, {alt, <<Type/binary, ", ", Size/binary>>}], [])
             ])
         ])
-    ];
-figure(gone) ->
-    %% the words of every link to something taken down (hazard G5)
-    [ike_html:el(p, [gone(<<"image">>)])].
+    ].
 
 -spec replies([integer()]) -> [ike_html:html()].
 replies([]) ->
@@ -709,7 +728,7 @@ upload(Csrf, Refused, Staged, Posted) ->
                         [
                             {type, <<"file">>},
                             {name, <<"file">>},
-                            {accept, <<"image/jpeg,image/png,image/webp">>},
+                            {accept, <<"image/jpeg,image/png,image/webp,video/webm,video/mp4">>},
                             multiple,
                             required
                         ],

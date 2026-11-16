@@ -29,6 +29,7 @@ in {
 			package.elp
 			package.strip
 			pkgs.exiftool
+			pkgs.ffmpeg-headless
 			pkgs.sqlite
 		];
 	};

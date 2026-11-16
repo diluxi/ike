@@ -16,7 +16,8 @@
     a_restart_makes_them_again/1,
     a_blocked_image_does_not_come_back/1,
     the_uploader_can_be_suspended/1,
-    a_post_shows_several/1
+    a_post_shows_several/1,
+    a_video_plays/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/5, request/5, query/3, cookies/1, upload/3, media/2]).
@@ -30,7 +31,8 @@ all() ->
         a_restart_makes_them_again,
         a_blocked_image_does_not_come_back,
         the_uploader_can_be_suspended,
-        a_post_shows_several
+        a_post_shows_several,
+        a_video_plays
     ].
 
 init_per_suite(Config) ->
@@ -384,3 +386,24 @@ a_post_shows_several(Config) ->
     %% and too many at once is refused
     Many = [I || I <- lists:seq(1, 9)],
     {400, _, _} = post(Config, "/board/b/new", Session, <<"many">>, Ids(Many)).
+
+a_video_plays(Config) ->
+    Session = login(Config, <<"filmer">>),
+    {303, _, _} = upload(Config, Session, [{<<"v.webm">>, read(Config, "base.webm")}]),
+    {303, H, _} = with(
+        Config, Session, "/board/b/new", <<"a video">>, latest(Config, <<"filmer">>)
+    ),
+    {200, _, Page} = request(Config, get, page(H), [], none),
+    {match, [Src, Poster]} = re:run(
+        Page,
+        "<video src=\"(http://media\\.test/[0-9a-f]{64}\\.webm)\" poster=\"(http://media\\.test/[0-9a-f]{64}\\.thumb\\.webp)\" preload=\"none\" controls>",
+        [{capture, all_but_first, list}]
+    ),
+    {200, VH, _} = media(Config, Src),
+    "video/webm" = proplists:get_value("content-type", VH),
+    {200, PH, _} = media(Config, Poster),
+    "image/webp" = proplists:get_value("content-type", PH),
+    %% and what will not play is refused, in the words of any refusal
+    Mkv = <<16#1A, 16#45, 16#DF, 16#A3, "not really a video">>,
+    {422, _, Refused} = upload(Config, Session, [{<<"x.mkv">>, Mkv}]),
+    {_, _} = binary:match(Refused, <<"file 1: not taken<">>).

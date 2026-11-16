@@ -11,7 +11,7 @@
 	media = "/var/cache/ike/media";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
-	csp = "default-src 'none'; img-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+	csp = "default-src 'none'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 	# the stripper's socket; a unit behind it runs once per upload
 	stripSocket = "/run/ike-strip/strip.sock";
@@ -295,6 +295,11 @@ in {
 				default = 256;
 				description = "Longest side of a thumbnail, in pixels.";
 			};
+			maxSeconds = lib.mkOption {
+				type = lib.types.ints.positive;
+				default = 600;
+				description = "Longest video taken, in seconds. A stub: the caps are open in planning.md.";
+			};
 			files = lib.mkOption {
 				type = lib.types.ints.positive;
 				default = 20;
@@ -351,7 +356,7 @@ in {
 					handle /staged/* {
 						reverse_proxy 127.0.0.1:${toString cfg.port}
 					}
-					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|thumb\.webp)$
+					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|webm|mp4|thumb\.webp)$
 					handle @file {
 						root * ${media}
 						file_server
@@ -416,7 +421,7 @@ in {
 		systemd.services."ike-strip@" = {
 			description = "ike's stripper, for one upload";
 			serviceConfig = {
-				ExecStart = "${strip}/bin/ike-strip ${toString cfg.strip.maxBytes} ${toString cfg.strip.maxSide} ${toString cfg.strip.maxPixels} ${toString cfg.strip.thumb}";
+				ExecStart = "${strip}/bin/ike-strip ${toString cfg.strip.maxBytes} ${toString cfg.strip.maxSide} ${toString cfg.strip.maxPixels} ${toString cfg.strip.thumb} ${toString cfg.strip.maxSeconds}";
 				StandardInput = "socket";
 				StandardOutput = "socket";
 				StandardError = "journal";
