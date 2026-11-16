@@ -583,21 +583,27 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   STORED THUMB` and the bytes, or `no REASON`, on stdout. Caps (bytes,
   side, pixels) and the thumbnail size are its arguments. libvips reads
   the header first (P2) and runs with `VIPS_BLOCK_UNTRUSTED`.
-- **JPEG** through `jpegtran -copy none`, after the EXIF orientation is
-  applied losslessly; `-perfect`, else `-trim`, which drops a partial
-  block at an edge (fewer than 16 pixels), as P7 allows.
+- **lux, 2026-11-16: an archive keeps assets whole.** No colour shift,
+  no lost frames, no turned pixels. This overrides P7's "keep a profile
+  only if it matches a known standard one, otherwise drop it" and its
+  "apply the orientation first": a wording for lux's documents.
+- **JPEG** through `jpegtran -copy icc`: the scan and the colour profile
+  byte for byte, every other marker gone, the orientation tag with them
+  and the pixels not turned (Q32).
 - **PNG and WebP** through `ike-chunks`, in Zig: PNG keeps `IHDR PLTE
-  IDAT IEND tRNS gAMA cHRM sRGB` and stops at `IEND`; WebP keeps the
-  bitstream (and `ALPH` with an extended header saying only "alpha"),
-  ends at the RIFF length, and refuses animation.
+  IDAT IEND tRNS gAMA cHRM sRGB iCCP sBIT cICP mDCv cLLI` and an
+  animated PNG's `acTL fcTL fdAT`, in order, and stops at `IEND`; an
+  `iCCP` keeps its profile's bytes and only its free-text name becomes
+  "ICC profile". WebP keeps the bitstream, `ALPH` and `ICCP` under an
+  extended header saying only "alpha" and "profile", ends at the RIFF
+  length, and still refuses animation (M2, unless lux says otherwise).
 - **What is stored is decoded whole once,** to make the thumbnail
   (WebP, 256 pixels, `strip`); a file that does not make one is refused.
 - **M1 takes JPEG, PNG and still WebP.** GIF and animation are M2, as
   planning's table has them.
-- *Simplifications:* every ICC profile is dropped, not only those that
-  are not a known standard one, accepting the colour shift P7 names. An
-  animated PNG keeps its default image. Chunk CRCs are copied, not
-  checked.
+- *Simplifications:* chunk CRCs are copied, not checked. A profile's own
+  text tags (its description, which can name a device) stay inside it
+  (Q32).
 - **Invariant 11's test** is black-box over the built tool: four base
   images in the test data, copies loaded by exiftool with EXIF, GPS,
   XMP, IPTC, an ICC profile, comments and trailing bytes; every copy

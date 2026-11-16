@@ -80,6 +80,12 @@ here.
   visible to moderators as well (its wording widened), or private by
   default with a public switch per upload. Recognition tags (Danbooru's
   AI tags, hidden while tagging) belong with tags, in M2.
+- **Q32 Orientation and profile text.** With nothing turned, a phone
+  photo whose camera wrote an orientation tag now shows on its side.
+  Keeping that one tag (no pixel changed, a few bytes of EXIF that say
+  nothing about anyone) would fix it, if wanted. And a kept profile's
+  own text tags (its description) may name a device; blanking them
+  leaves colour alone. Neither is built.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

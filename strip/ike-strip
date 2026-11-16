@@ -6,7 +6,8 @@
 # followed by the stored bytes and then the thumbnail's, or
 #	no REASON
 # and nothing more. The stored bytes are the upload with its metadata
-# stripped losslessly (hazards P4, P7); the thumbnail is made from them.
+# stripped losslessly (hazards P4, P7), the colour profile and an animated
+# PNG's frames kept; the thumbnail is made from them.
 # Run in its own unit, never in ike's VM (invariant 6, hazard P1).
 set -euo pipefail
 
@@ -52,27 +53,10 @@ dimensions "$work/in"
 
 case $type in
 jpeg)
-	# the orientation goes with the rest of the metadata, so it is
-	# applied first, losslessly; -perfect refuses partial blocks at the
-	# edges, which -trim then drops
-	o=$(vipsheader -f orientation "$work/in" 2>/dev/null) || o=1
-	case $o in
-	2) t=(-flip horizontal) ;;
-	3) t=(-rotate 180) ;;
-	4) t=(-flip vertical) ;;
-	5) t=(-transpose) ;;
-	6) t=(-rotate 90) ;;
-	7) t=(-transverse) ;;
-	8) t=(-rotate 270) ;;
-	*) t=() ;;
-	esac
-	if [ ${#t[@]} -eq 0 ]; then
-		jpegtran -copy none "$work/in" >"$work/out" 2>/dev/null || no unreadable
-	else
-		jpegtran -copy none -perfect "${t[@]}" "$work/in" >"$work/out" 2>/dev/null ||
-			jpegtran -copy none -trim "${t[@]}" "$work/in" >"$work/out" 2>/dev/null ||
-			no unreadable
-	fi
+	# the scan and the colour profile, byte for byte; every other
+	# marker goes, the orientation with them: the pixels are kept as
+	# they were stored, not turned
+	jpegtran -copy icc "$work/in" >"$work/out" 2>/dev/null || no unreadable
 	;;
 png | webp)
 	ike-chunks <"$work/in" >"$work/out" 2>/dev/null || no unreadable

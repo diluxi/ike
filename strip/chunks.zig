@@ -1,6 +1,7 @@
 //! ike-chunks: the PNG and WebP half of hazard P7's stripping. Reads one
 //! image on stdin, writes it to stdout with only the chunks needed to
-//! show it, in their order, and nothing after its end. Allowlist, not
+//! show it as it was made (pixels, colours, frames), in their order,
+//! and nothing after its end. Allowlist, not
 //! denylist: whatever is not named here is dropped. Exits 0 with the
 //! image, or 2 with a reason on stderr for anything it will not take.
 //! It runs as its own process, never in ike's VM (invariant 6).
@@ -61,8 +62,13 @@ const Out = struct {
 
 const png_signature = "\x89PNG\r\n\x1a\n";
 
-/// what a still image needs to be shown as its encoder meant it
-const png_keep = [_]*const [4]u8{ "IHDR", "PLTE", "IDAT", "IEND", "tRNS", "gAMA", "cHRM", "sRGB" };
+/// what an image needs to be shown as its encoder meant it: its pixels,
+/// its colours (profile, primaries, transfer, significant bits, HDR
+/// levels), and an animated PNG's frames. Nothing that only describes it
+const png_keep = [_]*const [4]u8{
+    "IHDR", "PLTE", "IDAT", "IEND", "tRNS", "gAMA", "cHRM", "sRGB", "iCCP",
+    "sBIT", "cICP", "mDCv", "cLLI", "acTL", "fcTL", "fdAT",
+};
 
 fn png(in: []const u8, out: *Out) Refusal!void {
     out.put(png_signature);
@@ -77,7 +83,9 @@ fn png(in: []const u8, out: *Out) Refusal!void {
         const total = 12 + @as(usize, length);
         if (first and !(std.mem.eql(u8, kind, "IHDR") and length == 13)) return error.Malformed;
         first = false;
-        for (png_keep) |name| {
+        if (std.mem.eql(u8, kind, "iCCP")) {
+            try iccp(in[pos + 8 .. pos + 8 + length], out);
+        } else for (png_keep) |name| {
             if (std.mem.eql(u8, kind, name)) {
                 out.put(in[pos .. pos + total]);
                 break;
@@ -89,6 +97,29 @@ fn png(in: []const u8, out: *Out) Refusal!void {
         pos += total;
     }
     if (!idat) return error.Malformed;
+}
+
+/// a colour profile, its bytes as they were; only the name it is given,
+/// free text that may name a device, becomes the same for every image
+const iccp_name = "ICC profile";
+
+fn iccp(data: []const u8, out: *Out) Refusal!void {
+    const nul = std.mem.indexOfScalar(u8, data, 0) orelse return error.Malformed;
+    if (nul == 0 or nul > 79) return error.Malformed;
+    const rest = data[nul..];
+    var head: [8]u8 = undefined;
+    std.mem.writeInt(u32, head[0..4], @intCast(iccp_name.len + rest.len), .big);
+    @memcpy(head[4..8], "iCCP");
+    var crc = std.hash.Crc32.init();
+    crc.update(head[4..8]);
+    crc.update(iccp_name);
+    crc.update(rest);
+    var tail: [4]u8 = undefined;
+    std.mem.writeInt(u32, &tail, crc.final(), .big);
+    out.put(&head);
+    out.put(iccp_name);
+    out.put(rest);
+    out.put(&tail);
 }
 
 fn webpChunk(out: *Out, fourcc: []const u8, data: []const u8) void {
@@ -113,6 +144,8 @@ fn webp(in: []const u8, out: *Out) Refusal!void {
     var bitstream: ?[]const u8 = null;
     var lossless = false;
     var alpha: ?[]const u8 = null;
+    var profile: ?[]const u8 = null;
+    var flags: u8 = 0;
     var canvas: ?[]const u8 = null;
     while (pos < end) {
         if (end - pos < 8) return error.Truncated;
@@ -123,9 +156,12 @@ fn webp(in: []const u8, out: *Out) Refusal!void {
         if (std.mem.eql(u8, fourcc, "VP8X")) {
             if (size < 10) return error.Malformed;
             if (data[0] & 0x02 != 0) return error.Animated;
+            flags = data[0];
             canvas = data[4..10];
         } else if (std.mem.eql(u8, fourcc, "ANIM") or std.mem.eql(u8, fourcc, "ANMF")) {
             return error.Animated;
+        } else if (std.mem.eql(u8, fourcc, "ICCP")) {
+            if (profile == null) profile = data;
         } else if (std.mem.eql(u8, fourcc, "ALPH")) {
             if (alpha == null) alpha = data;
         } else if (std.mem.eql(u8, fourcc, "VP8 ") or std.mem.eql(u8, fourcc, "VP8L")) {
@@ -139,23 +175,27 @@ fn webp(in: []const u8, out: *Out) Refusal!void {
     }
     const image = bitstream orelse return error.Malformed;
     const fourcc: []const u8 = if (lossless) "VP8L" else "VP8 ";
+    // what the extended header may still say: a colour profile, alpha
+    const icc = if (flags & 0x20 != 0) profile else null;
+    const alph = if (lossless) null else alpha;
     out.put("RIFF");
-    if (lossless or alpha == null) {
+    if (icc == null and alph == null) {
         // the simple format: the bitstream and nothing else
         out.putLe32(@intCast(4 + webpSize(image.len)));
         out.put("WEBP");
         webpChunk(out, fourcc, image);
     } else {
-        // lossy with an alpha channel needs the extended header, and it
-        // says no more than that
         const size = canvas orelse return error.Malformed;
-        const a = alpha.?;
-        out.putLe32(@intCast(4 + webpSize(10) + webpSize(a.len) + webpSize(image.len)));
+        var total: usize = 4 + webpSize(10) + webpSize(image.len);
+        if (icc) |p| total += webpSize(p.len);
+        if (alph) |a| total += webpSize(a.len);
+        out.putLe32(@intCast(total));
         out.put("WEBP");
-        var header = [_]u8{ 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        var header = [_]u8{ flags & 0x30, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         @memcpy(header[4..10], size);
         webpChunk(out, "VP8X", &header);
-        webpChunk(out, "ALPH", a);
+        if (icc) |p| webpChunk(out, "ICCP", p);
+        if (alph) |a| webpChunk(out, "ALPH", a);
         webpChunk(out, fourcc, image);
     }
 }

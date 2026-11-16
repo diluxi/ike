@@ -1073,13 +1073,18 @@ other(_) -> $A.
 %%
 %% Hazard P7's corpus, black-box over ike-strip as it is built: four base
 %% images in the data directory, and copies of each that exiftool loads
-%% with EXIF and GPS, XMP, IPTC, an ICC profile, comments and trailing
-%% bytes. Every copy strips to the same bytes as its base; nothing of what
-%% was added survives, in the stored file or its thumbnail; exiftool
-%% reports nothing outside the tags a bare image has; and the stored
-%% bytes of each base have the hash written down here, so that a bump of
-%% libvips, jpegtran or Zig that changes them fails (P7: a migration).
-%% Video's GPMF tracks and chapters wait for video (M2).
+%% with EXIF and GPS, XMP, IPTC, comments and trailing bytes. Every copy
+%% strips to the same bytes as its base; nothing of what was added
+%% survives, in the stored file or its thumbnail; exiftool reports
+%% nothing outside the tags a bare image has; and the stored bytes of
+%% each base have the hash written down here, so that a bump of libvips,
+%% jpegtran or Zig that changes them fails (P7: a migration).
+%%
+%% What makes the image what it is stays, on lux's word that an archive
+%% keeps assets whole (decisions.md): a colour profile comes out byte for
+%% byte, an orientation tag goes without the pixels being turned, and an
+%% animated PNG keeps its frames. Video's GPMF tracks and chapters wait
+%% for video (M2).
 inv11_stripping_is_complete_and_deterministic(Config) ->
     Data = ?config(data_dir, Config),
     Work = filename:join(?config(priv_dir, Config), "strip"),
@@ -1100,9 +1105,9 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
         "-GPSLongitude=13.377",
         "-GPSLongitudeRef=E",
         "-XMP:Creator=SECRET-CREATOR",
-        "-XMP:Description=SECRET-DESCRIPTION",
-        "-ICC_Profile<=" ++ Icc
+        "-XMP:Description=SECRET-DESCRIPTION"
     ],
+    Profile = read(Data, "profile.icc"),
     For = #{
         <<"jpeg">> => ["-IPTC:By-line=SECRET-BYLINE", "-Comment=SECRET-COMMENT"],
         <<"png">> => ["-PNG:Comment=SECRET-COMMENT", "-PNG:Title=SECRET-TITLE"],
@@ -1129,19 +1134,55 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
             %% and the copy really carried it: else this proves nothing
             {ok, Carried} = file:read_file(Copy),
             {_, _} = binary:match(Carried, <<"SECRET-CREATOR">>),
-            [] = secrets(Stored)
+            [] = secrets(Stored),
+            %% a profile stays, whole, and the rest still goes
+            Coloured = filename:join(Work, "coloured-" ++ Name),
+            {ok, _} = file:copy(Base, Coloured),
+            exiftool(["-q", "-overwrite_original", "-ICC_Profile<=" ++ Icc, Coloured]),
+            {ok, Type, W, H, Kept, _} = strip(Work, Coloured),
+            ColouredLaden = filename:join(Work, "coloured-laden-" ++ Name),
+            {ok, _} = file:copy(Coloured, ColouredLaden),
+            exiftool(
+                ["-q", "-overwrite_original" | Laden ++ maps:get(Type, For)] ++ [ColouredLaden]
+            ),
+            {ok, Type, W, H, Kept, _} = strip(Work, ColouredLaden),
+            true = Kept =/= Stored,
+            bare(Work, Kept),
+            Profile = profile(Work, Kept)
         end,
         Bases
     ),
-    %% an orientation is applied, losslessly, and then dropped with the rest
+    %% a png's profile has a name of its own, free text: it becomes the
+    %% same for every image, and the profile stays as it was
+    [{_, Ihdr} | _] = PngChunks = chunks(read(Data, "base.png")),
+    Named = iolist_to_binary([
+        <<137, "PNG\r\n", 26, "\n">>,
+        chunk(<<"IHDR">>, Ihdr),
+        chunk(<<"iCCP">>, <<"SECRET-DEVICE", 0, 0, (zlib:compress(Profile))/binary>>)
+        | [chunk(K, D) || {K, D} <- tl(PngChunks)]
+    ]),
+    {ok, <<"png">>, 61, 47, Renamed, _} = strip_bytes(Work, Named, caps()),
+    [] = secrets(Renamed),
+    {_, _} = binary:match(Renamed, <<"ICC profile", 0, 0>>),
+    Profile = profile(Work, Renamed),
+    %% an animated png: its frames stay, in order, its text goes
+    Frames = apng(read(Data, "base.png")),
+    {ok, <<"png">>, 61, 47, Animated, _} = strip_bytes(Work, Frames, caps()),
+    Kinds = [K || {K, _} <- chunks(Animated)],
+    [<<"acTL">>, <<"fcTL">>, <<"fdAT">>] = lists:usort([
+        K
+     || K <- Kinds, lists:member(K, [<<"acTL">>, <<"fcTL">>, <<"fdAT">>])
+    ]),
+    Kinds = [K || {K, _} <- chunks(Frames), K =/= <<"tEXt">>],
+    [] = secrets(Animated),
+    bare(Work, Animated),
+    %% an orientation is dropped with the rest, and the pixels stay as
+    %% they were stored
     Turned = filename:join(Work, "turned.jpg"),
     {ok, _} = file:copy(filename:join(Data, "base.jpg"), Turned),
     exiftool(["-q", "-overwrite_original", "-Orientation#=6", Turned]),
-    %% (a block that the turn leaves partial at an edge is trimmed: at
-    %% most one less than the 16 pixels of a block, never more)
-    {ok, <<"jpeg">>, Wide, 61, Upright, _} = strip(Work, Turned),
-    true = Wide > 47 - 16 andalso Wide =< 47,
-    bare(Work, Upright),
+    {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, Turned),
+    {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, filename:join(Data, "base.jpg")),
     %% what is not taken
     Refused = [
         {<<"not an image">>, "not-an-image"},
@@ -1219,7 +1260,60 @@ bare(Work, Bytes) ->
     [] = secrets(Bytes).
 
 system(<<"System:", _/binary>>) -> true;
+%% a colour profile is kept whole, its own tags with it
+system(<<"ICC", _/binary>>) -> true;
 system(_) -> false.
+
+%% the profile exiftool finds in Bytes
+profile(Work, Bytes) ->
+    File = filename:join(Work, "profiled"),
+    ok = file:write_file(File, Bytes),
+    Out = filename:join(Work, "profile.out"),
+    _ = os:cmd(
+        lists:flatten([
+            quote(os:find_executable("exiftool")),
+            " -b -ICC_Profile ",
+            quote(File),
+            " >",
+            quote(Out)
+        ])
+    ),
+    read(Work, "profile.out").
+
+%% a png's chunks, in order, as {Type, Data}
+chunks(<<137, "PNG\r\n", 26, "\n", Rest/binary>>) ->
+    chunks(Rest);
+chunks(<<Length:32, Type:4/binary, Data:Length/binary, _Crc:32, Rest/binary>>) ->
+    [{Type, Data} | chunks(Rest)];
+chunks(<<>>) ->
+    [].
+
+chunk(Type, Data) ->
+    <<
+        (byte_size(Data)):32,
+        Type/binary,
+        Data/binary,
+        (erlang:crc32(<<Type/binary, Data/binary>>)):32
+    >>.
+
+%% base.png as an animated png of two frames, the same image twice, and
+%% a text chunk to be stripped
+apng(Png) ->
+    All = chunks(Png),
+    [{<<"IHDR">>, Ihdr = <<W:32, H:32, _/binary>>}] = [C || {<<"IHDR">>, _} = C <- All],
+    Idats = [D || {<<"IDAT">>, D} <- All],
+    Frame = fun(Seq) -> <<Seq:32, W:32, H:32, 0:32, 0:32, 1:16, 10:16, 0, 0>> end,
+    iolist_to_binary([
+        <<137, "PNG\r\n", 26, "\n">>,
+        chunk(<<"IHDR">>, Ihdr),
+        chunk(<<"acTL">>, <<2:32, 0:32>>),
+        chunk(<<"tEXt">>, <<"Comment", 0, "SECRET-FRAMES">>),
+        chunk(<<"fcTL">>, Frame(0)),
+        [chunk(<<"IDAT">>, D) || D <- Idats],
+        chunk(<<"fcTL">>, Frame(1)),
+        [chunk(<<"fdAT">>, <<(I + 1):32, D/binary>>) || {I, D} <- lists:enumerate(1, Idats)],
+        chunk(<<"IEND">>, <<>>)
+    ]).
 
 allowed() ->
     [
@@ -1239,12 +1333,15 @@ allowed() ->
         <<"JFIF:ResolutionUnit">>,
         <<"JFIF:XResolution">>,
         <<"JFIF:YResolution">>,
+        <<"PNG:AnimationFrames">>,
+        <<"PNG:AnimationPlays">>,
         <<"PNG:BitDepth">>,
         <<"PNG:ColorType">>,
         <<"PNG:Compression">>,
         <<"PNG:Filter">>,
         <<"PNG:ImageHeight">>,
         <<"PNG:ImageWidth">>,
+        <<"PNG:ProfileName">>,
         <<"PNG:Interlace">>,
         <<"RIFF:AlphaCompression">>,
         <<"RIFF:AlphaFiltering">>,
