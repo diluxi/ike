@@ -1,6 +1,6 @@
 # ike — status
 
-Updated 2026-11-16. Milestone: **M2 Booru**, begun on lux's word while M1 still owes a little (below).
+Updated 2026-11-16. Milestones: **M2 Booru** and **M3 Wiki**, begun on lux's word (S2 lifted for the wiki) while M1 still owes a little (below).
 
 ## M0
 
@@ -55,12 +55,19 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 ## Next
 
-What step 6 still owes (above), unless lux says otherwise. Step 7 is set
-aside. `phi/assets` is local until pushed; the full checks run once per
-finished slice now (decisions.md), not at every commit.
+Branches past `dev`, in order, each with full checks passing:
+`phi/account`, `phi/trash`, `phi/retract`, `phi/inline`, `phi/booru`,
+`phi/tags`, `phi/video`, `phi/wiki`. `phi/video` and `phi/wiki` may not
+be on origin: the last push gave no answer (ssh agent).
 
-1945743 to 8b9cc29 carry the fable cert though made under opus; from
-7bb2f49 on, commits carry the opus cert.
+- **M1 owes:** files on the post form, the anonymous upload switch
+  (still images and static meshes only, by lux's rule), vichan's "file"
+  box.
+- **M2 owes:** entries from `/upload`, versions and upgrades, paging,
+  tag aliases and implications (BURs are M4), GIF, meshes (rule in
+  decisions.md).
+- **M3 owes:** renames and redirects, tag pages, the threaded view,
+  promotion of a reply, static page files.
 
 ## Blocked on lux
 
