@@ -781,3 +781,27 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   are acceptable (Q33).
 - *Fixed on the way:* the restore rank check still looked for the
   old kind name `delete`; it reads `trash` now.
+
+## The thread form (lux, 2026-11-16, after vichan and tinyboard)
+
+- **One form per thread page:** a checkbox in every post's header, and at
+  the foot a password with "retract", a reason with "report", and,
+  folded in a `<details>`, the moderators' hide, trash, purge and ban.
+  The page is the same for everyone; to anyone without a role those
+  buttons answer 403 and change nothing. The forms folded under each
+  post (retraction's first form) are gone, and so is `/p/N/retract`.
+- **`/act`** takes the ticked posts (at most 50) and one kind.
+  `guard/1` stands in for a session token, which a static page cannot
+  carry: the browser's `Origin` must be this site. It is the one place
+  to change if the form should carry a token later (lux: "implement
+  either and allow for future changes"; 4chan's way, as lux recalls).
+  Hazard I2's token rule has this exception.
+- **The browser keeps its password,** as vichan does: the post form
+  fills in one made up once and kept in a `__Host-` cookie (a year,
+  HttpOnly, SameSite=Strict), and `/act` uses it when none is typed.
+  Retractions are trash: out of view, seen by moderators and up.
+- **Reports** keep the post's number, the reason and the time, nothing of
+  who sent them; `/mod` lists the open ones (a janitor's for its boards)
+  with a dismiss form. A purge takes a post's reports with it, since a
+  reason may quote what it reports.
+- *Not built:* vichan's "file" box, retracting only a post's images.

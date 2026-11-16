@@ -7,7 +7,7 @@
 
 -export([init/2]).
 
--type what() :: front | post | board | account.
+-type what() :: front | post | board | account | report.
 -type who() :: {ike_id:actor(), Csrf :: binary(), ike_role:role()}.
 
 -spec init(cowboy_req:req(), what()) -> {ok, cowboy_req:req(), what()}.
@@ -22,6 +22,7 @@ init(Req, What) ->
                     {front, <<"GET">>} -> front(Who, Req);
                     {post, <<"GET">>} -> look(Who, Req);
                     {front, _} -> ike_http:reply(405, Req);
+                    {report, <<"POST">>} -> dismiss(Who, Req);
                     {_, <<"POST">>} -> submit(What, Who, Req);
                     _ -> ike_http:reply(405, Req)
                 end;
@@ -49,8 +50,15 @@ front({_, Csrf, Role}, Req) ->
                     board => Board, self => false, account => 0, undo => 0
                 })
             ],
+            Reports = [
+                R
+             || {_, _, Board, _} = R <- ike_reader:reports(),
+                ike_role:permits(Role, hide, #{
+                    board => Board, self => false, account => 0, undo => 0
+                })
+            ],
             Html = ike_view:moderation(
-                {Csrf, Role}, ike_reader:boards(), ike_reader:suspended(), Down
+                {Csrf, Role}, ike_reader:boards(), ike_reader:suspended(), Down, Reports
             ),
             ike_http:page(200, Html, Req);
         Post ->
@@ -165,6 +173,30 @@ submit(What, {Actor, Csrf, Role}, Req0) ->
     end.
 
 %% what the path names, and the page to go back to
+%% a report looked at, by anyone with a role; it is not a moderation
+%% and goes in no log
+-spec dismiss(who(), cowboy_req:req()) -> cowboy_req:req().
+dismiss({_, Csrf, _}, Req0) ->
+    case {ike_http:form(Req0), cowboy_req:binding(report, Req0)} of
+        {{ok, #{<<"csrf">> := Token, <<"kind">> := <<"dismiss">>}, Req}, N} when
+            is_integer(N), N > 0
+        ->
+            case byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf) of
+                true ->
+                    case ike_writer:dismiss(N) of
+                        ok -> ike_http:see_other(<<"/mod">>, Req);
+                        {error, no_such_report} -> ike_http:not_found(Req);
+                        {error, _} -> ike_http:reply(500, Req)
+                    end;
+                false ->
+                    ike_http:forbidden(Req)
+            end;
+        {{ok, _, Req}, _} ->
+            ike_http:forbidden(Req);
+        {{error, Status, Req}, _} ->
+            ike_http:reply(Status, Req)
+    end.
+
 -spec target(what(), cowboy_req:req()) ->
     {ok, ike_id:post() | ike_id:actor() | binary(), Back :: binary()} | none.
 target(post, Req) ->
@@ -184,7 +216,7 @@ target(account, Req) ->
         N when is_integer(N), N > 0 -> {ok, ike_id:actor(N), <<"/mod">>};
         _ -> none
     end;
-target(front, _Req) ->
+target(_, _Req) ->
     none.
 
 -spec position(binary()) -> {ok, non_neg_integer()} | error.

@@ -47,7 +47,7 @@ dispatch() ->
             {"/board/:board/:thread", [Board, Thread], ike_http_page, thread},
             {"/board/:board/:thread/reply", [Board, Thread], ike_http_post, []},
             {"/p/:post", [{post, int}], ike_http_permalink, []},
-            {"/p/:post/retract", [{post, int}], ike_http_retract, []},
+            {"/act", ike_http_act, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
@@ -57,6 +57,7 @@ dispatch() ->
             {"/mod/post/:post", [{post, int}], ike_http_mod, post},
             {"/mod/board/:board", [Board], ike_http_mod, board},
             {"/mod/account/:account", [{account, int}], ike_http_mod, account},
+            {"/mod/report/:report", [{report, int}], ike_http_mod, report},
             %% everything else, so that a miss is answered by ike and not
             %% by cowboy's bare 404
             {'_', ike_http_page, missing}

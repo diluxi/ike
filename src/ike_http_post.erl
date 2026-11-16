@@ -48,20 +48,45 @@ form({Board, _} = Place, Req) ->
                         {U, ike_staged:url(U, thumb)}
                      || #{id := U} <- ike_reader:staged(ike_id:to_integer(Actor))
                     ],
-                    Who = {csrf, Csrf, Name, Staged},
-                    ike_http:page(200, ike_view:post_form(action(Place), Who), Req);
+                    {Password, Req1} = kept_password(Req),
+                    Who = {csrf, Csrf, Name, Staged, Password},
+                    ike_http:page(200, ike_view:post_form(action(Place), Who), Req1);
                 error ->
                     case ike_reader:board(Board) of
                         open ->
                             {Token, Req1} = form_token(Req),
-                            Html = ike_view:post_form(action(Place), {nobody, Token}),
-                            ike_http:page(200, Html, Req1);
+                            {Password, Req2} = kept_password(Req1),
+                            Html = ike_view:post_form(action(Place), {nobody, Token, Password}),
+                            ike_http:page(200, Html, Req2);
                         _ ->
                             ike_http:page(200, ike_view:post_form(action(Place), locked), Req)
                     end
             end;
         false ->
             ike_http:not_found(Req)
+    end.
+
+%% the password this browser posts with, as vichan keeps one: made up
+%% once, kept in a cookie, filled in on the form, and used at the foot
+%% of a thread when none is typed. ike keeps none of it but each post's
+%% salted hash
+-define(PASSWORD, <<"__Host-ike-password">>).
+
+-spec kept_password(cowboy_req:req()) -> {binary(), cowboy_req:req()}.
+kept_password(Req) ->
+    case ike_http_login:cookie(?PASSWORD, Req) of
+        {ok, Kept} when byte_size(Kept) > 0, byte_size(Kept) =< 64 ->
+            {Kept, Req};
+        _ ->
+            New = base64:encode(crypto:strong_rand_bytes(9), #{mode => urlsafe, padding => false}),
+            {New,
+                cowboy_req:set_resp_cookie(?PASSWORD, New, Req, #{
+                    path => <<"/">>,
+                    secure => true,
+                    http_only => true,
+                    same_site => strict,
+                    max_age => 31536000
+                })}
     end.
 
 %% the browser's token, or a new one for it

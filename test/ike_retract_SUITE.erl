@@ -10,12 +10,24 @@
     by_password/1,
     by_account/1,
     from_this_site_only/1,
-    only_so_many_tries/1
+    only_so_many_tries/1,
+    the_browser_keeps_its_password/1,
+    reported_and_dismissed/1,
+    moderated_from_the_thread/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1]).
 
-all() -> [by_password, by_account, from_this_site_only, only_so_many_tries].
+all() ->
+    [
+        by_password,
+        by_account,
+        from_this_site_only,
+        only_so_many_tries,
+        the_browser_keeps_its_password,
+        reported_and_dismissed,
+        moderated_from_the_thread
+    ].
 
 init_per_suite(Config0) ->
     Config = ike_browser:start(Config0, []),
@@ -41,17 +53,27 @@ nobody(Config, Text, Password) ->
     "#p" ++ N = string:find(proplists:get_value("location", H), "#"),
     N.
 
+%% the thread form's retract, for one post: what it came to, as a status
 retract(Config, N, Fields, Headers) ->
-    element(
-        1,
-        request(
-            Config,
-            post,
-            "/p/" ++ N ++ "/retract",
-            Headers,
-            {form, uri_string:compose_query(Fields)}
-        )
-    ).
+    Form = uri_string:compose_query([{"post", N}, {"kind", "retract"} | Fields]),
+    case request(Config, post, "/act", Headers, {form, Form}) of
+        {200, _, Page} ->
+            Said = [
+                S
+             || {Text, S} <- [
+                    {<<": retracted">>, 200},
+                    {<<"too many tries">>, 429},
+                    {<<"already out of view">>, 409}
+                ],
+                binary:match(Page, Text) =/= nomatch
+            ],
+            case Said of
+                [S | _] -> S;
+                [] -> 403
+            end;
+        {Status, _, _} ->
+            Status
+    end.
 
 by_password(Config) ->
     A = nobody(Config, <<"mine to take back">>, <<"hunter2">>),
@@ -121,3 +143,118 @@ only_so_many_tries(Config) ->
     [403 = retract(Config, N, [{"password", "wrong"}], here(Config)) || _ <- lists:seq(1, 10)],
     429 = retract(Config, N, [{"password", "long and right"}], here(Config)),
     303 = element(1, request(Config, get, "/p/" ++ N, [], none)).
+
+%% the post form fills in a password this browser keeps, and the thread
+%% form uses it when none is typed
+the_browser_keeps_its_password(Config) ->
+    {200, Headers, Form} = request(Config, get, "/board/meta/new", [], none),
+    Kept = ike_browser:set_cookie("__Host-ike-password", Headers),
+    true = is_list(Kept) andalso length(Kept) > 8,
+    {_, _} = binary:match(Form, list_to_binary("value=\"" ++ Kept ++ "\"")),
+    Token = ike_browser:set_cookie("__Host-ike-form", Headers),
+    {match, [Csrf]} = re:run(Form, "name=\"csrf\" value=\"([^\"]+)\"", [
+        {capture, all_but_first, list}
+    ]),
+    Cookies = [{"cookie", "__Host-ike-form=" ++ Token ++ "; __Host-ike-password=" ++ Kept}],
+    {303, H, _} = request(
+        Config,
+        post,
+        "/board/meta/new",
+        Cookies,
+        {form, uri_string:compose_query([{"csrf", Csrf}, {"body", "kept"}, {"password", Kept}])}
+    ),
+    "#p" ++ N = string:find(proplists:get_value("location", H), "#"),
+    403 = retract(Config, N, [], here(Config)),
+    200 = retract(Config, N, [], [{"cookie", "__Host-ike-password=" ++ Kept} | here(Config)]).
+
+reported_and_dismissed(Config) ->
+    N = nobody(Config, <<"report me">>, <<>>),
+    Report = fun(Reason) ->
+        {200, _, Page} = request(
+            Config,
+            post,
+            "/act",
+            here(Config),
+            {form, uri_string:compose_query([{"post", N}, {"kind", "report"}, {"reason", Reason}])}
+        ),
+        Page
+    end,
+    {_, _} = binary:match(Report(""), <<"give a reason">>),
+    {_, _} = binary:match(Report("spam, says <b>me</b>"), <<": reported">>),
+    %% nothing of who reported is kept
+    [[<<"report">>, <<"id,post,reason,time,done">>]] = query(
+        Config,
+        "SELECT 'report', group_concat(name) FROM pragma_table_info('report')",
+        []
+    ),
+    Moderator = login(Config, <<"repmod">>, #{groups => [<<"ike-moderator">>]}),
+    {200, _, Mod} = request(Config, get, "/mod", cookies(Moderator), none),
+    {_, _} = binary:match(Mod, <<"spam, says &lt;b&gt;me&lt;/b&gt;">>),
+    [[Id]] = query(Config, "SELECT max(id) FROM report", []),
+    #{csrf := Csrf} = Moderator,
+    {303, _, _} = request(
+        Config,
+        post,
+        "/mod/report/" ++ integer_to_list(Id),
+        cookies(Moderator),
+        {form, uri_string:compose_query([{"csrf", Csrf}, {"kind", "dismiss"}])}
+    ),
+    {200, _, After} = request(Config, get, "/mod", cookies(Moderator), none),
+    nomatch = binary:match(After, <<"spam, says">>).
+
+moderated_from_the_thread(Config) ->
+    A = nobody(Config, <<"first">>, <<>>),
+    B = nobody(Config, <<"second">>, <<>>),
+    Act = fun(Who, Kind) ->
+        request(
+            Config,
+            post,
+            "/act",
+            cookies(Who) ++ here(Config),
+            {form,
+                uri_string:compose_query([
+                    {"post", A}, {"post", B}, {"kind", Kind}, {"reason", "off topic"}
+                ])}
+        )
+    end,
+    %% for anyone without a role the buttons do nothing
+    Plain = login(Config, <<"plainreader">>),
+    {403, _, _} = Act(Plain, "trash"),
+    {403, _, _} = request(
+        Config,
+        post,
+        "/act",
+        here(Config),
+        {form, uri_string:compose_query([{"post", A}, {"kind", "hide"}, {"reason", "x"}])}
+    ),
+    [[0], [0]] = [
+        hd(query(Config, "SELECT state FROM post WHERE id = ?", [list_to_integer(P)]))
+     || P <- [A, B]
+    ],
+    %% a moderator trashes both at once, from another site not at all
+    Moderator = login(Config, <<"threadmod">>, #{groups => [<<"ike-moderator">>]}),
+    {403, _, _} = request(
+        Config,
+        post,
+        "/act",
+        cookies(Moderator) ++ [{"origin", "http://media.test"}],
+        {form, uri_string:compose_query([{"post", A}, {"kind", "trash"}, {"reason", "x"}])}
+    ),
+    {200, _, Done} = Act(Moderator, "trash"),
+    {_, _} = binary:match(Done, list_to_binary("&gt;&gt;" ++ A ++ ": trash")),
+    {_, _} = binary:match(Done, list_to_binary("&gt;&gt;" ++ B ++ ": trash")),
+    [[2], [2]] = [
+        hd(query(Config, "SELECT state FROM post WHERE id = ?", [list_to_integer(P)]))
+     || P <- [A, B]
+    ],
+    %% and a janitor of b may not on meta
+    Janitor = login(Config, <<"threadjan">>, #{groups => [<<"ike-janitor-b">>]}),
+    C = nobody(Config, <<"third">>, <<>>),
+    {200, _, Refused} = request(
+        Config,
+        post,
+        "/act",
+        cookies(Janitor) ++ here(Config),
+        {form, uri_string:compose_query([{"post", C}, {"kind", "hide"}, {"reason", "x"}])}
+    ),
+    {_, _} = binary:match(Refused, <<"not your role&#39;s to do">>).

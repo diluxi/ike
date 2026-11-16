@@ -84,12 +84,10 @@ here.
   leaves colour alone. Neither is built.
 - **Q33 What the first deploy asked.** Answered (decisions.md): the
   words for taking things down, nothing expires, SVG with SWF, meshes as
-  downloads, the wiki before launch, retraction by password. Open:
-  - tokenless forms on the static pages, guarded by the Origin header
-    instead of the session's token (hazard I2 asks for tokens);
-  - whose role may restore a retracted post;
-  - which mesh formats, and an exemption in invariant 11's wording for
-    files nothing can strip.
+  downloads, the wiki before launch, retraction by password and trash,
+  the thread form guarded by Origin. Open: which mesh formats (a list is
+  proposed in the reply of 2026-11-16), and an exemption in invariant
+  11's wording for files nothing can strip.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

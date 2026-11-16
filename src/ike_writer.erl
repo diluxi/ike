@@ -6,6 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
+-export([report/2, dismiss/1]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -156,6 +157,17 @@ retract(Post, By) ->
         true -> done(call({retract, N, Who}));
         false -> {error, not_yours}
     end.
+
+%% a reader's word that a post needs a moderator's eye. nothing of who
+%% said it is kept
+-spec report(ike_id:post(), Reason :: binary()) -> ok | {error, bad_text | no_such_post} | error().
+report(Post, Reason) ->
+    done(call({report, ike_id:to_integer(Post), Reason})).
+
+%% a report looked at
+-spec dismiss(Report :: pos_integer()) -> ok | {error, no_such_report} | error().
+dismiss(Report) ->
+    done(call({dismiss, Report})).
 
 %% one rung of the ladder, and its entry in the log, or neither
 -spec moderate(action()) ->
@@ -322,6 +334,33 @@ handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
                 end;
             false ->
                 {error, bad_text}
+        end,
+    {reply, Reply, Conn};
+handle_call({report, Post, Reason}, _From, Conn) when is_integer(Post), is_binary(Reason) ->
+    Insert = <<
+        "INSERT INTO report (post, reason, time)"
+        " SELECT s.id, ?2, ?3 FROM shown s JOIN thread t ON t.root = s.thread"
+        " JOIN board b ON b.id = t.board WHERE s.id = ?1 AND b.log = 0 RETURNING id"
+    >>,
+    Reply =
+        case byte_size(Reason) =< ?MAX_REASON andalso text(Reason) of
+            false ->
+                {error, bad_text};
+            true ->
+                case ike_db:q(Conn, Insert, [Post, Reason, erlang:system_time(second)]) of
+                    {ok, [_]} -> ok;
+                    {ok, _} -> {error, no_such_post};
+                    {error, _} = Error -> Error
+                end
+        end,
+    {reply, Reply, Conn};
+handle_call({dismiss, Report}, _From, Conn) when is_integer(Report) ->
+    Update = <<"UPDATE report SET done = 1 WHERE id = ?1 AND done = 0 RETURNING id">>,
+    Reply =
+        case ike_db:q(Conn, Update, [Report]) of
+            {ok, [_]} -> ok;
+            {ok, _} -> {error, no_such_report};
+            {error, _} = Error -> Error
         end,
     {reply, Reply, Conn};
 handle_call({retract, Post, Who}, _From, Conn) when is_integer(Post) ->
@@ -1309,6 +1348,8 @@ changed(Conn, Post, Thread, purge) ->
         <<"DELETE FROM link WHERE post IN ", These/binary>>,
         <<"DELETE FROM link WHERE source IN ", These/binary>>,
         <<"UPDATE post SET parent = NULL WHERE parent IN ", These/binary>>,
+        %% a report's reason may quote what it reports
+        <<"DELETE FROM report WHERE post IN ", These/binary>>,
         <<"DELETE FROM post WHERE id = ?1 OR (?1 = ?2 AND thread = ?2)">>,
         <<"DELETE FROM thread WHERE root = ?1 AND ?1 = ?2">>
     ]),

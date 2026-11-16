@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
--export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1]).
+-export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -147,6 +147,26 @@ post(Post) ->
             none
     end.
 
+%% reports not yet looked at, oldest first, with the board each is on
+-spec reports() ->
+    [{Id :: pos_integer(), Post :: pos_integer(), Board :: binary(), Reason :: binary()}].
+reports() ->
+    case gen_server:call(?MODULE, reports) of
+        {ok, Rows} when is_list(Rows) ->
+            [
+                {Id, Post, Board, Reason}
+             || [Id, Post, Board, Reason] <- Rows,
+                is_integer(Id),
+                Id > 0,
+                is_integer(Post),
+                Post > 0,
+                is_binary(Board),
+                is_binary(Reason)
+            ];
+        _ ->
+            []
+    end.
+
 %% what a post keeps of its password, if it was given one
 -spec password(Post :: integer()) -> {ok, binary()} | none.
 password(Post) ->
@@ -250,6 +270,13 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call(reports, _From, Conn) ->
+    Sql = <<
+        "SELECT r.id, r.post, b.name, r.reason FROM report r JOIN post p ON p.id = r.post"
+        " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
+        " WHERE r.done = 0 ORDER BY r.id LIMIT 200"
+    >>,
+    {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call({password, Post}, _From, Conn) when is_integer(Post) ->
     {reply, ike_db:q(Conn, <<"SELECT password FROM post WHERE id = ?1">>, [Post]), Conn};
 handle_call(out_of_sight, _From, Conn) ->

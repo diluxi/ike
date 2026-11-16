@@ -283,26 +283,35 @@ inv02_works_without_scripts(Config) ->
     ),
     scriptless(Pictured),
     {200, _, _} = ike_browser:media(Config, Shown),
-    %% a post is retracted by the form folded under it, with its password
+    %% a post is retracted from the thread's own form: ticked, and its
+    %% password
     {303, H3, _} = ike_browser:post(
         Config, Reply, Session, <<"to be taken back">>, [{<<"password">>, <<"pw">>}]
     ),
     "#p" ++ Taken = string:find(proplists:get_value("location", H3), "#"),
     {200, _, WithBack} = ike_browser:request(Config, get, Thread, [], none),
-    RetractAction = "/p/" ++ Taken ++ "/retract",
+    match = re:run(WithBack, "<form method=\"post\" action=\"/act\">", [{capture, none}]),
     match = re:run(
         WithBack,
-        "<details><summary>[^<]*</summary><form method=\"post\" action=\"" ++ RetractAction ++
-            "\"><p><label[^>]*>[^<]*</label><input type=\"password\" id=\"[^\"]+\" name=\"password\">",
+        "<input type=\"checkbox\" name=\"post\" value=\"" ++ Taken ++ "\">",
         [{capture, none}]
     ),
-    {200, _, _} = ike_browser:request(
+    match = re:run(
+        WithBack,
+        "<button type=\"submit\" name=\"kind\" value=\"retract\">",
+        [{capture, none}]
+    ),
+    {200, _, Done} = ike_browser:request(
         Config,
         post,
-        RetractAction,
+        "/act",
         [{"origin", ?config(base, Config)}],
-        {form, uri_string:compose_query([{"password", "pw"}])}
+        {form,
+            uri_string:compose_query([
+                {"post", Taken}, {"password", "pw"}, {"kind", "retract"}, {"back", Thread}
+            ])}
     ),
+    {_, _} = binary:match(Done, list_to_binary("&gt;&gt;" ++ Taken ++ ": retracted")),
     {200, _, Without} = ike_browser:request(Config, get, Thread, [], none),
     nomatch = binary:match(Without, <<"to be taken back">>),
     %% and every page leads to the account page, which logs out by form
@@ -1448,7 +1457,8 @@ known_routes() ->
         [<<"board">>, board, thread],
         [<<"board">>, board, thread, <<"reply">>],
         [<<"p">>, post],
-        [<<"p">>, post, <<"retract">>],
+        [<<"act">>],
+        [<<"mod">>, <<"report">>, report],
         [<<"login">>],
         [<<"login">>, <<"callback">>],
         [<<"logout">>],
@@ -1479,6 +1489,7 @@ known_tables(Config) ->
         [<<"migration">>],
         [<<"post">>],
         [<<"post_image">>],
+        [<<"report">>],
         [<<"session">>],
         [<<"shown">>],
         [<<"thread">>],

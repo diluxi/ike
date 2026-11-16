@@ -3,7 +3,7 @@
 -module(ike_view).
 
 -export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
--export([moderation/4, moderated/3, upload/4, upload_locked/0, account/1]).
+-export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -61,11 +61,75 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
             true -> [];
             false -> [ike_html:el(p, [anchor(<<Here/binary, "/reply">>, <<"reply">>)])]
         end,
+    List = ike_html:el(ol, [ike_html:el(li, [post(P, Log)]) || P <- Posts]),
+    Body =
+        case Log of
+            true ->
+                [List];
+            %% the posts and what can be done to the ticked ones, in one
+            %% form, as vichan has it
+            false ->
+                [
+                    ike_html:el(form, [{method, <<"post">>}, {action, <<"/act">>}], [
+                        List | act_on(Here)
+                    ])
+                ]
+        end,
     layout(<<">>", N/binary>>, [
         ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
-        ike_html:el(p, [board_link(Board)]),
-        ike_html:el(ol, [ike_html:el(li, [post(P, Log)]) || P <- Posts])
-        | Reply
+        ike_html:el(p, [board_link(Board)])
+        | Body ++ Reply
+    ]).
+
+%% the foot of a thread's form: retract with a password (left empty, the
+%% one this browser posted with), report with a reason, and, doing
+%% nothing for anyone without a role, the moderators' rungs
+-spec act_on(binary()) -> [ike_html:html()].
+act_on(Here) ->
+    Button = fun(Kind, Label) ->
+        ike_html:el(button, [{type, <<"submit">>}, {name, <<"kind">>}, {value, Kind}], [
+            ike_html:text(Label)
+        ])
+    end,
+    [
+        ike_html:el(input, [{type, <<"hidden">>}, {name, <<"back">>}, {value, Here}], []),
+        ike_html:el(p, [
+            ike_html:el(label, [{for, <<"act-password">>}], [ike_html:text(<<"password ">>)]),
+            ike_html:el(
+                input,
+                [{type, <<"password">>}, {id, <<"act-password">>}, {name, <<"password">>}],
+                []
+            ),
+            ike_html:text(<<" ">>),
+            Button(<<"retract">>, <<"retract">>)
+        ]),
+        ike_html:el(p, [
+            ike_html:el(label, [{for, <<"act-reason">>}], [ike_html:text(<<"reason ">>)]),
+            ike_html:el(
+                input, [{id, <<"act-reason">>}, {name, <<"reason">>}, {maxlength, <<"1000">>}], []
+            ),
+            ike_html:text(<<" ">>),
+            Button(<<"report">>, <<"report">>)
+        ]),
+        ike_html:el(details, [
+            ike_html:el(summary, [ike_html:text(<<"moderate">>)]),
+            ike_html:el(
+                p,
+                spaced([
+                    Button(K, K)
+                 || K <- [<<"hide">>, <<"trash">>, <<"purge">>, <<"ban">>]
+                ])
+            )
+        ])
+    ].
+
+%% what /act did, a line for each post, and the way back
+-spec acted([binary()], Back :: binary()) -> ike_html:html().
+acted(Lines, Back) ->
+    layout(<<"done">>, [
+        ike_html:el(h1, [ike_html:text(<<"done">>)]),
+        ike_html:el(ul, [ike_html:el(li, [ike_html:text(L)]) || L <- Lines]),
+        ike_html:el(p, [anchor(Back, <<"back">>)])
     ]).
 
 -spec post(post(), Log :: boolean()) -> ike_html:html().
@@ -79,13 +143,29 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
             role -> <<"name role">>;
             nobody -> <<"name">>
         end,
-    Header = ike_html:el(header, [
-        ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
-        ike_html:text(<<" ">>),
-        anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
-        ike_html:text(<<" ">>),
-        ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
-    ]),
+    Tick =
+        case Log of
+            true ->
+                [];
+            false ->
+                [
+                    ike_html:el(
+                        input, [{type, <<"checkbox">>}, {name, <<"post">>}, {value, N}], []
+                    ),
+                    ike_html:text(<<" ">>)
+                ]
+        end,
+    Header = ike_html:el(
+        header,
+        Tick ++
+            [
+                ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
+                ike_html:text(<<" ">>),
+                anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
+                ike_html:text(<<" ">>),
+                ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
+            ]
+    ),
     Text =
         case Body of
             <<>> -> [];
@@ -94,36 +174,8 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
     ike_html:el(
         article,
         [{id, Anchor}],
-        [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post)) ++
-            case Log of
-                true -> [];
-                false -> [own(N)]
-            end
+        [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post))
     ).
-
-%% folded away under each post: retracting it, by its password or by
-%% being its account, and the way to moderate it. a plain form, the same
-%% for everyone; who may do what is the server's to say
--spec own(binary()) -> ike_html:html().
-own(N) ->
-    ike_html:el(details, [
-        ike_html:el(summary, [ike_html:text(<<"...">>)]),
-        ike_html:el(
-            form, [{method, <<"post">>}, {action, <<"/p/", N/binary, "/retract">>}], [
-                ike_html:el(p, [
-                    ike_html:el(label, [{for, <<"r", N/binary>>}], [ike_html:text(<<"password ">>)]),
-                    ike_html:el(
-                        input,
-                        [{type, <<"password">>}, {id, <<"r", N/binary>>}, {name, <<"password">>}],
-                        []
-                    ),
-                    ike_html:text(<<" ">>),
-                    ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"retract">>)])
-                ])
-            ]
-        ),
-        ike_html:el(p, [anchor(<<"/mod/post/", N/binary>>, <<"moderate">>)])
-    ]).
 
 -spec figures([image() | gone]) -> [ike_html:html()].
 figures([Image | Images]) -> figure(Image) ++ figures(Images);
@@ -233,12 +285,13 @@ index() ->
 %% else is shown the way to log in. plain forms: nothing here needs a script
 -spec post_form(
     Action :: binary(),
-    {csrf, binary(), Name :: binary() | none, Staged :: [{pos_integer(), Thumb :: binary()}]}
-    | {nobody, Token :: binary()}
+    {csrf, binary(), Name :: binary() | none, Staged :: [{pos_integer(), Thumb :: binary()}],
+        Password :: binary()}
+    | {nobody, Token :: binary(), Password :: binary()}
     | locked
 ) ->
     ike_html:html().
-post_form(Action, {nobody, Token}) ->
+post_form(Action, {nobody, Token, Password}) ->
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
         ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
@@ -254,11 +307,16 @@ post_form(Action, {nobody, Token}) ->
             ]),
             ike_html:el(p, [
                 ike_html:el(label, [{for, <<"password">>}], [
-                    ike_html:text(<<"password, to retract it later (optional) ">>)
+                    ike_html:text(<<"password, to retract it later; this browser keeps it ">>)
                 ]),
                 ike_html:el(
                     input,
-                    [{type, <<"password">>}, {id, <<"password">>}, {name, <<"password">>}],
+                    [
+                        {type, <<"text">>},
+                        {id, <<"password">>},
+                        {name, <<"password">>},
+                        {value, Password}
+                    ],
                     []
                 )
             ]),
@@ -285,7 +343,7 @@ post_form(Action, locked) ->
             ike_html:text(<<".">>)
         ])
     ]);
-post_form(Action, {csrf, Csrf, Name, Staged}) ->
+post_form(Action, {csrf, Csrf, Name, Staged, Password}) ->
     %% uploads waiting to be posted, any of them, in the order shown, by
     %% plain checkboxes; with one, the text may be left empty
     Pick =
@@ -368,11 +426,18 @@ post_form(Action, {csrf, Csrf, Name, Staged}) ->
                 [
                     ike_html:el(p, [
                         ike_html:el(label, [{for, <<"password">>}], [
-                            ike_html:text(<<"password, to retract it later (optional) ">>)
+                            ike_html:text(
+                                <<"password, to retract it later; this browser keeps it ">>
+                            )
                         ]),
                         ike_html:el(
                             input,
-                            [{type, <<"password">>}, {id, <<"password">>}, {name, <<"password">>}],
+                            [
+                                {type, <<"text">>},
+                                {id, <<"password">>},
+                                {name, <<"password">>},
+                                {value, Password}
+                            ],
                             []
                         )
                     ]),
@@ -395,9 +460,10 @@ post_form(Action, {csrf, Csrf, Name, Staged}) ->
     {Csrf :: binary(), ike_role:role()},
     [{Name :: binary(), Title :: binary(), Locked :: boolean()}],
     [{Account :: integer(), Name :: binary(), Rank :: 0..3}],
-    [{pos_integer(), binary(), hidden | trashed}]
+    [{pos_integer(), binary(), hidden | trashed}],
+    [{pos_integer(), pos_integer(), binary(), binary()}]
 ) -> ike_html:html().
-moderation({Csrf, Role}, Boards, Suspended, Down) ->
+moderation({Csrf, Role}, Boards, Suspended, Down, Reports) ->
     layout(<<"moderation">>, [
         ike_html:el(h1, [ike_html:text(<<"moderation">>)]),
         ike_html:el(p, [
@@ -406,6 +472,20 @@ moderation({Csrf, Role}, Boards, Suspended, Down) ->
             ),
             anchor(<<"/board/mod">>, <<"/mod/">>),
             ike_html:text(<<", with the reason given and without your name.">>)
+        ]),
+        %% what readers reported, oldest first
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                anchor(
+                    <<"/mod/post/", (integer_to_binary(Post))/binary>>,
+                    <<">>", (integer_to_binary(Post))/binary, " on /", Board/binary, "/">>
+                ),
+                ike_html:text(<<": ", Reason/binary>>)
+                | act(
+                    <<"/mod/report/", (integer_to_binary(Report))/binary>>, Csrf, [dismiss], []
+                )
+            ])
+         || {Report, Post, Board, Reason} <- Reports
         ]),
         ike_html:el(form, [{method, <<"get">>}, {action, <<"/mod">>}], [
             ike_html:el(p, [
@@ -557,7 +637,7 @@ plain([Line | Rest]) -> [ike_html:text(Line), ike_html:el(br, []) | plain(Rest)]
 plain([]) -> [].
 
 %% one form for each thing that would go through, each with its reason
--spec act(Action :: binary(), Csrf :: binary(), [ike_role:kind()], [{binary(), binary()}]) ->
+-spec act(Action :: binary(), Csrf :: binary(), [ike_role:kind() | dismiss], [{binary(), binary()}]) ->
     [ike_html:html()].
 act(Action, Csrf, Kinds, Fields) ->
     Hidden = [
