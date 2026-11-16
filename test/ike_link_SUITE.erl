@@ -210,7 +210,7 @@ marked_up(Config) ->
         <<"<a href=\"https://example.org/a\" rel=\"nofollow noreferrer\">https://example.org/a</a>.">>
     ),
     Has(<<"<a href=\"/booru/search?tags=blue_hair%20-x\">{{blue_hair -x}}</a>">>),
-    Has(<<"<span class=\"gone\">the page</span>">>),
+    Has(<<"<a class=\"missing\" href=\"/wiki/xmpp\">the page</a>">>),
     Has(<<"[b]never closed">>),
     Has(<<"<blockquote><p>said <i>so</i></p></blockquote>">>),
     Has(<<"<pre><code>let x = &lt;y&gt;;</code></pre>">>).

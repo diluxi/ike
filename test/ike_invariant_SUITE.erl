@@ -519,6 +519,7 @@ inv04_text_is_escaped(Config) ->
                 re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match,
                 re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~-]*$", [{capture, none}]) =/=
                     match,
+                re:run(H, "^/wiki/([a-z0-9_()!:.-]|%27|%3F)*$", [{capture, none}]) =/= match,
                 re:run(H, "^https?://[^\"<>\\s`]+$", [{capture, none}]) =/= match
             ],
             {match, Classes} = re:run(Page, "class=\"([^\"]*)\"", [
@@ -532,6 +533,7 @@ inv04_text_is_escaped(Config) ->
                     <<"name account">>,
                     <<"name role">>,
                     <<"gone">>,
+                    <<"missing">>,
                     <<"title">>,
                     <<"spoiler">>
                 ])
@@ -553,6 +555,7 @@ inv04_text_is_escaped(Config) ->
             <<"\"a\":[https://x.org/\"onmouseover=\"alert(1)] \"b\":[javascript:alert(1)]">>,
             <<"https://x.org/a\"><script>alert(1)</script> http://y.org/<b>">>,
             <<"{{\"><script>alert(1)</script>}} [[x|<b>label</b>]] [code]<script>[/code]">>,
+            <<"[[doesn't]] [[a?b]] [[x\"y]] [[x'onclick='y]] [[../login]] [[a/b]] [[a#b]]">>,
             <<"h1. <script>alert(1)</script>\n* <img src=x onerror=alert(1)>\n[quote]\n<b>\n[/quote]">>
         ]
     ),

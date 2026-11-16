@@ -71,7 +71,9 @@ editor(Name, Req) ->
                 end,
             ike_http:page(200, ike_view:wiki_edit(Name, Csrf, Signer, Base, Text, none), Req);
         error ->
-            ike_http:page(200, ike_view:post_form(<<"/wiki/", Name/binary, "/edit">>, locked), Req)
+            ike_http:page(
+                200, ike_view:post_form(<<(ike_wiki:path(Name))/binary, "/edit">>, locked), Req
+            )
     end.
 
 -spec write(binary(), cowboy_req:req()) -> cowboy_req:req().
@@ -100,7 +102,7 @@ write(Name, Req0) ->
                     of
                         {ok, _} ->
                             _ = ike_render:sync(),
-                            ike_http:see_other(<<"/wiki/", Name/binary>>, Req);
+                            ike_http:see_other(ike_wiki:path(Name), Req);
                         {error, {conflict, _}} ->
                             %% the page changed meanwhile: its text now, and
                             %% the edit, to be made again on it (Q35)

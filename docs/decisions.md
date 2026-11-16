@@ -982,3 +982,13 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - *Not yet:* nested lists, tables, `[tn]`, `[expand]`, DText's other
   link forms; markup in titles and on the moderator's page (plain text
   there).
+
+## Red links
+
+lux, 2026-11-16: `[[doesn't_yet_exist]]` links to the page asking for
+it to be started. A name with neither a page nor a tag is now an anchor
+of class `missing` (red) to where its page would be, and not grey text.
+Every wiki href and Location is made by `ike_wiki:path/1`, which writes a
+name's `?` as `%3F` (it would start a query) and its `'` as `%27`; the
+router reads both back. The invariant suite's href check admits exactly
+`/wiki/` and a name's characters so written.

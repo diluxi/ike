@@ -12,7 +12,8 @@
     pointed_at_by_name/1,
     accounts_write/1,
     names/1,
-    a_hidden_revision_steps_back/1
+    a_hidden_revision_steps_back/1,
+    missing_pages_are_asked_for/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1]).
@@ -24,7 +25,8 @@ all() ->
         pointed_at_by_name,
         accounts_write,
         names,
-        a_hidden_revision_steps_back
+        a_hidden_revision_steps_back,
+        missing_pages_are_asked_for
     ].
 
 init_per_suite(Config) ->
@@ -56,8 +58,10 @@ started_and_read(Config) ->
     "/wiki/blue_hair" = proplists:get_value("location", H),
     {200, _, Page} = request(Config, get, "/wiki/blue_hair", [], none),
     {_, _} = binary:match(Page, <<"hair that is blue.">>),
-    %% a name with no page and no tag is a link to nothing
-    {_, _} = binary:match(Page, <<"<span class=\"gone\">[[long_hair]]</span>">>),
+    %% a name with no page and no tag links to where its page would be
+    {_, _} = binary:match(
+        Page, <<"<a class=\"missing\" href=\"/wiki/long_hair\">[[long_hair]]</a>">>
+    ),
     {match, [Thread]} = re:run(Page, "href=\"/board/wiki/([0-9]+)\">discussion", [
         {capture, all_but_first, list}
     ]),
@@ -110,7 +114,9 @@ pointed_at_by_name(Config) ->
     ),
     Thread = hd(string:split(proplists:get_value("location", H), "#")),
     {200, _, Before} = request(Config, get, Thread, [], none),
-    {_, _} = binary:match(Before, <<"<span class=\"gone\">[[short_hair]]</span>">>),
+    {_, _} = binary:match(
+        Before, <<"<a class=\"missing\" href=\"/wiki/short_hair\">[[short_hair]]</a>">>
+    ),
     {_, _} = binary:match(Before, <<"<a href=\"/wiki/long_hair\">[[long_hair]]</a>">>),
     %% the page is started, and the post that pointed at it is made again
     {303, _, _} = save(Config, Session, "short_hair", "none", <<"short.">>),
@@ -157,3 +163,26 @@ a_hidden_revision_steps_back(Config) ->
     {200, _, Page} = request(Config, get, "/wiki/steps", [], none),
     {_, _} = binary:match(Page, <<"first">>),
     nomatch = binary:match(Page, <<"vandalised">>).
+
+%% a page not yet written is a red link to where it would be, which asks
+%% for it, whatever the name holds that a path would read otherwise
+missing_pages_are_asked_for(Config) ->
+    Session = login(Config, <<"asker">>),
+    {303, H, _} = ike_browser:post(
+        Config, "/board/b/new", Session, <<"[[doesn't_yet_exist]] and [[why?|ask]]">>
+    ),
+    Thread = hd(string:split(proplists:get_value("location", H), "#")),
+    {200, _, Page} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(
+        Page,
+        <<"<a class=\"missing\" href=\"/wiki/doesn%27t_yet_exist\">[[doesn&#39;t_yet_exist]]</a>">>
+    ),
+    {_, _} = binary:match(Page, <<"<a class=\"missing\" href=\"/wiki/why%3F\">ask</a>">>),
+    {404, _, Asked} = request(Config, get, "/wiki/doesn%27t_yet_exist", cookies(Session), none),
+    {_, _} = binary:match(Asked, <<"href=\"/wiki/doesn%27t_yet_exist/edit\">start it">>),
+    {303, Made, _} = save(Config, Session, "why%3F", "none", <<"because.">>),
+    "/wiki/why%3F" = proplists:get_value("location", Made),
+    {200, _, Why} = request(Config, get, "/wiki/why%3F", [], none),
+    {_, _} = binary:match(Why, <<"because.">>),
+    {200, _, Again} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(Again, <<"<a href=\"/wiki/why%3F\">ask</a>">>).

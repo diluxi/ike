@@ -5,7 +5,7 @@
 %% McIlroy), computed when a page is shown (planning: diffs at render).
 -module(ike_wiki).
 
--export([name/1, diff/2]).
+-export([name/1, path/1, diff/2]).
 -export_type([change/0]).
 
 -type change() :: {same | added | removed, binary()}.
@@ -19,6 +19,17 @@ name(Typed) ->
         {ok, <<".", _/binary>>} -> error;
         Other -> Other
     end.
+
+%% where a page is, as an href or a Location: a name may hold a ? that
+%% would start a query, and a ' that is no use escaped in an href
+-spec path(binary()) -> binary().
+path(Name) ->
+    <<"/wiki/", <<<<(path_byte(B))/binary>> || <<B>> <= Name>>/binary>>.
+
+-spec path_byte(byte()) -> binary().
+path_byte($?) -> <<"%3F">>;
+path_byte($') -> <<"%27">>;
+path_byte(B) -> <<B>>.
 
 -spec diff(Before :: binary(), After :: binary()) -> [change()].
 diff(Before, After) ->

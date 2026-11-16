@@ -326,6 +326,11 @@ permalink(Post, Board) ->
 gone(Text) ->
     ike_html:el(span, [{class, <<"gone">>}], [ike_html:text(Text)]).
 
+%% a page not yet written: a link to where it would be, which asks for it
+-spec missing(binary(), binary()) -> ike_html:html().
+missing(Name, Text) ->
+    ike_html:el(a, [{class, <<"missing">>}, {href, ike_wiki:path(Name)}], [ike_html:text(Text)]).
+
 -spec piece(ike_text:piece(), #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
     ike_html:html().
 piece({text, Text}, _Links) ->
@@ -338,15 +343,15 @@ piece({post, N}, Links) ->
 piece({page, Name}, Links) ->
     Text = <<"[[", Name/binary, "]]">>,
     case Links of
-        #{{page, Name} := <<"page">>} -> anchor(<<"/wiki/", Name/binary>>, Text);
+        #{{page, Name} := <<"page">>} -> anchor(ike_wiki:path(Name), Text);
         #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Text);
-        _ -> gone(Text)
+        _ -> missing(Name, Text)
     end;
 piece({page, Name, Label}, Links) ->
     case Links of
-        #{{page, Name} := <<"page">>} -> anchor(<<"/wiki/", Name/binary>>, Label);
+        #{{page, Name} := <<"page">>} -> anchor(ike_wiki:path(Name), Label);
         #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Label);
-        _ -> gone(Label)
+        _ -> missing(Name, Label)
     end;
 piece({booru, N}, Links) ->
     Text = <<"##", (integer_to_binary(N))/binary>>,
@@ -1144,7 +1149,7 @@ entries(Entries) ->
 wiki_index(Names) ->
     layout(<<"wiki">>, [
         ike_html:el(h1, [ike_html:text(<<"wiki">>)]),
-        ike_html:el(ul, [ike_html:el(li, [anchor(<<"/wiki/", N/binary>>, N)]) || N <- Names])
+        ike_html:el(ul, [ike_html:el(li, [anchor(ike_wiki:path(N), N)]) || N <- Names])
     ]).
 
 %% a page as it now reads, and the ways to its history, its editing and
@@ -1169,8 +1174,8 @@ wiki_page(Name, #{thread := Thread, revision := Revision, time := Time, body := 
                 ike_html:el(
                     p,
                     spaced([
-                        anchor(<<"/wiki/", Name/binary, "/edit">>, <<"edit">>),
-                        anchor(<<"/wiki/", Name/binary, "/history">>, <<"history">>),
+                        anchor(<<(ike_wiki:path(Name))/binary, "/edit">>, <<"edit">>),
+                        anchor(<<(ike_wiki:path(Name))/binary, "/history">>, <<"history">>),
                         anchor(
                             <<"/board/wiki/", (integer_to_binary(Thread))/binary>>, <<"discussion">>
                         )
@@ -1187,7 +1192,7 @@ wiki_missing(Name, SignedIn) ->
         ike_html:el(p, [
             ike_html:text(<<"no page by this name yet. ">>),
             case SignedIn of
-                true -> anchor(<<"/wiki/", Name/binary, "/edit">>, <<"start it">>);
+                true -> anchor(<<(ike_wiki:path(Name))/binary, "/edit">>, <<"start it">>);
                 false -> anchor(<<"/login">>, <<"log in to start it">>)
             end
         ])
@@ -1241,7 +1246,9 @@ wiki_edit(Name, Csrf, Signer, Base, Text, Theirs) ->
         | Conflict ++
             [
                 ike_html:el(
-                    form, [{method, <<"post">>}, {action, <<"/wiki/", Name/binary, "/edit">>}], [
+                    form,
+                    [{method, <<"post">>}, {action, <<(ike_wiki:path(Name))/binary, "/edit">>}],
+                    [
                         ike_html:el(
                             input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
                         ),
@@ -1273,7 +1280,7 @@ wiki_edit(Name, Csrf, Signer, Base, Text, Theirs) ->
 wiki_history(Name, Revisions) ->
     layout(<<Name/binary, " history">>, [
         ike_html:el(h1, [ike_html:text(<<Name/binary, " history">>)]),
-        ike_html:el(p, [anchor(<<"/wiki/", Name/binary>>, Name)]),
+        ike_html:el(p, [anchor(ike_wiki:path(Name), Name)]),
         ike_html:el(ol, [
             ike_html:el(li, [
                 ike_html:el(p, [
@@ -1341,6 +1348,7 @@ style() ->
         ".spoiler { background: #24292f; color: #24292f; }\n"
         ".spoiler:hover { color: #ffffff; }\n"
         ".gone { color: #6e7781; }\n"
+        "a.missing { color: #cf222e; }\n"
         ".title { font-weight: bold; }\n"
     >>.
 
