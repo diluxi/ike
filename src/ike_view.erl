@@ -6,6 +6,8 @@
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/6, wiki_history/2]).
+-export([style/0, user/2]).
+
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
 %% name: an account's, or what stands in for one
@@ -18,7 +20,11 @@
     name := {account | nobody | role, binary()},
     links := #{integer() | {booru, integer()} | {page, binary()} => binary()},
     replies := [integer()],
-    images => [image() | gone]
+    images => [image() | gone],
+    title => binary() | none,
+    %% a wiki revision, and what it changed of the one before
+    revision => boolean(),
+    changes => [ike_wiki:change()]
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -31,7 +37,8 @@
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
 %% log: the board is the record of what moderators did, and takes no posts
--type board() :: #{name := binary(), title := binary(), log := boolean()}.
+%% wiki: its threads are pages, newest first, revisions shown as changes
+-type board() :: #{name := binary(), title := binary(), log := boolean(), wiki => boolean()}.
 %% a post as a moderator is shown it, whatever state it is in
 -type held() :: #{
     id := integer(),
@@ -63,7 +70,25 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
             true -> [];
             false -> [ike_html:el(p, [anchor(<<Here/binary, "/reply">>, <<"reply">>)])]
         end,
-    List = ike_html:el(ol, [ike_html:el(li, [post(P, Log)]) || P <- Posts]),
+    Wiki = maps:get(wiki, Board, false),
+    %% the newest revision is shown open; older ones fold into their header
+    Newest = newest(Posts, 0),
+    List =
+        case Wiki of
+            %% a page's thread is its history and its talk, newest first
+            true ->
+                ike_html:el(ol, [reversed], [
+                    ike_html:el(li, [post(P, Log, Newest)])
+                 || P <- backwards(Posts, [])
+                ]);
+            false ->
+                ike_html:el(ol, [ike_html:el(li, [post(P, Log, Newest)]) || P <- Posts])
+        end,
+    Heading =
+        case [T || #{id := I, title := T} <- Posts, I =:= Root, is_binary(T)] of
+            [T | _] -> T;
+            [] -> <<">>", N/binary>>
+        end,
     Body =
         case Log of
             true ->
@@ -77,11 +102,20 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
                     ])
                 ]
         end,
-    layout(<<">>", N/binary>>, [
-        ike_html:el(h1, [ike_html:text(<<">>", N/binary>>)]),
+    layout(Heading, [
+        ike_html:el(h1, [ike_html:text(Heading)]),
         ike_html:el(p, [board_link(Board)])
         | Body ++ Reply
     ]).
+
+-spec newest([post()], non_neg_integer()) -> non_neg_integer().
+newest([#{id := I, revision := true} | Ps], N) when I > N -> newest(Ps, I);
+newest([_ | Ps], N) -> newest(Ps, N);
+newest([], N) -> N.
+
+-spec backwards([post()], [post()]) -> [post()].
+backwards([P | Ps], Acc) -> backwards(Ps, [P | Acc]);
+backwards([], Acc) -> Acc.
 
 %% the foot of a thread's form: retract with a password (left empty, the
 %% one this browser posted with), report with a reason, and, doing
@@ -134,8 +168,12 @@ acted(Lines, Back) ->
         ike_html:el(p, [anchor(Back, <<"back">>)])
     ]).
 
--spec post(post(), Log :: boolean()) -> ike_html:html().
-post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post, Log) ->
+-spec post(post(), Log :: boolean(), Newest :: non_neg_integer()) -> ike_html:html().
+post(
+    #{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post,
+    Log,
+    Newest
+) ->
     N = integer_to_binary(Id),
     Anchor = <<"p", N/binary>>,
     Stamp = stamp(Time),
@@ -157,22 +195,66 @@ post(#{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Link
                     ike_html:text(<<" ">>)
                 ]
         end,
+    %% a signed name leads to the account's own page
+    Named =
+        case Kind of
+            account -> [anchor(<<"/user/", Name/binary>>, Name)];
+            _ -> [ike_html:text(Name)]
+        end,
+    Titled =
+        case maps:get(title, Post, none) of
+            T when is_binary(T) ->
+                [
+                    ike_html:el(span, [{class, <<"title">>}], [ike_html:text(T)]),
+                    ike_html:text(<<" ">>)
+                ];
+            _ ->
+                []
+        end,
+    %% a wiki revision: what it changed, folded beside the header but for
+    %% the newest
+    {Folded, Text} =
+        case Post of
+            #{revision := true, changes := Changes} ->
+                Added = length([x || {added, _} <- Changes]),
+                Removed = length([x || {removed, _} <- Changes]),
+                Count = iolist_to_binary([
+                    [<<"+", (integer_to_binary(Added))/binary>> || Added > 0],
+                    [<<" ">> || Added > 0, Removed > 0],
+                    [<<"-", (integer_to_binary(Removed))/binary>> || Removed > 0],
+                    [<<"=">> || Added =:= 0, Removed =:= 0]
+                ]),
+                Open = [open || Id =:= Newest],
+                {
+                    [
+                        ike_html:text(<<" ">>),
+                        ike_html:el(details, Open, [
+                            ike_html:el(summary, [ike_html:text(Count)]),
+                            ike_html:el(p, changes(Changes))
+                        ])
+                    ],
+                    []
+                };
+            _ ->
+                {
+                    [],
+                    case Body of
+                        <<>> -> [];
+                        _ -> [ike_html:el(p, lines(ike_text:parse(Body), Links))]
+                    end
+                }
+        end,
     Header = ike_html:el(
         header,
-        Tick ++
+        Tick ++ Titled ++
+            [ike_html:el(span, [{class, Class}], Named)] ++
             [
-                ike_html:el(span, [{class, Class}], [ike_html:text(Name)]),
                 ike_html:text(<<" ">>),
                 anchor(<<"#", Anchor/binary>>, <<">>", N/binary>>),
                 ike_html:text(<<" ">>),
                 ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
-            ]
+            ] ++ Folded
     ),
-    Text =
-        case Body of
-            <<>> -> [];
-            _ -> [ike_html:el(p, lines(ike_text:parse(Body), Links))]
-        end,
     ike_html:el(
         article,
         [{id, Anchor}],
@@ -336,6 +418,12 @@ post_form(Action, {nobody, Token, Password}) ->
         ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
             ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}], []),
             ike_html:el(p, [
+                ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
+                ike_html:el(br, []),
+                ike_html:el(
+                    input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
+                ),
+                ike_html:el(br, []),
                 ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
                 ike_html:el(br, []),
                 ike_html:el(
@@ -453,6 +541,12 @@ post_form(Action, {csrf, Csrf, Name, Staged, Password}) ->
         ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
             Token,
             ike_html:el(p, [
+                ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
+                ike_html:el(br, []),
+                ike_html:el(
+                    input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
+                ),
+                ike_html:el(br, []),
                 ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
                 ike_html:el(br, []),
                 ike_html:el(
@@ -1195,6 +1289,36 @@ message(Title, Text) ->
     layout(Title, [
         ike_html:el(h1, [ike_html:text(Title)]),
         ike_html:el(p, [ike_html:text(Text)])
+    ]).
+
+%% plain looks: what is added green, what is taken red, a revision's
+%% count of lines beside its header until it is opened
+-spec style() -> iodata().
+style() ->
+    <<
+        "ins { color: #116329; background: #dafbe1; text-decoration: none; }\n"
+        "del { color: #82071e; background: #ffebe9; }\n"
+        "header details { display: inline; }\n"
+        "header details[open] { display: block; }\n"
+        "header details > summary { display: inline; cursor: pointer; }\n"
+        ".gone { color: #6e7781; }\n"
+        ".title { font-weight: bold; }\n"
+    >>.
+
+%% an account's own page: the posts it signed, newest first
+-spec user(binary(), [{pos_integer(), binary(), integer(), binary()}]) -> ike_html:html().
+user(Name, Posts) ->
+    layout(Name, [
+        ike_html:el(h1, [ike_html:text(Name)]),
+        ike_html:el(ol, [
+            ike_html:el(li, [
+                permalink(Id, <<>>),
+                ike_html:text(<<" on /", Board/binary, "/, ">>),
+                ike_html:el(time, [{datetime, stamp(T)}], [ike_html:text(stamp(T))]),
+                ike_html:text(<<": ", (excerpt(Body))/binary>>)
+            ])
+         || {Id, Board, T, Body} <- Posts
+        ])
     ]).
 
 -spec layout(Title :: binary(), [ike_html:html()]) -> ike_html:html().

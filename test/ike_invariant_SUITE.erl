@@ -505,14 +505,21 @@ inv04_text_is_escaped(Config) ->
             {match, Hrefs} = re:run(Page, "href=\"([^\"]*)\"", [
                 global, {capture, all_but_first, binary}
             ]),
-            [] = [H || [H] <- Hrefs, re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match],
+            [] = [
+                H
+             || [H] <- Hrefs,
+                H =/= <<"/style.css">>,
+                re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match
+            ],
             {match, Classes} = re:run(Page, "class=\"([^\"]*)\"", [
                 global, {capture, all_but_first, binary}
             ]),
             [] = [
                 C
              || [C] <- Classes,
-                not lists:member(C, [<<"name">>, <<"name account">>, <<"name role">>, <<"gone">>])
+                not lists:member(C, [
+                    <<"name">>, <<"name account">>, <<"name role">>, <<"gone">>, <<"title">>
+                ])
             ]
         end,
         [
@@ -688,7 +695,10 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
     %% and the tree the web server reads from holds pages, nothing else
     Pages = files(filename:join(?config(dir, Config), "pages")),
     [_ | _] = Pages,
-    [] = [F || F <- Pages, filename:extension(F) =/= ".html"].
+    [] = [
+        F
+     || F <- Pages, filename:extension(F) =/= ".html", filename:basename(F) =/= "style.css"
+    ].
 
 %% 6. No decoder or metadata stripper runs inside the BEAM.
 %%
@@ -1570,6 +1580,8 @@ known_routes() ->
         [<<"booru">>, <<"search">>],
         [<<"booru">>, booru, <<"tags">>],
         [<<"wiki">>],
+        [<<"style.css">>],
+        [<<"user">>, name],
         [<<"wiki">>, name],
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],
@@ -1685,9 +1697,16 @@ scriptless(Html) ->
     nomatch = binary:match(Lower, <<"javascript:">>),
     %% an attribute named on-something, inside a tag
     nomatch = re:run(Lower, "<[^>]*\\son[a-z]+\\s*=", [{capture, none}]),
-    nomatch = re:run(Lower, "<(iframe|object|embed|link|style|svg|math)[\\s>]", [
+    nomatch = re:run(Lower, "<(iframe|object|embed|style|svg|math)[\\s>]", [
         {capture, none}
     ]),
+    %% the one stylesheet, from this origin, and no other link
+    [] = [
+        L
+     || {match, Ls} <- [re:run(Lower, "<link[^>]*>", [global, {capture, first, binary}])],
+        [L] <- Ls,
+        L =/= <<"<link rel=\"stylesheet\" href=\"/style.css\">">>
+    ],
     %% an image is a plain one, from the media origin
     Images =
         case re:run(Lower, "<img[^>]*>", [global, {capture, first, binary}]) of
@@ -1748,6 +1767,7 @@ known_tag(Name) ->
         <<"input">>,
         <<"label">>,
         <<"li">>,
+        <<"link">>,
         <<"main">>,
         <<"meta">>,
         <<"nav">>,

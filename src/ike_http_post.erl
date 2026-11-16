@@ -220,16 +220,26 @@ signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
             ike_http:forbidden(Req)
     end.
 
-%% a password to retract the post with later, if one was given
--spec password(#{binary() => binary()}) -> #{password => binary()}.
-password(#{<<"password">> := P}) when byte_size(P) > 0, byte_size(P) =< 256 -> #{password => P};
-password(_) -> #{}.
+%% a password to retract the post with later, if one was given, and a
+%% title, if one was
+-spec password(#{binary() => binary()}) -> #{password => binary(), title => binary()}.
+password(Form) ->
+    maps:merge(
+        case Form of
+            #{<<"password">> := P} when byte_size(P) > 0, byte_size(P) =< 256 -> #{password => P};
+            _ -> #{}
+        end,
+        case Form of
+            #{<<"title">> := T} when byte_size(T) > 0 -> #{title => T};
+            _ -> #{}
+        end
+    ).
 
 -spec write(
     place(),
     ike_id:actor(),
     binary(),
-    #{upload => {ike_id:actor(), [pos_integer(), ...]}, password => binary()},
+    #{upload => {ike_id:actor(), [pos_integer(), ...]}, password => binary(), title => binary()},
     cowboy_req:req()
 ) -> cowboy_req:req().
 write({Board, Thread} = Place, Actor, Body0, Upload, Req) ->

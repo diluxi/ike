@@ -129,9 +129,21 @@ write(Name, Req0) ->
             ike_http:reply(Status, Req)
     end.
 
-%% each revision against the one before it, newest first
+%% the page's thread is its history and its talk (lux): history leads
+%% there, unless wiki_history asks for the separate page back
 -spec history(binary(), cowboy_req:req()) -> cowboy_req:req().
 history(Name, Req) ->
+    case {ike_config:wiki_history(), ike_reader:page(Name)} of
+        {thread, {ok, #{thread := Thread}}} ->
+            ike_http:see_other(<<"/board/wiki/", (integer_to_binary(Thread))/binary>>, Req);
+        {thread, none} ->
+            ike_http:not_found(Req);
+        {separate, _} ->
+            separate(Name, Req)
+    end.
+
+-spec separate(binary(), cowboy_req:req()) -> cowboy_req:req().
+separate(Name, Req) ->
     case ike_reader:revisions(Name) of
         [] ->
             ike_http:not_found(Req);

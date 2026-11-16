@@ -83,7 +83,15 @@ edited_on_its_revision(Config) ->
     {200, _, Page} = request(Config, get, "/wiki/long_hair", [], none),
     {_, _} = binary:match(Page, <<"four">>),
     nomatch = binary:match(Page, <<"B&#39;s">>),
-    {200, _, History} = request(Config, get, "/wiki/long_hair/history", [], none),
+    %% the history is the page's thread, newest first, each revision as
+    %% what it changed
+    {303, Away, _} = request(Config, get, "/wiki/long_hair/history", [], none),
+    "/board/wiki/" ++ _ = Thread = proplists:get_value("location", Away),
+    {200, _, History} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(History, <<"<ol reversed>">>),
+    {_, _} = binary:match(History, <<"<h1>long_hair</h1>">>),
+    {_, _} = binary:match(History, <<"<details open><summary>+2 -1</summary>">>),
+    {_, _} = binary:match(History, <<"<details><summary>+3</summary>">>),
     {_, _} = binary:match(History, <<"<del>two</del>">>),
     {_, _} = binary:match(History, <<"<ins>2</ins>">>),
     {_, _} = binary:match(History, <<"<ins>four</ins>">>),

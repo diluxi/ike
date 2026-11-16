@@ -205,25 +205,26 @@ everything(Conn) ->
 -spec render_thread(#state{}, integer()) -> {ok, Board :: binary()} | none.
 render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     Where = <<
-        "SELECT b.name, b.title, b.log FROM thread t JOIN board b ON b.id = t.board"
+        "SELECT b.name, b.title, b.log, b.wiki FROM thread t JOIN board b ON b.id = t.board"
         " JOIN shown s ON s.id = t.root WHERE t.root = ?1"
     >>,
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
-        "SELECT p.id, p.time, p.body, a.name, b.log, m.role"
-        " FROM shown p JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
+        "SELECT p.id, p.time, p.body, a.name, b.log, m.role, q.title, q.revision"
+        " FROM shown p JOIN post q ON q.id = p.id"
+        " JOIN actor a ON a.id = p.actor JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
         " WHERE p.thread = ?1 ORDER BY p.id"
     >>,
     case ike_db:q(Conn, Where, [Thread]) of
-        {ok, [[Name, Title, Logs]]} when is_binary(Name), is_binary(Title) ->
+        {ok, [[Name, Title, Logs, Wiki]]} when is_binary(Name), is_binary(Title) ->
             case ike_db:q(Conn, Sql, [Thread]) of
                 {ok, Rows} ->
                     Names = ike_config:anonymous_names(),
                     Links = links(Conn, Thread),
                     Replies = replies(Conn, Thread),
                     Images = images(Conn, Thread),
-                    Posts = [
+                    Posts0 = [
                         #{
                             id => Id,
                             time => Time,
@@ -231,14 +232,22 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                             name => name(Name0, Id, Names, Log, Role),
                             links => Links,
                             replies => maps:get(Id, Replies, []),
-                            images => maps:get(Id, Images, [])
+                            images => maps:get(Id, Images, []),
+                            title =>
+                                case PostTitle of
+                                    _ when is_binary(PostTitle) -> PostTitle;
+                                    _ -> none
+                                end,
+                            revision => Revision =:= 1
                         }
-                     || [Id, Time, Body, Name0, Log, Role] <- Rows,
+                     || [Id, Time, Body, Name0, Log, Role, PostTitle, Revision] <- Rows,
                         is_integer(Id),
                         is_integer(Time),
                         is_binary(Body)
                     ],
-                    Board = #{name => Name, title => Title, log => Logs =:= 1},
+                    %% a revision shown as what it changed of the one before
+                    Posts = revised(Posts0, <<>>),
+                    Board = #{name => Name, title => Title, log => Logs =:= 1, wiki => Wiki =:= 1},
                     File =
                         <<"board/", Name/binary, "/", (integer_to_binary(Thread))/binary, ".html">>,
                     ok = write(Dir, File, ike_view:thread(Board, Thread, Posts)),
@@ -251,6 +260,14 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
         {error, Reason} ->
             error({render, Thread, Reason})
     end.
+
+-spec revised([ike_view:post()], binary()) -> [ike_view:post()].
+revised([#{revision := true, body := Body} = P | Rest], Before) ->
+    [P#{changes => ike_wiki:diff(Before, Body)} | revised(Rest, Body)];
+revised([P | Rest], Before) ->
+    [P | revised(Rest, Before)];
+revised([], _Before) ->
+    [].
 
 %% the posts this thread's posts point at, those that are there to be
 %% shown, and the board each is on
@@ -391,7 +408,8 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
     %% most recently posted in first
     Sql = <<
         "SELECT p.thread, count(*), max(p.id),"
-        " (SELECT body FROM post WHERE id = p.thread)"
+        %% a titled thread is listed by its title
+        " (SELECT coalesce(title, body) FROM post WHERE id = p.thread)"
         " FROM shown p JOIN thread t ON t.root = p.thread"
         " JOIN board b ON b.id = t.board"
         " WHERE b.name = ?1 GROUP BY p.thread ORDER BY 3 DESC LIMIT ?2"
@@ -504,6 +522,7 @@ render_lists(#state{conn = Conn, dir = Dir}) ->
     case boards(Conn, <<>>, []) of
         {ok, Boards} ->
             ok = write(Dir, <<"board.html">>, ike_view:boards(Boards)),
+            ok = written(Dir, <<"style.css">>, ike_view:style()),
             write(Dir, <<"index.html">>, ike_view:index());
         {error, Reason} ->
             error({render, lists, Reason})
@@ -521,6 +540,14 @@ boards(Conn, Where, Args) ->
         {error, _} = Error ->
             Error
     end.
+
+%% the stylesheet, whole, as a page is
+-spec written(binary(), binary(), iodata()) -> ok.
+written(Dir, Name, Bytes) ->
+    Path = <<Dir/binary, "/", Name/binary>>,
+    Tmp = <<Path/binary, ".tmp">>,
+    ok = file:write_file(Tmp, Bytes),
+    ok = file:rename(Tmp, Path).
 
 %% a reader of the page sees the old file or the new one, never part of
 %% either

@@ -6,7 +6,7 @@
 
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
--export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1]).
+-export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
 -export_type([staged/0]).
 
 %% a staged upload as its uploader is shown it
@@ -175,6 +175,29 @@ search(Query) ->
             ];
         _ ->
             []
+    end.
+
+%% the shown posts an account signed, by its name, newest first
+-spec signed(Name :: binary()) -> {ok, [{pos_integer(), binary(), integer(), binary()}]} | none.
+signed(Name) ->
+    case gen_server:call(?MODULE, {signed, Name}) of
+        {ok, [_ | _] = Rows} ->
+            {ok, [
+                {Id, B, T, Body}
+             || [Id, B, T, Body] <- Rows,
+                is_integer(Id),
+                Id > 0,
+                is_binary(B),
+                is_integer(T),
+                is_binary(Body)
+            ]};
+        {ok, []} ->
+            case gen_server:call(?MODULE, {named, Name}) of
+                {ok, [_]} -> {ok, []};
+                _ -> none
+            end;
+        _ ->
+            none
     end.
 
 %% a wiki page as it now reads: its thread, its newest shown revision
@@ -388,6 +411,16 @@ handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
     %% only ever itself
     Args = Must ++ Not ++ [<<"\"", P/binary, "\"*">> || P <- Prefixes, is_binary(P)],
     {reply, ike_db:q(Conn, Sql, Args), Conn};
+handle_call({signed, Name}, _From, Conn) when is_binary(Name) ->
+    Sql = <<
+        "SELECT s.id, b.name, s.time, s.body FROM actor a JOIN shown s ON s.actor = a.id"
+        " JOIN thread t ON t.root = s.thread JOIN board b ON b.id = t.board"
+        " WHERE a.kind = 'local' AND a.name = ?1 AND b.log = 0 ORDER BY s.id DESC LIMIT 100"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Name]), Conn};
+handle_call({named, Name}, _From, Conn) when is_binary(Name) ->
+    {reply, ike_db:q(Conn, <<"SELECT 1 FROM actor WHERE kind = 'local' AND name = ?1">>, [Name]),
+        Conn};
 handle_call({page, Name}, _From, Conn) when is_binary(Name) ->
     Sql = <<
         "SELECT pg.thread, p.id, p.time, p.body FROM page pg JOIN shown s ON s.thread = pg.thread"

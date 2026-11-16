@@ -29,7 +29,8 @@
     no_name_no_asking/1,
     only_plain_names/1,
     a_new_name_is_on_old_posts/1,
-    nobody_has_many_names/1
+    nobody_has_many_names/1,
+    titled_and_named/1
 ]).
 
 -import(ike_browser, [
@@ -42,6 +43,7 @@
     claims/3,
     id_token/4,
     post/4,
+    post/5,
     cookies/1,
     request/5,
     set_cookie/2,
@@ -75,7 +77,8 @@ all() ->
         no_name_no_asking,
         only_plain_names,
         a_new_name_is_on_old_posts,
-        nobody_has_many_names
+        nobody_has_many_names,
+        titled_and_named
     ].
 
 -define(CLIENT, <<"ike-test">>).
@@ -132,7 +135,9 @@ login_then_post(Config) ->
     File = Served,
     {_, _} = binary:match(File, <<"&lt;b&gt;angle&lt;/b&gt; &amp; &quot;quotes&quot;">>),
     nomatch = binary:match(File, <<"<b>">>),
-    {_, _} = binary:match(File, <<"<span class=\"name account\">alice</span>">>),
+    {_, _} = binary:match(
+        File, <<"<span class=\"name account\"><a href=\"/user/alice\">alice</a></span>">>
+    ),
     nomatch = binary:match(File, <<"example.org">>),
     nomatch = binary:match(File, <<"A Person">>).
 
@@ -471,7 +476,9 @@ a_name_is_asked_for(Config) ->
     [_, First, Second] = binary:split(Page, <<"<article">>, [global]),
     {_, _} = binary:match(First, <<"<span class=\"name\">anon</span>">>),
     nomatch = binary:match(First, <<"carol">>),
-    {_, _} = binary:match(Second, <<"<span class=\"name account\">carol</span>">>).
+    {_, _} = binary:match(
+        Second, <<"<span class=\"name account\"><a href=\"/user/carol\">carol</a></span>">>
+    ).
 
 %% a provider that gives no name: nothing to tick, and ticking it anyway
 %% signs nothing
@@ -520,11 +527,11 @@ a_new_name_is_on_old_posts(Config) ->
     {303, Headers, _} = sign(Config, "/board/b/new", Session, <<"signed before the change">>),
     N = thread(Headers),
     {ok, Before} = file:read_file(page_file(Config, N)),
-    {_, _} = binary:match(Before, <<"\">fay</span>">>),
+    {_, _} = binary:match(Before, <<"\">fay</a></span>">>),
     _ = login(Config, <<"fay">>, #{preferred_username => <<"faye">>}),
     ok = until(fun() ->
         {ok, After} = file:read_file(page_file(Config, N)),
-        binary:match(After, <<"\">faye</span>">>) =/= nomatch
+        binary:match(After, <<"\">faye</a></span>">>) =/= nomatch
     end),
     %% and losing the name altogether leaves the post nobody's to read
     _ = login(Config, <<"fay">>, #{preferred_username => null}),
@@ -571,3 +578,26 @@ until(Fun, Tries) ->
             timer:sleep(50),
             until(Fun, Tries - 1)
     end.
+
+%% a post may carry a title, which heads its thread and lists it on its
+%% board; a signed name leads to the account's page, which lists what it
+%% signed and nothing it did not
+titled_and_named(Config) ->
+    Session = login(Config, <<"gus">>),
+    {303, H, _} = post(Config, "/board/b/new", Session, <<"about it">>, [
+        {<<"signed">>, <<"1">>}, {<<"title">>, <<"<xmpp> & friends">>}
+    ]),
+    N = thread(H),
+    {ok, Page} = file:read_file(page_file(Config, N)),
+    {_, _} = binary:match(Page, <<"<h1>&lt;xmpp&gt; &amp; friends</h1>">>),
+    {_, _} = binary:match(Page, <<"<span class=\"title\">&lt;xmpp&gt; &amp; friends</span>">>),
+    {_, _} = binary:match(Page, <<"<a href=\"/user/gus\">gus</a>">>),
+    {200, _, Index} = request(Config, get, "/board/b", [], none),
+    {_, _} = binary:match(Index, <<"&lt;xmpp&gt; &amp; friends">>),
+    {303, _, _} = post(Config, "/board/b/new", Session, <<"not signed">>),
+    {200, _, User} = request(Config, get, "/user/gus", [], none),
+    {_, _} = binary:match(User, list_to_binary("href=\"/p/" ++ integer_to_list(N) ++ "\"")),
+    nomatch = binary:match(User, <<"not signed">>),
+    {404, _, _} = request(Config, get, "/user/nobody-here", [], none),
+    %% a title is one short line
+    {400, _, _} = post(Config, "/board/b/new", Session, <<"x">>, [{<<"title">>, <<"two\nlines">>}]).

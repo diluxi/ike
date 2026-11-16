@@ -20,7 +20,9 @@
     %% order; the post may then have no text
     upload => {Account :: ike_id:actor(), Uploads :: [pos_integer(), ...]},
     %% what the poster may retract it with later, as given
-    password => binary()
+    password => binary(),
+    %% a title, one line
+    title => binary()
 }.
 
 %% what a moderator does, and to what: a post by its number, an account
@@ -107,7 +109,12 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
             #{password := Given} when byte_size(Given) > 0 -> sealed(Given);
             _ -> undefined
         end,
-    case call({post, ike_id:to_integer(Actor), Home, Body, Upload, Password}) of
+    Title =
+        case Post of
+            #{title := Given0} when byte_size(Given0) > 0 -> Given0;
+            _ -> undefined
+        end,
+    case call({post, ike_id:to_integer(Actor), Home, Body, Upload, Password, Title}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
@@ -323,11 +330,16 @@ handle_call({local_actor, Issuer, Subject, Nick}, _From, Conn) when
                 Other
         end,
     {reply, Reply, Conn};
-handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
-    is_integer(Actor), is_binary(Body), (is_binary(Password) orelse Password =:= undefined)
+handle_call({post, Actor, Home, Body, Upload, Password, Title}, _From, Conn) when
+    is_integer(Actor),
+    is_binary(Body),
+    (is_binary(Password) orelse Password =:= undefined),
+    (is_binary(Title) orelse Title =:= undefined)
 ->
     %% a post with an image may say nothing else
-    Fits = text(Body) orelse (Upload =/= none andalso Body =:= <<>>),
+    Fits =
+        (text(Body) orelse (Upload =/= none andalso Body =:= <<>>)) andalso
+            (Title =:= undefined orelse titled(Title)),
     Reply =
         case Fits of
             true ->
@@ -342,6 +354,17 @@ handle_call({post, Actor, Home, Body, Upload, Password}, _From, Conn) when
                                         case Password of
                                             undefined -> ok;
                                             _ -> ike_db:q(Conn, Sealed, [Id, {blob, Password}])
+                                        end,
+                                    _ =
+                                        case Title of
+                                            undefined ->
+                                                ok;
+                                            _ ->
+                                                ike_db:q(
+                                                    Conn,
+                                                    <<"UPDATE post SET title = ?2 WHERE id = ?1">>,
+                                                    [Id, Title]
+                                                )
                                         end,
                                     case attach(Conn, Id, Upload, Time) of
                                         {ok, Assets} ->
@@ -1355,7 +1378,7 @@ revised(Conn, Name, Actor, Body, Base, Time) ->
             case post(Conn, Actor, {new, <<"wiki">>}, Time, Body) of
                 {ok, {Id, Threads}} ->
                     Steps = [
-                        {<<"UPDATE post SET revision = 1 WHERE id = ?1">>, [Id]},
+                        {<<"UPDATE post SET revision = 1, title = ?2 WHERE id = ?1">>, [Id, Name]},
                         {<<"INSERT INTO page (name, thread) VALUES (?1, ?2)">>, [Name, Id]}
                     ],
                     case {steps(Conn, Steps), ike_db:q(Conn, Pointing, [Name])} of
@@ -2036,6 +2059,12 @@ touched(Conn, Id, Home) ->
 
 %% what a post may hold: utf-8, not empty, not huge, and no control
 %% characters but newline and tab
+%% a title: one line of text, short
+-spec titled(binary()) -> boolean().
+titled(Title) ->
+    byte_size(Title) =< 300 andalso length(string:to_graphemes(Title)) =< 100 andalso text(Title) andalso
+        binary:match(Title, <<"\n">>) =:= nomatch.
+
 -spec text(binary()) -> boolean().
 text(Body) when byte_size(Body) =:= 0; byte_size(Body) > ?MAX_BODY ->
     false;

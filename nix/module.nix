@@ -11,7 +11,7 @@
 	media = "/var/cache/ike/media";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
-	csp = "default-src 'none'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+	csp = "default-src 'none'; style-src 'self'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 	# the stripper's socket; a unit behind it runs once per upload
 	stripSocket = "/run/ike-strip/strip.sock";

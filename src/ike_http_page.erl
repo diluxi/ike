@@ -8,6 +8,14 @@
 -spec init(cowboy_req:req(), State) -> {ok, cowboy_req:req(), State}.
 init(Req, missing = State) ->
     {ok, ike_http:not_found(Req), State};
+init(Req, style = State) ->
+    case file:read_file(<<(ike_config:pages_dir())/binary, "/style.css">>) of
+        {ok, Css} ->
+            Headers = (ike_http:headers())#{<<"content-type">> => <<"text/css; charset=utf-8">>},
+            {ok, cowboy_req:reply(200, Headers, Css, Req), State};
+        {error, _} ->
+            {ok, ike_http:not_found(Req), State}
+    end;
 init(Req, State) ->
     %% from what the route bound, never from the path as it was sent: the
     %% router resolves dots and escapes, a file name must not have to

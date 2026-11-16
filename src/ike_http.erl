@@ -41,9 +41,11 @@ dispatch() ->
         {'_', [
             {"/health", ike_http_health, []},
             {"/", ike_http_page, front},
+            {"/style.css", ike_http_page, style},
             {"/board", ike_http_page, boards},
             {"/booru", ike_http_page, booru},
             {"/booru/search", ike_http_search, []},
+            {"/user/:name", ike_http_user, []},
             {"/wiki", ike_http_wiki, index},
             {"/wiki/:name", ike_http_wiki, page},
             {"/wiki/:name/edit", ike_http_wiki, edit},
@@ -101,7 +103,7 @@ headers() ->
 -spec csp() -> binary().
 csp() ->
     Media = ike_config:media_origin(),
-    <<"default-src 'none'; img-src ", Media/binary, "; media-src ", Media/binary,
+    <<"default-src 'none'; style-src 'self'; img-src ", Media/binary, "; media-src ", Media/binary,
         "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>.
 
 -spec html(cowboy:http_status(), iodata(), cowboy_req:req()) -> cowboy_req:req().

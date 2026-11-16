@@ -26,6 +26,7 @@
     | input
     | label
     | li
+    | link
     | main
     | meta
     | nav
@@ -58,6 +59,7 @@
         | method
         | name
         | poster
+        | rel
         | preload
         | rows
         | src
@@ -68,7 +70,9 @@
     }
     | required
     | multiple
-    | controls.
+    | controls
+    | reversed
+    | open.
 
 -opaque html() :: {text, binary()} | {el, tag(), [attr()], [html()]}.
 
@@ -95,7 +99,9 @@ document(Title, Body) ->
                 ],
                 []
             ),
-            el(title, [text(Title)])
+            el(title, [text(Title)]),
+            %% plain looks, from this origin; nothing depends on them
+            el(link, [{rel, <<"stylesheet">>}, {href, <<"/style.css">>}], [])
         ]),
         el(body, Body)
     ]).
@@ -122,6 +128,8 @@ render({el, Tag, Attrs, Children}) ->
 attr(required) -> <<" required">>;
 attr(multiple) -> <<" multiple">>;
 attr(controls) -> <<" controls">>;
+attr(reversed) -> <<" reversed">>;
+attr(open) -> <<" open">>;
 attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 
 %% void elements have no content and no end tag; children given to one
@@ -129,6 +137,7 @@ attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 -spec void(tag()) -> boolean().
 void(br) -> true;
 void(img) -> true;
+void(link) -> true;
 void(input) -> true;
 void(meta) -> true;
 void(_) -> false.
@@ -164,6 +173,7 @@ tag(html) -> <<"html">>;
 tag(input) -> <<"input">>;
 tag(label) -> <<"label">>;
 tag(li) -> <<"li">>;
+tag(link) -> <<"link">>;
 tag(main) -> <<"main">>;
 tag(meta) -> <<"meta">>;
 tag(nav) -> <<"nav">>;
@@ -195,6 +205,7 @@ name(maxlength) -> <<"maxlength">>;
 name(method) -> <<"method">>;
 name(name) -> <<"name">>;
 name(poster) -> <<"poster">>;
+name(rel) -> <<"rel">>;
 name(preload) -> <<"preload">>;
 name(rows) -> <<"rows">>;
 name(src) -> <<"src">>;

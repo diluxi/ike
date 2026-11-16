@@ -911,3 +911,23 @@ Decisions lux made in answer to `questions.md` are marked (lux).
   page (what points at it) are not shown yet.
 - *Not yet:* renames and redirects, tag pages, the threaded view,
   promoting a reply to a thread or a page.
+
+## The look of things (lux, 2026-11-16)
+
+- **A stylesheet,** `/style.css`, plain: what a revision adds green, what
+  it takes red, a revision's count beside its header until opened, the
+  gone grey, titles bold. Written by the renderer, served by ike, and
+  allowed by `style-src 'self'`. Nothing depends on it. Invariant 2 now
+  allows exactly that one `<link>`.
+- **A wiki page's thread is its history and its talk,** newest first
+  (`<ol reversed>`): each revision shows what it changed of the one
+  before, folded in a `<details>` beside its header (`+2 -1`), the
+  newest open; replies that are not revisions read as posts.
+  `/wiki/NAME/history` leads to the thread; `wiki_history = separate`
+  brings the separate page back, should that be wanted.
+- **Posts may have a title,** one line of at most 100 characters, on
+  both post forms. A titled thread is headed and listed by its title; a
+  wiki page's thread is titled with its name.
+- **A signed name links to `/user/NAME`,** the account's page: what it
+  signed, newest first, made per request. Lux's user boards grow from
+  here (Q10, Q14).

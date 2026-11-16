@@ -22,12 +22,17 @@ name(Typed) ->
 
 -spec diff(Before :: binary(), After :: binary()) -> [change()].
 diff(Before, After) ->
-    A = binary:split(Before, <<"\n">>, [global]),
-    B = binary:split(After, <<"\n">>, [global]),
+    A = lines(Before),
+    B = lines(After),
     case length(A) =< ?MOST andalso length(B) =< ?MOST of
         true -> walk(A, B, table(list_to_tuple(A), list_to_tuple(B)));
         false -> [{removed, L} || L <- A] ++ [{added, L} || L <- B]
     end.
+
+%% no text is no lines, not one empty one
+-spec lines(binary()) -> [binary()].
+lines(<<>>) -> [];
+lines(Text) -> binary:split(Text, <<"\n">>, [global]).
 
 %% the lengths of the longest common subsequences of every pair of
 %% suffixes, as a map from {I, J}
