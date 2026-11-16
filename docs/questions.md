@@ -66,10 +66,6 @@ here.
   trigger read-only, etc." Which logs (the `action` rows naming the
   account, the journal?), and what read-only means (no posts at all, or
   no posts by nobody)? Not built.
-- **Q30 Blocklisting when a hold ends.** Planning's Purge row puts the
-  hash on the blocklist, so a deleted post whose hold ends blocks its
-  image for good, even one deleted only as off-topic. Built that way;
-  should a hold's end destroy the image without blocking it?
 - **Q31 Who sees staged uploads.** lux, 2026-11-16: moderators should
   see and search everyone's uploads, as on Danbooru, where all uploads
   are public with their metadata; private ones may make sense later,
@@ -86,6 +82,21 @@ here.
   nothing about anyone) would fix it, if wanted. And a kept profile's
   own text tags (its description) may name a device; blanking them
   leaves colour alone. Neither is built.
+- **Q33 Asking after the first deploy (2026-11-16).** lux's answers so
+  far: hiding and deleting never destroy or block an image (was Q30);
+  files on the post form; uploads without an account behind an admin's
+  switch, still images only (against A1 as written). Open:
+  - after a delete's hold, does the text still go for good (planning
+    lines 167, 200)? If it goes and its images stay, it is not a purge;
+  - deleting one's own post: not a moderation; for an unsigned post, a
+    per-browser secret in a cookie and a keyed hash of it per post
+    (beyond "nothing but contents", planning line 11);
+  - "svf": SWF (M6, P8) or SVG (never, P5)?
+  - moderating from the boards: pages made per request for anyone
+    logged in, static for everyone else;
+  - meshes, Live2D, MMD: as opaque downloads from a sandboxed origin
+    without previews, or wait until previews (JavaScript) are allowed;
+  - the wiki before the public launch means lifting S2.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 
