@@ -51,8 +51,9 @@ machine.wait_for_unit("ike-strip.socket")
 machine.succeed("socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock </etc/ike-test/base.png >/tmp/stripped")
 machine.succeed("head -n1 /tmp/stripped | grep '^ok png 61 47 '")
 machine.succeed("echo not-an-image | socat -t 60 - UNIX-CONNECT:/run/ike-strip/strip.sock | grep -x 'no not-an-image'")
-for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes", "RestrictAddressFamilies=none"]:
+for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes"]:
 	machine.succeed(f"systemctl show -p {prop.split('=')[0]} ike-strip@probe.service | grep -x '{prop}'")
+machine.succeed("systemctl cat ike-strip@probe.service | grep -x 'RestrictAddressFamilies=none'")
 # the upload form says how to log in; the media origin has nothing but
 # what a signed link names, and pages may show images from it only
 machine.succeed("curl -fsS http://localhost/upload | grep -q 'log in'")
