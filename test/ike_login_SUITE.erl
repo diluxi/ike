@@ -282,8 +282,16 @@ only_forms_are_read(Config) ->
         "--\r\n"
     ],
     Type = "multipart/form-data; boundary=" ++ Boundary,
-    {415, _, _} = request(
+    %% multipart is read since files came to the post form, and what is
+    %% no image is not taken: no post, no upload
+    {Status, _, _} = request(
         Config, post, "/board/b/new", cookies(Session), {Type, iolist_to_binary(Multipart)}
+    ),
+    true = lists:member(Status, [403, 422]),
+    [[0]] = query(
+        Config,
+        "SELECT count(*) FROM upload u JOIN actor a ON a.id = u.actor WHERE a.subject = 'frank'",
+        []
     ),
     Json = json:encode(#{csrf => list_to_binary(Csrf), body => <<"text">>}),
     {415, _, _} = request(

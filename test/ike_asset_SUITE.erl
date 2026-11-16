@@ -17,7 +17,9 @@
     a_blocked_image_does_not_come_back/1,
     the_uploader_can_be_suspended/1,
     a_post_shows_several/1,
-    a_video_plays/1
+    a_video_plays/1,
+    files_on_the_post_form/1,
+    nobody_posts_still_images_when_let/1
 ]).
 
 -import(ike_browser, [login/2, login/3, post/5, request/5, query/3, cookies/1, upload/3, media/2]).
@@ -32,7 +34,10 @@ all() ->
         a_blocked_image_does_not_come_back,
         the_uploader_can_be_suspended,
         a_post_shows_several,
-        a_video_plays
+        a_video_plays,
+        files_on_the_post_form,
+        %% last: it starts ike again with the switch on
+        nobody_posts_still_images_when_let
     ].
 
 init_per_suite(Config) ->
@@ -407,3 +412,91 @@ a_video_plays(Config) ->
     Mkv = <<16#1A, 16#45, 16#DF, 16#A3, "not really a video">>,
     {422, _, Refused} = upload(Config, Session, [{<<"x.mkv">>, Mkv}]),
     {_, _} = binary:match(Refused, <<"file 1: not taken<">>).
+
+%% the post form as a browser sends it with files: its token first
+post_with_files(Config, Headers, Path, Token, Text, Files) ->
+    {Type, Body} = ike_browser:multipart(
+        [{field, <<"csrf">>, Token}, {field, <<"body">>, Text}] ++
+            [{file, <<"file">>, F} || F <- Files]
+    ),
+    request(Config, post, Path, Headers, {Type, Body}).
+
+files_on_the_post_form(Config) ->
+    #{csrf := Csrf} = Session = login(Config, <<"oneform">>),
+    %% the form takes files, with no trip through /upload
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+    {_, _} = binary:match(Form, <<"enctype=\"multipart/form-data\"">>),
+    {_, _} = binary:match(Form, <<"<input type=\"file\"">>),
+    {303, H, _} = post_with_files(
+        Config,
+        cookies(Session),
+        "/board/b/new",
+        list_to_binary(Csrf),
+        <<"in one go">>,
+        [{<<"a.png">>, read(Config, "base.png")}, {<<"b.webm">>, read(Config, "base.webm")}]
+    ),
+    {200, _, Page} = request(Config, get, page(H), [], none),
+    {_, _} = binary:match(Page, <<"<img src=\"http://media.test/">>),
+    {_, _} = binary:match(Page, <<"<video src=\"http://media.test/">>),
+    %% one that is no image fails the post, and nothing of it is kept
+    Before = ike_browser:posts(Config),
+    {422, _, Refused} = post_with_files(
+        Config,
+        cookies(Session),
+        "/board/b/new",
+        list_to_binary(Csrf),
+        <<"no">>,
+        [{<<"x.txt">>, <<"plain text">>}]
+    ),
+    {_, _} = binary:match(Refused, <<"file 1: not taken">>),
+    Before = ike_browser:posts(Config),
+    %% and a form from elsewhere has its files never read
+    {403, _, _} = post_with_files(
+        Config,
+        cookies(Session),
+        "/board/b/new",
+        <<"wrong">>,
+        <<"no">>,
+        [{<<"a.png">>, read(Config, "base.png")}]
+    ),
+    %% nobody posts no files while the switch is off
+    ok = ike_browser:unlock(Config, <<"b">>),
+    {Token, Cookie, _} = ike_browser:form(Config, "/board/b/new", []),
+    {403, _, _} = post_with_files(
+        Config,
+        [{"cookie", "__Host-ike-form=" ++ Cookie}],
+        "/board/b/new",
+        list_to_binary(Token),
+        <<"mine">>,
+        [{<<"a.png">>, read(Config, "base.png")}]
+    ).
+
+nobody_posts_still_images_when_let(Config0) ->
+    ike_browser:stop(),
+    Config = ike_browser:start(Config0, [{anonymous_uploads, true}]),
+    ok = ike_browser:unlock(Config, <<"meta">>),
+    {Token, Cookie, _} = ike_browser:form(Config, "/board/meta/new", []),
+    Headers = [{"cookie", "__Host-ike-form=" ++ Cookie}],
+    {200, _, Form} = request(Config, get, "/board/meta/new", Headers, none),
+    {_, _} = binary:match(Form, <<"accept=\"image/jpeg,image/png,image/webp\"">>),
+    {303, H, _} = post_with_files(
+        Config,
+        Headers,
+        "/board/meta/new",
+        list_to_binary(Token),
+        <<"from nobody">>,
+        [{<<"a.png">>, read(Config, "base.png")}]
+    ),
+    {200, _, Page} = request(Config, get, page(H), [], none),
+    {_, _} = binary:match(Page, <<"<img src=\"http://media.test/">>),
+    %% the upload is nobody's, and was never staged
+    [[1, 1]] = query(Config, "SELECT u.actor, u.posted IS NOT NULL FROM upload u", []),
+    %% what moves is not nobody's to post
+    {422, _, _} = post_with_files(
+        Config,
+        Headers,
+        "/board/meta/new",
+        list_to_binary(Token),
+        <<"a video">>,
+        [{<<"v.webm">>, read(Config, "base.webm")}]
+    ).

@@ -931,3 +931,17 @@ Decisions lux made in answer to `questions.md` are marked (lux).
 - **A signed name links to `/user/NAME`,** the account's page: what it
   signed, newest first, made per request. Lux's user boards grow from
   here (Q10, Q14).
+
+## Files on the post form (lux, 2026-11-16)
+
+- **Both post forms are multipart** and take files beside the text and
+  any ticked uploads; each file is stripped and kept as an upload, then
+  posted with the text, all or none. `/upload` stays for batches.
+- **The token comes first:** `ike_http:submitted/2` reads fields in
+  order and reads no file before the form's token has matched (the
+  session's, or for nobody the form cookie's). Invariant 5 now posts a
+  file that is no image to the post form: refused, nothing kept.
+- **Nobody posts files only when `anonymousUploads` is on** (off by
+  default; lux, against A1 as written): still images only, an animated
+  PNG refused, posted at once as uploads of the anonymous actor, never
+  staged (invariant 10 has nothing of nobody's to guard).

@@ -5,7 +5,7 @@
 -export([child_spec/0]).
 -export([headers/0]).
 -export([html/3, page/3, reply/2, not_found/1, forbidden/1, see_other/2, form/1, pairs/1]).
--export([same_origin/1, guarded/1]).
+-export([same_origin/1, guarded/1, submitted/2]).
 
 %% what a form may weigh; caddy caps bodies at the same size
 -define(FORM_BYTES, 65536).
@@ -138,6 +138,95 @@ forbidden(Req) ->
         <<"not allowed">>, <<"log in at /login, and send forms from this site's own pages.">>
     ),
     page(403, Html, Req).
+
+%% a post form as sent: plain, or multipart with files. Token is what the
+%% form's csrf field must hold, checked against the fields read so far
+%% before the first file is read, so that no file
+%% from a form sent from elsewhere is ever read, let alone stripped; the
+%% form puts its token first (hazard I2)
+-spec submitted(cowboy_req:req(), Token :: binary() | none) ->
+    {ok, [{binary(), binary()}], [binary()], cowboy_req:req()}
+    | {error, cowboy:http_status(), cowboy_req:req()}.
+submitted(Req0, Token) ->
+    Multipart =
+        try cowboy_req:parse_header(<<"content-type">>, Req0) of
+            {<<"multipart">>, <<"form-data">>, _} -> true;
+            _ -> false
+        catch
+            _:_ -> false
+        end,
+    case Multipart of
+        false ->
+            case pairs(Req0) of
+                {ok, Pairs, Req} -> {ok, Pairs, [], Req};
+                {error, _, _} = Error -> Error
+            end;
+        true ->
+            #{max_bytes := Max, files := Most} = ike_config:strip(),
+            parts(Req0, Token, Max, Most, [], [])
+    end.
+
+-spec parts(
+    cowboy_req:req(),
+    binary() | none,
+    pos_integer(),
+    pos_integer(),
+    [{binary(), binary()}],
+    [binary()]
+) ->
+    {ok, [{binary(), binary()}], [binary()], cowboy_req:req()}
+    | {error, cowboy:http_status(), cowboy_req:req()}.
+parts(Req0, Token, Max, Most, Fields, Files) ->
+    Opts = #{length => ?FORM_BYTES, period => 5000},
+    try cowboy_req:read_part(Req0, Opts) of
+        {ok, Headers, Req1} ->
+            case cow_multipart:form_data(#{K => V || K := V <- Headers, is_binary(V)}) of
+                {data, Name} ->
+                    case cowboy_req:read_part_body(Req1, Opts) of
+                        {ok, Value, Req2} ->
+                            parts(Req2, Token, Max, Most, Fields ++ [{Name, Value}], Files);
+                        {more, _, Req2} ->
+                            {error, 413, Req2}
+                    end;
+                {file, _, _, _} when length(Files) >= Most ->
+                    {error, 413, Req1};
+                {file, _, _, _} ->
+                    case token(Token, Fields) of
+                        false ->
+                            {error, 403, Req1};
+                        true ->
+                            case file_body(Req1, Max, <<>>) of
+                                {ok, <<>>, Req2} ->
+                                    parts(Req2, Token, Max, Most, Fields, Files);
+                                {ok, Bytes, Req2} ->
+                                    parts(Req2, Token, Max, Most, Fields, Files ++ [Bytes]);
+                                {too_large, Req2} ->
+                                    {error, 413, Req2}
+                            end
+                    end
+            end;
+        {done, Req1} ->
+            {ok, Fields, Files, Req1}
+    catch
+        _:_ -> {error, 400, Req0}
+    end.
+
+-spec token(binary() | none, [{binary(), binary()}]) -> boolean().
+token(Token, [{<<"csrf">>, Value} | _]) when is_binary(Token) ->
+    byte_size(Token) =:= byte_size(Value) andalso crypto:hash_equals(Token, Value);
+token(Token, [_ | Rest]) ->
+    token(Token, Rest);
+token(_, _) ->
+    false.
+
+-spec file_body(cowboy_req:req(), integer(), binary()) ->
+    {ok, binary(), cowboy_req:req()} | {too_large, cowboy_req:req()}.
+file_body(Req0, Left, Acc) ->
+    case cowboy_req:read_part_body(Req0, #{length => 1048576, period => 15000}) of
+        {_, Data, Req} when byte_size(Data) > Left -> {too_large, Req};
+        {ok, Data, Req} -> {ok, <<Acc/binary, Data/binary>>, Req};
+        {more, Data, Req} -> file_body(Req, Left - byte_size(Data), <<Acc/binary, Data/binary>>)
+    end.
 
 %% what stands in for a session's token on the forms of pages that are
 %% the same for everyone (/act, tagging): one place to change, should

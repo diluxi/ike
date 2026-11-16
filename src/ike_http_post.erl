@@ -58,7 +58,10 @@ form({Board, _} = Place, Req) ->
                         open ->
                             {Token, Req1} = form_token(Req),
                             {Password, Req2} = kept_password(Req1),
-                            Html = ike_view:post_form(action(Place), {nobody, Token, Password}),
+                            Html = ike_view:post_form(
+                                action(Place),
+                                {nobody, Token, Password, ike_config:anonymous_uploads()}
+                            ),
                             ike_http:page(200, Html, Req2);
                         _ ->
                             ike_http:page(200, ike_view:post_form(action(Place), locked), Req)
@@ -111,38 +114,60 @@ form_token(Req) ->
 nobody({Board, _} = Place, Req0) ->
     case ike_reader:board(Board) of
         open ->
-            case {ike_http_login:cookie(?FORM, Req0), ike_http:form(Req0)} of
-                {{ok, Cookie}, {ok, #{<<"csrf">> := Token} = Form, Req}} when
-                    byte_size(Cookie) =:= 43
-                ->
-                    case
-                        byte_size(Token) =:= byte_size(Cookie) andalso
-                            crypto:hash_equals(Token, Cookie)
-                    of
-                        true ->
-                            case exists(Place) of
-                                true -> unhurried(Place, Form, Req);
-                                false -> ike_http:not_found(Req)
-                            end;
-                        false ->
-                            ike_http:forbidden(Req)
+            Cookie =
+                case ike_http_login:cookie(?FORM, Req0) of
+                    {ok, C} when byte_size(C) =:= 43 -> C;
+                    _ -> none
+                end,
+            case ike_http:submitted(Req0, Cookie) of
+                {ok, Pairs, Files, Req} ->
+                    Form = maps:from_list(Pairs),
+                    Matches = Cookie =/= none andalso same(field(<<"csrf">>, Pairs), Cookie),
+                    case {Matches, exists(Place), Files, ike_config:anonymous_uploads()} of
+                        {false, _, _, _} ->
+                            ike_http:forbidden(Req);
+                        {true, false, _, _} ->
+                            ike_http:not_found(Req);
+                        {true, true, [], _} ->
+                            unhurried(Place, Form, #{}, Req);
+                        {true, true, [_ | _], false} ->
+                            Html = ike_view:message(
+                                <<"not posted">>, <<"posting files here needs an account.">>
+                            ),
+                            ike_http:page(403, Html, Req);
+                        {true, true, [_ | _], true} ->
+                            %% nobody's files are still images only (lux), and
+                            %% posted at once: nothing of nobody's is staged
+                            case kept(ike_id:anonymous(), Files, still) of
+                                {ok, Ids} ->
+                                    unhurried(
+                                        Place, Form, #{upload => {ike_id:anonymous(), Ids}}, Req
+                                    );
+                                {refused, Lines} ->
+                                    refused(Lines, Req)
+                            end
                     end;
-                {_, {error, Status, Req}} ->
-                    ike_http:reply(Status, Req);
-                {_, {ok, _, Req}} ->
-                    ike_http:forbidden(Req)
+                {error, 403, Req} ->
+                    ike_http:forbidden(Req);
+                {error, Status, Req} ->
+                    ike_http:reply(Status, Req)
             end;
         _ ->
             ike_http:forbidden(Req0)
     end.
 
 %% the board's own pace, counted only for posts that would go through
--spec unhurried(place(), #{binary() => binary()}, cowboy_req:req()) -> cowboy_req:req().
-unhurried({Board, _} = Place, Form, Req) ->
+-spec unhurried(
+    place(),
+    #{binary() => binary()},
+    #{upload => {ike_id:actor(), [pos_integer(), ...]}},
+    cowboy_req:req()
+) -> cowboy_req:req().
+unhurried({Board, _} = Place, Form, Upload, Req) ->
     Body = maps:get(<<"body">>, Form, <<>>),
     case ike_limit:board(Board) of
         ok ->
-            write(Place, ike_id:anonymous(), Body, password(Form), Req);
+            write(Place, ike_id:anonymous(), Body, maps:merge(Upload, password(Form)), Req);
         limited ->
             Html = ike_view:message(
                 <<"slow down">>,
@@ -155,9 +180,25 @@ unhurried({Board, _} = Place, Form, Req) ->
 submit(Place, Req0) ->
     case ike_http_login:session(Req0) of
         {ok, _Id, #{actor := Account, csrf := Csrf, name := Name}} ->
-            case ike_http:pairs(Req0) of
-                {ok, Pairs, Req} ->
+            case ike_http:submitted(Req0, Csrf) of
+                {ok, Pairs, [], Req} ->
                     signed_in(Place, {Account, Csrf, Name}, Pairs, Req);
+                {ok, Pairs, Files, Req} ->
+                    %% the files first, as uploads of the account's; the
+                    %% post then shows them after any ticked
+                    case kept(Account, Files, any) of
+                        {ok, Ids} ->
+                            signed_in(
+                                Place,
+                                {Account, Csrf, Name},
+                                Pairs ++ [{<<"upload">>, integer_to_binary(I)} || I <- Ids],
+                                Req
+                            );
+                        {refused, Lines} ->
+                            refused(Lines, Req)
+                    end;
+                {error, 403, Req} ->
+                    ike_http:forbidden(Req);
                 {error, Status, Req} ->
                     ike_http:reply(Status, Req)
             end;
@@ -219,6 +260,70 @@ signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
         _ ->
             ike_http:forbidden(Req)
     end.
+
+%% files sent with a post, each stripped and kept as an upload of Actor's;
+%% all of them, or none and why. still: images that do not move only
+-spec kept(ike_id:actor(), [binary()], any | still) ->
+    {ok, [pos_integer()]} | {refused, [binary()]}.
+kept(Actor, Files, Which) ->
+    Results = numbered(Actor, Files, Which, 1),
+    case [L || {refused, L} <- Results] of
+        [] -> {ok, [I || {ok, I} <- Results]};
+        Lines -> {refused, Lines}
+    end.
+
+-spec one(ike_id:actor(), pos_integer(), binary(), any | still) ->
+    {ok, pos_integer()} | {refused, binary()}.
+one(Actor, N, Bytes, Which) ->
+    Which0 = <<"file ", (integer_to_binary(N))/binary, ": ">>,
+    case ike_strip:run(Bytes) of
+        {ok, #{type := Type, stored := Stored} = Stripped} ->
+            Still =
+                lists:member(Type, [jpeg, png, webp]) andalso
+                    binary:match(Stored, <<"acTL">>) =:= nomatch,
+            case Which =:= any orelse Still of
+                true ->
+                    case
+                        ike_writer:upload(#{actor => Actor, original => Bytes, stripped => Stripped})
+                    of
+                        {ok, Id} -> {ok, Id};
+                        {error, refused} -> {refused, <<Which0/binary, "not taken">>};
+                        {error, _} -> {refused, <<Which0/binary, "not kept, try again">>}
+                    end;
+                false ->
+                    {refused, <<Which0/binary, "not taken">>}
+            end;
+        {no, _} ->
+            {refused, <<Which0/binary, "not taken">>};
+        {error, unavailable} ->
+            {refused, <<Which0/binary, "not kept, try again">>}
+    end.
+
+-spec refused([binary()], cowboy_req:req()) -> cowboy_req:req().
+refused(Lines, Req) ->
+    Html = ike_view:message(<<"not posted">>, joined(Lines)),
+    ike_http:page(422, Html, Req).
+
+-spec numbered(ike_id:actor(), [binary()], any | still, pos_integer()) ->
+    [{ok, pos_integer()} | {refused, binary()}].
+numbered(Actor, [Bytes | Rest], Which, N) ->
+    [one(Actor, N, Bytes, Which) | numbered(Actor, Rest, Which, N + 1)];
+numbered(_Actor, [], _Which, _N) ->
+    [].
+
+-spec joined([binary()]) -> binary().
+joined([L]) -> L;
+joined([L | Ls]) -> <<L/binary, "; ", (joined(Ls))/binary>>;
+joined([]) -> <<>>.
+
+-spec field(binary(), [{binary(), binary()}]) -> binary().
+field(Name, [{Name, Value} | _]) -> Value;
+field(Name, [_ | Rest]) -> field(Name, Rest);
+field(_Name, []) -> <<>>.
+
+-spec same(binary(), binary()) -> boolean().
+same(A, B) ->
+    byte_size(A) =:= byte_size(B) andalso crypto:hash_equals(A, B).
 
 %% a password to retract the post with later, if one was given, and a
 %% title, if one was

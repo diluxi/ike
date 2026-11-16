@@ -5,7 +5,7 @@
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0]).
 -export([assets_dir/0, media_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
--export([images/0, booru_at_once/0, wiki_history/0]).
+-export([images/0, booru_at_once/0, wiki_history/0, anonymous_uploads/0]).
 
 -export_type([oidc/0, limit/0, strip/0]).
 
@@ -305,4 +305,13 @@ wiki_history() ->
     case application:get_env(ike, wiki_history) of
         {ok, separate} -> separate;
         _ -> thread
+    end.
+
+%% whether nobody may post files, still images only: an admin's switch,
+%% off unless turned on after deploying (lux; hazard A1)
+-spec anonymous_uploads() -> boolean().
+anonymous_uploads() ->
+    case application:get_env(ike, anonymous_uploads) of
+        {ok, true} -> true;
+        _ -> false
     end.

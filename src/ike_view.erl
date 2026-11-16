@@ -408,49 +408,56 @@ index() ->
     Action :: binary(),
     {csrf, binary(), Name :: binary() | none, Staged :: [{pos_integer(), Thumb :: binary()}],
         Password :: binary()}
-    | {nobody, Token :: binary(), Password :: binary()}
+    | {nobody, Token :: binary(), Password :: binary(), Files :: boolean()}
     | locked
 ) ->
     ike_html:html().
-post_form(Action, {nobody, Token, Password}) ->
+post_form(Action, {nobody, Token, Password, Files}) ->
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
-        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
-            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}], []),
-            ike_html:el(p, [
-                ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
-                ike_html:el(br, []),
-                ike_html:el(
-                    input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
-                ),
-                ike_html:el(br, []),
-                ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
-                ike_html:el(br, []),
-                ike_html:el(
-                    textarea,
-                    [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
-                    []
-                )
-            ]),
-            ike_html:el(p, [
-                ike_html:el(label, [{for, <<"password">>}], [
-                    ike_html:text(<<"password, to retract it later; this browser keeps it ">>)
-                ]),
-                ike_html:el(
-                    input,
+        ike_html:el(
+            form, [{method, <<"post">>}, {action, Action}, {enctype, <<"multipart/form-data">>}], [
+                ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}], []),
+                ike_html:el(p, [
+                    ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
+                    ike_html:el(br, []),
+                    ike_html:el(
+                        input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
+                    ),
+                    ike_html:el(br, []),
+                    ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
+                    ike_html:el(br, []),
+                    ike_html:el(
+                        textarea,
+                        [{id, <<"body">>}, {name, <<"body">>}, {rows, <<"8">>}, required],
+                        []
+                    )
+                ])
+                | [files_field(still) || Files] ++
                     [
-                        {type, <<"text">>},
-                        {id, <<"password">>},
-                        {name, <<"password">>},
-                        {value, Password}
-                    ],
-                    []
-                )
-            ]),
-            ike_html:el(p, [
-                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
-            ])
-        ]),
+                        ike_html:el(p, [
+                            ike_html:el(label, [{for, <<"password">>}], [
+                                ike_html:text(
+                                    <<"password, to retract it later; this browser keeps it ">>
+                                )
+                            ]),
+                            ike_html:el(
+                                input,
+                                [
+                                    {type, <<"text">>},
+                                    {id, <<"password">>},
+                                    {name, <<"password">>},
+                                    {value, Password}
+                                ],
+                                []
+                            )
+                        ]),
+                        ike_html:el(p, [
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+                        ])
+                    ]
+            ]
+        ),
         ike_html:el(p, [
             ike_html:text(
                 <<"posted without an account: nothing is kept but the text (and a password, if given, as a salted hash). or ">>
@@ -538,47 +545,49 @@ post_form(Action, {csrf, Csrf, Name, Staged, Password}) ->
     Token = ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
     layout(<<"post">>, [
         ike_html:el(h1, [ike_html:text(<<"post">>)]),
-        ike_html:el(form, [{method, <<"post">>}, {action, Action}], [
-            Token,
-            ike_html:el(p, [
-                ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
-                ike_html:el(br, []),
-                ike_html:el(
-                    input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
-                ),
-                ike_html:el(br, []),
-                ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
-                ike_html:el(br, []),
-                ike_html:el(
-                    textarea,
-                    Area,
-                    []
-                )
-            ])
-            | Pick ++ Signed ++
-                [
-                    ike_html:el(p, [
-                        ike_html:el(label, [{for, <<"password">>}], [
-                            ike_html:text(
-                                <<"password, to retract it later; this browser keeps it ">>
+        ike_html:el(
+            form, [{method, <<"post">>}, {action, Action}, {enctype, <<"multipart/form-data">>}], [
+                Token,
+                ike_html:el(p, [
+                    ike_html:el(label, [{for, <<"title">>}], [ike_html:text(<<"title (optional)">>)]),
+                    ike_html:el(br, []),
+                    ike_html:el(
+                        input, [{id, <<"title">>}, {name, <<"title">>}, {maxlength, <<"100">>}], []
+                    ),
+                    ike_html:el(br, []),
+                    ike_html:el(label, [{for, <<"body">>}], [ike_html:text(<<"text">>)]),
+                    ike_html:el(br, []),
+                    ike_html:el(
+                        textarea,
+                        Area,
+                        []
+                    )
+                ])
+                | Pick ++ [files_field(any)] ++ Signed ++
+                    [
+                        ike_html:el(p, [
+                            ike_html:el(label, [{for, <<"password">>}], [
+                                ike_html:text(
+                                    <<"password, to retract it later; this browser keeps it ">>
+                                )
+                            ]),
+                            ike_html:el(
+                                input,
+                                [
+                                    {type, <<"text">>},
+                                    {id, <<"password">>},
+                                    {name, <<"password">>},
+                                    {value, Password}
+                                ],
+                                []
                             )
                         ]),
-                        ike_html:el(
-                            input,
-                            [
-                                {type, <<"text">>},
-                                {id, <<"password">>},
-                                {name, <<"password">>},
-                                {value, Password}
-                            ],
-                            []
-                        )
-                    ]),
-                    ike_html:el(p, [
-                        ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
-                    ])
-                ]
-        ]),
+                        ike_html:el(p, [
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+                        ])
+                    ]
+            ]
+        ),
         ike_html:el(form, [{method, <<"post">>}, {action, <<"/logout">>}], [
             Token,
             ike_html:el(p, [
@@ -1282,6 +1291,24 @@ changes([{Kind, Line} | Rest]) ->
     end;
 changes([]) ->
     [].
+
+%% files to post with the text: any kind for an account, still images
+%% for nobody (when the switch lets nobody post files at all)
+-spec files_field(any | still) -> ike_html:html().
+files_field(Which) ->
+    Accept =
+        case Which of
+            any -> <<"image/jpeg,image/png,image/webp,video/webm,video/mp4">>;
+            still -> <<"image/jpeg,image/png,image/webp">>
+        end,
+    ike_html:el(p, [
+        ike_html:el(label, [{for, <<"file">>}], [ike_html:text(<<"files ">>)]),
+        ike_html:el(
+            input,
+            [{type, <<"file">>}, {id, <<"file">>}, {name, <<"file">>}, {accept, Accept}, multiple],
+            []
+        )
+    ]).
 
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().

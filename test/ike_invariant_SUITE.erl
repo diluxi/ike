@@ -615,11 +615,16 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         "\r\n--b\r\ncontent-disposition: form-data; name=\"file\"; filename=\"a.html\"\r\n",
         "content-type: text/html\r\n\r\n<script>alert(1)</script>\r\n--b--\r\n"
     ]),
-    {415, _, _} = ike_browser:request(
+    %% the post form takes files too: this one is no image, and nothing
+    %% of it is kept, nor any post made
+    Kept = fun() -> ike_browser:query(Config, "SELECT count(*) FROM asset", []) end,
+    Assets = Kept(),
+    {422, _, _} = ike_browser:request(
         Config, post, "/board/b/new", Cookies, {"multipart/form-data; boundary=b", Multipart}
     ),
-    %% the upload form is the one multipart form, and it reads no file
-    %% that does not come after the form's token
+    Assets = Kept(),
+    %% the upload form, as the post form, reads no file that does not
+    %% come after the form's token
     Uploads = fun() -> ike_browser:query(Config, "SELECT count(*) FROM upload", []) end,
     Held = Uploads(),
     {403, _, _} = ike_browser:request(
@@ -1651,7 +1656,7 @@ posted(Config, Session, Text) ->
 submit(Config, Cookies, Html, Action, Text) ->
     {match, [Form]} = re:run(
         Html,
-        "<form method=\"post\" action=\"" ++ Action ++ "\">(.*?)</form>",
+        "<form method=\"post\" action=\"" ++ Action ++ "\"[^>]*>(.*?)</form>",
         [dotall, {capture, all_but_first, binary}]
     ),
     {match, Hidden} = re:run(
@@ -1671,7 +1676,7 @@ submit(Config, Cookies, Html, Action, Text) ->
 act(Config, Cookies, Html, Action, Kind, Reason) ->
     {match, Forms} = re:run(
         Html,
-        "<form method=\"post\" action=\"" ++ Action ++ "\">(.*?)</form>",
+        "<form method=\"post\" action=\"" ++ Action ++ "\"[^>]*>(.*?)</form>",
         [global, dotall, {capture, all_but_first, binary}]
     ),
     [Form] = [

@@ -51,6 +51,7 @@
 				{media_origin, <<"${cfg.media.origin}">>},
 				{staged_seconds, ${toString cfg.media.stagedSeconds}},
 				{images, ${toString cfg.media.images}},
+				{anonymous_uploads, ${lib.boolToString cfg.media.anonymousUploads}},
 				{limit, #{
 					posts => ${toString cfg.limit.posts},
 					seconds => ${toString cfg.limit.seconds},
@@ -260,6 +261,15 @@ in {
 					own, ideally a registered domain of its own (hazard P3).
 					Pages name it, so changing it is a restart, which renders
 					them all again.
+				'';
+			};
+			anonymousUploads = lib.mkOption {
+				type = lib.types.bool;
+				default = false;
+				description = ''
+					Whether posts without an account may carry files: still images
+					only, posted at once. Off until an admin turns it on (hazard
+					A1: an open image host is a target from its first day).
 				'';
 			};
 			images = lib.mkOption {
