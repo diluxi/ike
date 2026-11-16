@@ -1,6 +1,6 @@
 # ike — status
 
-Updated 2026-11-15. Milestone: **M1 Board**, started on lux's word.
+Updated 2026-11-16. Milestone: **M1 Board**, started on lux's word.
 
 ## M0
 
@@ -35,17 +35,23 @@ Each a branch on the one before, starting from `phi/sessions`.
    (0377cc7), against phi.md's same-commit rule. Suites still open
    boards by SQL for setup, so that the log's posts do not shift their
    numbers; the lock form is tested in `ike_mod_SUITE`.
-6. **Assets:** the sandboxed pipeline, stripping with its corpus and
-   determinism test, thumbnails, the media origin, uploads, hash dedup
-   and hash bans; invariants 5, 6, 9 and 11 for real.
+6. **Assets** (`phi/assets`): done but for what is listed below; see
+   decisions.md. `ike-strip` (jpegtran, libvips, a Zig chunk filter)
+   in a sandboxed unit per upload behind a unix socket; uploads staged
+   for their uploader through signed links on the media origin; posts
+   that show one, with the media origin's files following what is
+   shown; dedup; block, unblock and purge of an image by hash.
+   Invariants 6, 10 and 11 are real; 2, 3, 5, 7, 8 and 9 extended.
+   Still owed: uploads without an account (I4's switch, before a public
+   launch), staged uploads expiring, blocking a hash that no post shows,
+   thumbnails on the board index.
 7. **Notice and action, Impressum.**
 
 ## Next
 
-Step 6, once the tools (Q23), the upload-to-account link (Q27) and the
-media domain (Q28) are settled. Step 7 is set aside: no Impressum in
-ike, and notice and action waits until ike is hosted for real.
-Everything up to `phi/mod` is on origin.
+What step 6 still owes (above), unless lux says otherwise. Step 7 is set
+aside. `phi/assets` is local until pushed; the full checks run once per
+finished slice now (decisions.md), not at every commit.
 
 1945743 to 8b9cc29 carry the fable cert though made under opus; from
 7bb2f49 on, commits carry the opus cert.
@@ -59,12 +65,9 @@ Everything up to `phi/mod` is on origin.
 - **Step 5's stubs:** the hold period (14 days); purge and snapshots
   (Q21, Q8); hashes in purge entries (Q22); what admins do beyond
   moderators (Q29). Ranked roles are built (decisions.md).
-- **Before step 6**, which cannot start in pieces: its first commit has
-  to bring the port runner, a stripper, the fixture corpus and the
-  determinism test together, since invariants 3, 5, 6 and 11 all change
-  with it. Needed: the tools (Q23), the upload-to-account link (Q27),
-  the media domain (Q28), size caps. Settled: a template unit for the
-  sandbox, staging in M1.
+- **Step 6's stubs:** the size caps (`services.ike.strip`); the media
+  host is `cdn.amartia.online` on lux's word, same-site with ike until it
+  moves (decisions.md); hashes in purge entries (Q22, none shown).
 - **Q18:** whether a keyed hash of an address may live in memory at
   all. Step 4's limiter assumes yes.
 - **Q17:** the limiter key's lifetime. (Q19: moderators now lock and
