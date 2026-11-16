@@ -57,17 +57,21 @@ Each a branch on the one before, starting from `phi/sessions`.
 
 Branches past `dev`, in order, each with full checks passing:
 `phi/account`, `phi/trash`, `phi/retract`, `phi/inline`, `phi/booru`,
-`phi/tags`, `phi/video`, `phi/wiki`. `phi/video` and `phi/wiki` may not
-be on origin: the last push gave no answer (ssh agent).
+`phi/tags`, `phi/video`, `phi/wiki`, `phi/look` (titles, user pages,
+the wiki page's thread as its history, diff colours), `phi/postfiles`
+(files on the post form, the anonymous upload switch), `phi/traits`
+(raster, image, animation, video, audio tags), `phi/markup` (a DText
+subset, ctrl+enter, ctrl+b, ctrl+i).
 
-- **M1 owes:** files on the post form, the anonymous upload switch
-  (still images and static meshes only, by lux's rule), vichan's "file"
-  box.
+- **M1 owes:** vichan's "file" box; static meshes for anons once meshes
+  exist.
+- **Tags by what an entry is owe:** `vector` (with SVG) and `mesh`.
 - **M2 owes:** entries from `/upload`, versions and upgrades, paging,
   tag aliases and implications (BURs are M4), GIF, meshes (rule in
   decisions.md).
 - **M3 owes:** renames and redirects, tag pages, the threaded view,
-  promotion of a reply, static page files.
+  promotion of a reply, static page files, reverting a revision.
+- **Markup owes:** nested lists, tables, markup in titles.
 
 ## Blocked on lux
 
