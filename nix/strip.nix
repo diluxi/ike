@@ -29,6 +29,9 @@ stdenvNoCC.mkDerivation {
 		install -Dm755 ike-chunks $out/libexec/ike-chunks
 		install -Dm755 ike-strip $out/bin/ike-strip
 		install -Dm755 ike-font $out/libexec/ike-font
+		# no /usr/bin/env where ike-strip runs: the python with fontTools
+		substituteInPlace $out/libexec/ike-font \
+			--replace-fail '#!/usr/bin/env python3' '#!${python}/bin/python3' 
 		wrapProgram $out/bin/ike-strip --set PATH ${lib.makeBinPath [
 			bash
 			coreutils
