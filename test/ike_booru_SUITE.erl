@@ -1,4 +1,6 @@
-%% The booru, from outside: an entry for every posted image, one for the
+%% The booru, from outside, with booru_at_once on (lux, 2026-11-17: off
+%% unless asked; a tack makes a meta, and curation makes entries, which
+%% ike_curate_SUITE tests): an entry for every posted image, one for the
 %% same bytes however often posted, its page and the booru's, ##N in
 %% posts with its reverse, a gap where a version was purged, and entries
 %% made for images posted before there was a booru.
@@ -31,7 +33,7 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    ike_browser:start(Config, []).
+    ike_browser:start(Config, [{booru_at_once, true}]).
 
 end_per_suite(_Config) ->
     ike_browser:stop().
@@ -232,10 +234,13 @@ tagged_and_found(Config) ->
     403 = tag(Config, Here, E1, "nobody_tag"),
     403 = tag(Config, cookies(Session), E1, "no_origin"),
     [[0]] = query(Config, "SELECT count(*) FROM tag WHERE name IN ('nobody_tag', 'no_origin')", []),
-    %% the entry's page lists them, linked to a search, and what changed
+    %% the entry's page lists them, linked to a search, and what changed,
+    %% as a revision in its thread (unsigned: no name)
     {200, _, Page} = request(Config, get, "/booru/" ++ E1, [], none),
     {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=blue_hair\"">>),
-    {_, _} = binary:match(Page, <<"+blue_hair long_hair rating:s">>),
+    {_, _} = binary:match(
+        Page, <<"<ins><a href=\"/booru/search?tags=rating:s\">rating:s</a></ins>">>
+    ),
     nomatch = binary:match(Page, <<"tagger">>),
     %% the history keeps who
     [[_Actor]] = query(Config, "SELECT actor FROM tag_change WHERE booru = ? LIMIT 1", [

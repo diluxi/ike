@@ -38,6 +38,18 @@ init(Req, State) ->
     case {cowboy_req:method(Req), Name} of
         {_, none} ->
             {ok, ike_http:not_found(Req), State};
+        %% the trunk's threads are read where they belong: a meta's page or
+        %% its curation's (lux: no board of their own)
+        {_, <<"board/trunk">>} ->
+            {ok, ike_http:see_other(<<"/trunk">>, Req), State};
+        {_, <<"board/trunk/", _/binary>>} ->
+            Where =
+                case ike_reader:attached(cowboy_req:binding(thread, Req)) of
+                    {booru, Owner} -> <<"/booru/", (integer_to_binary(Owner))/binary>>;
+                    {meta, M} -> <<"/trunk/", (integer_to_binary(M))/binary>>;
+                    none -> <<"/trunk">>
+                end,
+            {ok, ike_http:see_other(Where, Req), State};
         {Method, _} when Method =:= <<"GET">>; Method =:= <<"HEAD">> ->
             Path = <<(ike_config:pages_dir())/binary, "/", Name/binary, ".html">>,
             case file:read_file(Path) of

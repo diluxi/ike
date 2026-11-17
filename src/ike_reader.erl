@@ -7,7 +7,7 @@
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
--export([metas/1, meta/2, known/2, axes/1]).
+-export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -38,7 +38,10 @@
     %% most), and what its owner's upload of it said of itself
     family := binary() | none,
     axes := [{binary(), float(), float(), float()}],
-    commentary := [{binary(), binary()}]
+    commentary := [{binary(), binary()}],
+    %% its comment thread, and the curation made of it, if shown
+    thread := pos_integer() | none,
+    curation := pos_integer() | none
 }.
 
 %% a staged upload as its uploader is shown it
@@ -262,6 +265,56 @@ first_public([#{private := false} = M | _]) -> {ok, M};
 first_public([_ | Ms]) -> first_public(Ms);
 first_public([]) -> none.
 
+%% a meta's comments, in the order they came: its thread's posts that are
+%% not taken down, whether or not the thread is shown to everyone (a
+%% private meta's is not). who may read them is the asker's to have
+%% checked, by the meta (invariant 10)
+-spec comments(Thread :: pos_integer()) -> [ike_view:post()].
+comments(Thread) ->
+    case gen_server:call(?MODULE, {comments, Thread}) of
+        {ok, Rows} when is_list(Rows) ->
+            Names = ike_config:anonymous_names(),
+            [
+                #{
+                    id => Id,
+                    time => Time,
+                    body => Body,
+                    name =>
+                        case Name of
+                            _ when is_binary(Name) -> {account, Name};
+                            _ -> {nobody, anonymous(Id, Names)}
+                        end,
+                    links => links(Body),
+                    replies => [],
+                    revision => Revision =:= 1
+                }
+             || [Id, Time, Body, Name, Revision] <- Rows,
+                is_integer(Id),
+                is_integer(Time),
+                is_binary(Body)
+            ];
+        _ ->
+            []
+    end.
+
+%% what an attached thread belongs to: a curation, or else a meta
+-spec attached(term()) -> {booru, pos_integer()} | {meta, pos_integer()} | none.
+attached(Thread) when is_integer(Thread), Thread > 0 ->
+    case gen_server:call(?MODULE, {attached, Thread}) of
+        {ok, [[E, _]]} when is_integer(E), E > 0 -> {booru, E};
+        {ok, [[_, M]]} when is_integer(M), M > 0 -> {meta, M};
+        _ -> none
+    end;
+attached(_) ->
+    none.
+
+-spec anonymous(integer(), [binary(), ...]) -> binary().
+anonymous(Id, [First | _] = Names) ->
+    case lists:nth(Id rem length(Names) + 1, Names) of
+        Name when is_binary(Name) -> Name;
+        _ -> First
+    end.
+
 %% a font's axes as the writer kept them, one a line
 -spec axes(binary() | undefined) -> [{binary(), float(), float(), float()}].
 axes(Axes) when is_binary(Axes) ->
@@ -326,7 +379,9 @@ metas_of([
         Entry,
         Family,
         Axes,
-        Said
+        Said,
+        Thread,
+        Curation
     ]
     | Rows
 ]) when
@@ -347,7 +402,9 @@ metas_of([
     (is_integer(Entry) orelse Entry =:= undefined),
     (is_binary(Family) orelse Family =:= undefined),
     (is_binary(Axes) orelse Axes =:= undefined),
-    (is_binary(Said) orelse Said =:= undefined)
+    (is_binary(Said) orelse Said =:= undefined),
+    (is_integer(Thread) orelse Thread =:= undefined),
+    (is_integer(Curation) orelse Curation =:= undefined)
 ->
     [
         #{
@@ -383,7 +440,17 @@ metas_of([
                     undefined -> none
                 end,
             axes => axes(Axes),
-            commentary => commentary(Said)
+            commentary => commentary(Said),
+            thread =>
+                case Thread of
+                    T when is_integer(T), T > 0 -> T;
+                    _ -> none
+                end,
+            curation =>
+                case Curation of
+                    C when is_integer(C), C > 0 -> C;
+                    _ -> none
+                end
         }
         | metas_of(Rows)
     ];
@@ -709,7 +776,8 @@ handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
         " CASE WHEN m.signed = 1 THEN a.name END, m.state,"
         " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset),"
         " x.family, x.axes, (SELECT u.commentary FROM upload u WHERE u.asset = m.asset"
-        " AND u.actor = m.owner ORDER BY u.id DESC LIMIT 1)"
+        " AND u.actor = m.owner ORDER BY u.id DESC LIMIT 1), m.thread,"
+        " (SELECT e.id FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.meta = m.id)"
         " FROM meta m JOIN asset x ON x.hash = m.asset JOIN actor a ON a.id = m.owner"
         " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1))"
         " OR (m.state = 2 AND m.owner = ?1) OR ?2 = 1)"
@@ -723,6 +791,17 @@ handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
             {asset, H} when is_binary(H) -> {undefined, {blob, H}}
         end,
     {reply, ike_db:q(Conn, Sql, [Actor, Moderator, Id, Asset]), Conn};
+handle_call({attached, Thread}, _From, Conn) when is_integer(Thread) ->
+    Sql = <<
+        "SELECT (SELECT id FROM booru WHERE thread = ?1), (SELECT id FROM meta WHERE thread = ?1)"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Thread]), Conn};
+handle_call({comments, Thread}, _From, Conn) when is_integer(Thread) ->
+    Sql = <<
+        "SELECT p.id, p.time, p.body, a.name, p.revision FROM post p"
+        " JOIN actor a ON a.id = p.actor WHERE p.thread = ?1 AND p.state = 0 ORDER BY p.id"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Thread]), Conn};
 handle_call({tacks, Hash}, _From, Conn) when is_binary(Hash) ->
     Sql = <<
         "SELECT DISTINCT pa.post FROM post_image pa JOIN shown s ON s.id = pa.post"
@@ -737,7 +816,7 @@ handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->
     >>,
     {reply, ike_db:q(Conn, Sql, [Upload]), Conn};
 handle_call(boards, _From, Conn) ->
-    Sql = <<"SELECT name, title, locked FROM board WHERE log = 0 ORDER BY name">>,
+    Sql = <<"SELECT name, title, locked FROM board WHERE log = 0 AND attached = 0 ORDER BY name">>,
     {reply, ike_db:q(Conn, Sql, []), Conn};
 handle_call(suspended, _From, Conn) ->
     Sql = <<"SELECT id, name, rank FROM actor WHERE banned = 1 ORDER BY id">>,

@@ -111,7 +111,7 @@ named_or_anonymous(Config) ->
     {200, _, Taken} = request(Config, get, Unsigned, [], none),
     {_, _} = binary:match(Taken, <<"<a href=\"/user/namer\">namer</a>">>),
     nomatch = binary:match(
-        element(3, request(Config, get, Unsigned, cookies(Session), none)), <<"sign as">>
+        element(3, request(Config, get, Unsigned, cookies(Session), none)), <<"name=\"sign\"">>
     ),
     %% a file posted with a signed post bears the name; with an unsigned
     %% one it does not
@@ -252,8 +252,18 @@ known_bytes_lead_to_them(Config) ->
     {303, Third, _} = upload(Config, C, Hidden, []),
     MetaB = proplists:get_value("location", Third),
     2 = Count(HiddenHex),
-    %% and to its booru entry, if it has one
+    %% and to its curation, if it has one
     Posted = png(4, 2, 23),
     {303, _, _} = posted(Config, A, <<"entered">>, [], [{<<"x.png">>, Posted}]),
+    {PostedMeta, _} = newest(Config, <<"first-up">>),
+    #{csrf := Csrf} = A,
+    {303, Curated, _} = request(
+        Config,
+        post,
+        PostedMeta ++ "/curate",
+        cookies(A),
+        {form, uri_string:compose_query([{"csrf", Csrf}, {"tags", "x"}])}
+    ),
+    "/booru/" ++ _ = Entry = proplists:get_value("location", Curated),
     {303, Entered, _} = upload(Config, B, Posted, []),
-    "/booru/" ++ _ = proplists:get_value("location", Entered).
+    Entry = proplists:get_value("location", Entered).

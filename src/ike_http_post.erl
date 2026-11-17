@@ -403,8 +403,14 @@ page({Board, Thread}) ->
 action({_, new} = Place) -> <<(page(Place))/binary, "/new">>;
 action(Place) -> <<(page(Place))/binary, "/reply">>.
 
-%% a board or a thread on it exists when its page does
+%% a board or a thread on it exists when its page does; the trunk has no
+%% pages, and no new threads: one of its threads exists when it belongs
+%% to a curation or a meta (the writer takes no post for one not shown)
 -spec exists(place()) -> boolean().
+exists({<<"trunk">>, new}) ->
+    false;
+exists({<<"trunk">>, Thread}) when Thread =/= new ->
+    ike_reader:attached(ike_id:to_integer(Thread)) =/= none;
 exists(Place) ->
     filelib:is_regular(<<(ike_config:pages_dir())/binary, (page(Place))/binary, ".html">>).
 

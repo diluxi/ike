@@ -1112,7 +1112,7 @@ lux's model, in lux's words where they are given:
   to the posts and entries showing them.
 - *Not yet:* paging, curations in the list (marked), comments on a meta.
 
-## Curation (lux, 2026-11-17; to build next)
+## Curation (lux, 2026-11-17; built: see "Curation, first slice")
 
 - **Every asset goes the same way:** uploaded (by a tack, by a user
   bringing their own work, later by archiving another site's post), it
@@ -1257,3 +1257,52 @@ lux's model, in lux's words where they are given:
   font has no width or height (null, shown as none).
 - **Found on the way:** purge_image unlinked only a still image's files,
   never a video's; it now unlinks every kind (invariant 8).
+
+## Curation, first slice (lux, 2026-11-17)
+
+- **A tack makes a meta and no entry:** `booru_at_once` (planning's open
+  item, line 243) now defaults to off, on lux's word; it stays a switch,
+  and the booru and asset suites test with it on.
+- **Curating:** on a public, shown meta's page, any account enters tags
+  (space-separated, `-name` takes one off) and posts it to the booru,
+  signed or not. That makes a booru entry (the curation) of its asset,
+  with the tags given and what the asset is (inherent tags), owned by
+  the meta's owner and named as the meta is. The meta's page then leads
+  to it, and `/trunk` lists the meta marked "curated as ##N", linking
+  there. Bytes already on the booru are not curated again; the form
+  leads to their entry.
+- **One thread:** a meta's comment thread lives on the board `trunk`,
+  attached (`board.attached`): no index, no thread pages
+  (`/board/trunk` leads to `/trunk`, a thread's page to its curation or
+  meta), no new threads from forms, not in board lists, accounts only
+  (locked). Curated, the meta's thread simply becomes the curation's
+  (`booru.thread`), so nothing is copied; replies go through the
+  thread's own reply form and are read on the curation's page.
+- **Revisions between the comments** (lux): the curation and every
+  change to its tags or commentary is a post marked `revision` in the
+  thread, holding the whole state (tags on the first line, commentary
+  after). The page shows each as what it changed of the one before, in
+  a `<details>` beside its header: "tags +2 -1, commentary +1",
+  coloured, with the tags put on and taken off and the commentary's
+  lines; titled `##N n`. Not reversed, unlike the wiki. Signed as the
+  account asks (a "sign" box), else anonymous; an account's change right
+  after its own signed revision is folded into it, as the wiki's amend
+  (Q37). The tag history (`tag_change`) still keeps the account.
+- **The curation page** keeps its Danbooru-like shape: the asset (a
+  font tried out), its owner, tags, commentary, one form for tags and
+  commentary, versions, where it is shown, then the comments. An entry
+  with no thread (made at once, before curation) shows the old tag
+  history list instead.
+- **Privacy:** the `shown` view (migration 0025) shows an attached
+  thread only as its curation or its public, shown meta is shown. So a
+  private meta's comments are in no page made for everyone, on no user
+  page, in no reply list, and not found by `/p/N` (a permalink finds only
+  what everyone is shown, so not even their owner gets one). They are
+  read on the meta's own page, by whoever may see the meta, and only
+  they comment there. Invariant 10's test now covers this.
+- *Simplification:* only public metas are curated. Curating a private
+  meta privately (lux: a comic tagged before release) needs a curation
+  page for its owner and moderators alone, beside the static, public
+  one: Q45.
+- *Simplification:* commentary is plain text (lines kept), not markup;
+  the font's own commentary stays on its meta's page.

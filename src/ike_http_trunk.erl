@@ -28,7 +28,18 @@ init(Req, meta = State) ->
             {_, N} when is_integer(N) -> ike_http:reply(405, Req);
             _ -> ike_http:not_found(Req)
         end,
-    {ok, Reply, State}.
+    {ok, Reply, State};
+%% a comment on a meta, or the meta curated: by an account that may see
+%% it, with the session's token
+init(Req, What) when What =:= comment; What =:= curate ->
+    Reply =
+        case {cowboy_req:method(Req), cowboy_req:binding(meta, Req)} of
+            {<<"POST">>, N} when is_integer(N), N > 0, What =:= comment -> acted(comment, N, Req);
+            {<<"POST">>, N} when is_integer(N), N > 0 -> acted(curate, N, Req);
+            {<<"POST">>, _} -> ike_http:not_found(Req);
+            _ -> ike_http:reply(405, Req)
+        end,
+    {ok, Reply, What}.
 
 -spec viewer(cowboy_req:req()) ->
     {ike_reader:viewer(), none | {ike_id:actor(), binary(), binary() | none}}.
@@ -77,16 +88,105 @@ links(#{upload := Upload, type := Type, width := W, height := H}) ->
 shown(Id, Req) ->
     {#{moderator := Moderator} = Viewer, Session} = viewer(Req),
     case ike_reader:meta(Id, Viewer) of
-        {ok, #{mine := Mine} = Meta, Posts} ->
+        %% curated: what is known of it is the curation's now (lux)
+        {ok, #{curation := Entry}, _} when is_integer(Entry) ->
+            ike_http:see_other(<<"/booru/", (integer_to_binary(Entry))/binary>>, Req);
+        {ok, #{mine := Mine, thread := Thread} = Meta, Posts} ->
             {Csrf, Name} =
                 case {Mine, Session} of
                     {true, {_, C, N}} -> {C, N};
                     _ -> {none, none}
                 end,
-            Who = #{csrf => Csrf, moderator => Moderator, name => Name},
+            Account =
+                case Session of
+                    {_, C1, N1} -> {C1, N1};
+                    none -> none
+                end,
+            Comments =
+                case Thread of
+                    _ when is_integer(Thread) -> ike_reader:comments(Thread);
+                    none -> []
+                end,
+            Who = #{
+                csrf => Csrf,
+                moderator => Moderator,
+                name => Name,
+                account => Account,
+                comments => Comments
+            },
             ike_http:page(200, ike_view:meta(Meta, links(Meta), Posts, Who), Req);
         none ->
             ike_http:not_found(Req)
+    end.
+
+%% a comment, signed if asked and the account has a name, or the meta
+%% curated with the tags given; only by an account that may see it
+-spec acted(comment | curate, pos_integer(), cowboy_req:req()) -> cowboy_req:req().
+acted(What, Id, Req0) ->
+    Here = <<"/trunk/", (integer_to_binary(Id))/binary>>,
+    case {viewer(Req0), ike_http:form(Req0)} of
+        {{Viewer, {Actor, Csrf, Name}}, {ok, #{<<"csrf">> := Token} = Form, Req}} ->
+            Fair = byte_size(Token) =:= byte_size(Csrf) andalso crypto:hash_equals(Token, Csrf),
+            Signed = is_binary(Name) andalso maps:get(<<"signed">>, Form, <<>>) =:= <<"1">>,
+            case {Fair, ike_reader:meta(Id, Viewer)} of
+                {false, _} ->
+                    ike_http:forbidden(Req);
+                {true, none} ->
+                    ike_http:not_found(Req);
+                {true, {ok, _, _}} when What =:= comment ->
+                    By =
+                        case Signed of
+                            true -> Actor;
+                            false -> ike_id:anonymous()
+                        end,
+                    case ike_writer:comment(Id, By, maps:get(<<"body">>, Form, <<>>)) of
+                        {ok, Post} ->
+                            _ = ike_render:sync(),
+                            P = integer_to_binary(ike_id:to_integer(Post)),
+                            ike_http:see_other(<<Here/binary, "#p", P/binary>>, Req);
+                        {error, bad_text} ->
+                            ike_http:page(
+                                400,
+                                ike_view:message(
+                                    <<"not posted">>,
+                                    <<"a comment is text: not empty, not too long, no control characters.">>
+                                ),
+                                Req
+                            );
+                        {error, _} ->
+                            ike_http:reply(500, Req)
+                    end;
+                {true, {ok, _, _}} ->
+                    Tags = ike_tag:edit(maps:get(<<"tags">>, Form, <<>>)),
+                    case ike_writer:curate(Id, Actor, Signed, Tags) of
+                        {ok, Entry} ->
+                            _ = ike_render:sync(),
+                            ike_http:see_other(
+                                <<"/booru/", (integer_to_binary(Entry))/binary>>, Req
+                            );
+                        {error, {curated, Entry}} when is_integer(Entry) ->
+                            ike_http:see_other(
+                                <<"/booru/", (integer_to_binary(Entry))/binary>>, Req
+                            );
+                        {error, not_public} ->
+                            ike_http:page(
+                                409,
+                                ike_view:message(
+                                    <<"not curated">>,
+                                    <<"only a public meta goes to the booru, for now.">>
+                                ),
+                                Req
+                            );
+                        {error, no_such_meta} ->
+                            ike_http:not_found(Req);
+                        {error, _} ->
+                            ike_http:reply(500, Req)
+                    end
+            end;
+        {_, {ok, _, Req}} ->
+            ike_http:forbidden(Req);
+        {_, {error, Status, Req}} ->
+            ike_http:reply(Status, Req)
     end.
 
 %% the owner makes it private, or public (unless the bytes have a public

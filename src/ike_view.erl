@@ -26,7 +26,10 @@
     revision => boolean(),
     changes => [ike_wiki:change()],
     %% a wiki page's first post, out of view: its title and nothing else
-    tombstone => true
+    tombstone => true,
+    %% a curation's revision: the tags it put on and took off (its
+    %% changes are then its commentary's)
+    curation => {[binary()], [binary()]}
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -239,6 +242,31 @@ post(
     %% the newest
     {Folded, Text} =
         case Post of
+            #{revision := true, changes := Changes, curation := {On, Off}} ->
+                Lines = {
+                    length([x || {added, _} <- Changes]), length([x || {removed, _} <- Changes])
+                },
+                Summary =
+                    [ike_html:text(<<"tags ">>) | counted({length(On), length(Off)})] ++
+                        [ike_html:text(<<", commentary ">>) | counted(Lines)],
+                Open = [open || Id =:= Newest],
+                {
+                    [
+                        ike_html:text(<<" ">>),
+                        ike_html:el(details, Open, [
+                            ike_html:el(summary, Summary),
+                            ike_html:el(
+                                p,
+                                spaced(
+                                    [ike_html:el(ins, [tag_link(T)]) || T <- On] ++
+                                        [ike_html:el(del, [ike_html:text(T)]) || T <- Off]
+                                )
+                            )
+                            | [ike_html:el(p, changes(Changes)) || Changes =/= []]
+                        ])
+                    ],
+                    []
+                };
             #{revision := true, changes := Changes} ->
                 Added = length([x || {added, _} <- Changes]),
                 Removed = length([x || {removed, _} <- Changes]),
@@ -293,6 +321,25 @@ post(
         [{id, Anchor}],
         [Header | figures(maps:get(images, Post, []))] ++ Text ++ replies(maps:get(replies, Post))
     ).
+
+%% a revision's count, coloured: +n green, -n red, = for no change
+-spec counted({non_neg_integer(), non_neg_integer()}) -> [ike_html:html()].
+counted({0, 0}) ->
+    [ike_html:text(<<"=">>)];
+counted({Added, Removed}) ->
+    [
+        ike_html:el(span, [{class, <<"added">>}], [
+            ike_html:text(<<"+", (integer_to_binary(Added))/binary>>)
+        ])
+     || Added > 0
+    ] ++
+        [ike_html:text(<<" ">>) || Added > 0, Removed > 0] ++
+        [
+            ike_html:el(span, [{class, <<"removed">>}], [
+                ike_html:text(<<"-", (integer_to_binary(Removed))/binary>>)
+            ])
+         || Removed > 0
+        ].
 
 -spec figures([image() | gone]) -> [ike_html:html()].
 figures([Image | Images]) -> figure(Image) ++ figures(Images);
@@ -938,28 +985,46 @@ staged(#{id := Id, type := Type, width := W, height := H, file := File, thumb :=
     ]).
 
 %% the trunk: the metas the asker may see, newest first, each its
-%% thumbnail, linking to its page; a private one says so, and one a
-%% moderator took down says how
+%% thumbnail, linking to its page, or to its curation, marked, once it is
+%% curated; a private one says so, and one a moderator took down says how
 -spec trunk([{ike_reader:meta(), image()}]) -> ike_html:html().
 trunk(Metas) ->
     layout(<<"trunk">>, [
         ike_html:el(h1, [ike_html:text(<<"trunk">>)]),
         ike_html:el(p, [
-            ike_html:text(<<"every upload, as it came in, tagged or not. ">>),
+            ike_html:text(<<"every upload, as it came in, curated or not. ">>),
             anchor(<<"/upload">>, <<"upload">>)
         ]),
         ike_html:el(ul, [
             ike_html:el(li, [
-                ike_html:el(a, [{href, meta_path(Id)}], [
-                    ike_html:el(
-                        img, [{src, Thumb}, {alt, <<Type/binary, " ", (number(Id))/binary>>}], []
-                    )
-                ])
-                | [ike_html:text(<<" private">>) || Private] ++
+                ike_html:el(
+                    a,
+                    [
+                        {href,
+                            case Curation of
+                                none -> meta_path(Id);
+                                C -> <<"/booru/", (integer_to_binary(C))/binary>>
+                            end}
+                    ],
+                    [
+                        ike_html:el(
+                            img,
+                            [{src, Thumb}, {alt, <<Type/binary, " ", (number(Id))/binary>>}],
+                            []
+                        )
+                    ]
+                )
+                | [
+                    ike_html:text(<<" curated as ##", (integer_to_binary(C1))/binary>>)
+                 || C1 <- [Curation], is_integer(C1)
+                ] ++
+                    [ike_html:text(<<" private">>) || Private] ++
                     [ike_html:text(<<" ", (atom_to_binary(State))/binary>>) || State =/= shown]
             ])
-         || {#{id := Id, type := Type, private := Private, state := State}, #{thumb := Thumb}} <-
-                Metas
+         || {
+                #{id := Id, type := Type, private := Private, state := State, curation := Curation},
+                #{thumb := Thumb}
+            } <- Metas
         ])
     ]).
 
@@ -979,10 +1044,17 @@ number(Id) ->
     ike_reader:meta(),
     image(),
     [pos_integer()],
-    #{csrf := binary() | none, moderator := boolean(), name := binary() | none}
+    #{
+        csrf := binary() | none,
+        moderator := boolean(),
+        name := binary() | none,
+        account := {binary(), binary() | none} | none,
+        comments := [post()]
+    }
 ) ->
     ike_html:html().
-meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}) ->
+meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer} = Who) ->
+    #{account := Account, comments := Comments} = Who,
     #{
         id := Id,
         type := Type,
@@ -996,9 +1068,113 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         state := State,
         family := Family,
         axes := Axes,
-        commentary := Said
+        commentary := Said,
+        entry := Entry
     } = Meta,
     Title = <<"meta ", (number(Id))/binary>>,
+    Here = meta_path(Id),
+    Sign = fun(Name) ->
+        case Name of
+            none ->
+                [];
+            _ ->
+                [
+                    ike_html:el(
+                        input,
+                        [{type, <<"checkbox">>}, {name, <<"signed">>}, {value, <<"1">>}],
+                        []
+                    ),
+                    ike_html:text(<<" sign as ", Name/binary, " ">>)
+                ]
+        end
+    end,
+    %% tagged and posted to the booru: by any account, while the meta is
+    %% public and shown and its bytes on the booru nowhere yet
+    Curate =
+        case {Account, Private, State, Entry} of
+            {{Token, Name0}, false, shown, none} ->
+                [
+                    ike_html:el(h2, [ike_html:text(<<"curate">>)]),
+                    ike_html:el(
+                        form, [{method, <<"post">>}, {action, <<Here/binary, "/curate">>}], [
+                            ike_html:el(
+                                input,
+                                [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}],
+                                []
+                            ),
+                            ike_html:el(p, [
+                                ike_html:el(label, [{for, <<"tags">>}], [
+                                    ike_html:text(<<"tags, space-separated ">>)
+                                ]),
+                                ike_html:el(
+                                    input,
+                                    [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}],
+                                    []
+                                )
+                            ]),
+                            ike_html:el(
+                                p,
+                                Sign(Name0) ++
+                                    [
+                                        ike_html:el(button, [{type, <<"submit">>}], [
+                                            ike_html:text(<<"post to the booru">>)
+                                        ])
+                                    ]
+                            )
+                        ]
+                    )
+                ];
+            {_, _, _, E} when is_integer(E) ->
+                [
+                    ike_html:el(p, [
+                        ike_html:text(<<"on the booru as ">>),
+                        anchor(
+                            <<"/booru/", (integer_to_binary(E))/binary>>,
+                            <<"##", (integer_to_binary(E))/binary>>
+                        )
+                    ])
+                ];
+            _ ->
+                []
+        end,
+    Talk =
+        [ike_html:el(h2, [ike_html:text(<<"comments">>)])] ++
+            [
+                ike_html:el(ol, [ike_html:el(li, [post(P, true, 0)]) || P <- Comments])
+             || Comments =/= []
+            ] ++
+            case Account of
+                {Token1, Name1} ->
+                    [
+                        ike_html:el(
+                            form, [{method, <<"post">>}, {action, <<Here/binary, "/comment">>}], [
+                                ike_html:el(
+                                    input,
+                                    [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token1}],
+                                    []
+                                ),
+                                ike_html:el(p, [
+                                    ike_html:el(
+                                        textarea,
+                                        [{name, <<"body">>}, {rows, <<"4">>}, required],
+                                        []
+                                    )
+                                ]),
+                                ike_html:el(
+                                    p,
+                                    Sign(Name1) ++
+                                        [
+                                            ike_html:el(button, [{type, <<"submit">>}], [
+                                                ike_html:text(<<"comment">>)
+                                            ])
+                                        ]
+                                )
+                            ]
+                        )
+                    ];
+                none ->
+                    [ike_html:el(p, [anchor(<<"/login">>, <<"log in to comment">>)])]
+            end,
     Row = fun(Name, Value) ->
         ike_html:el(tr, [
             ike_html:el(th, [ike_html:text(Name)]),
@@ -1091,7 +1267,7 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         | case Family of
             none -> figure(Image);
             _ -> specimen(Image, Axes)
-        end ++ [ike_html:el(table, Rows)] ++ commentary(Said) ++ Shown ++ Owned ++
+        end ++ [ike_html:el(table, Rows)] ++ commentary(Said) ++ Shown ++ Owned ++ Curate ++ Talk ++
             [
                 ike_html:el(p, [
                     anchor(<<"/mod/meta/", (integer_to_binary(Id))/binary>>, <<"moderate">>)
@@ -1262,8 +1438,11 @@ account({Csrf, Name, Role}) ->
         ])
     ]).
 
-%% a booru entry: its newest version large enough to look at, every
-%% version, and where on the boards it is shown and pointed at
+%% a booru entry, a curation: its newest version large enough to look at
+%% (a font tried out), whose it is, its tags and commentary, the form
+%% that changes them, every version, where on the boards it is shown and
+%% pointed at, and its thread: comments, with each revision between them
+%% as what it changed (lux), in the order they came
 -spec entry(#{
     id := pos_integer(),
     time := integer(),
@@ -1271,13 +1450,24 @@ account({Csrf, Name, Role}) ->
     shown_in := [pos_integer()],
     linked_from := [pos_integer()],
     tags := [binary()],
-    changes := [{integer(), binary(), binary()}]
+    changes := [{integer(), binary(), binary()}],
+    thread := pos_integer() | none,
+    posts := [post()],
+    commentary := binary(),
+    owner := {account, binary()} | anonymous | none
 }) -> ike_html:html().
 entry(
     #{id := Id, time := Time, versions := Versions, shown_in := Shown, linked_from := Linked} =
         Entry
 ) ->
-    #{tags := Tags, changes := Changes} = Entry,
+    #{
+        tags := Tags,
+        changes := Changes,
+        thread := Thread,
+        posts := Posts,
+        commentary := Said,
+        owner := Owner
+    } = Entry,
     N = integer_to_binary(Id),
     Stamp = stamp(Time),
     Newest =
@@ -1285,6 +1475,79 @@ entry(
             [{_, #{axes := Axes} = Font} | _] -> specimen(Font, Axes);
             [{_, Image} | _] -> figure(Image);
             [] -> []
+        end,
+    Whose =
+        case Owner of
+            {account, Name} ->
+                [
+                    ike_html:el(p, [
+                        ike_html:text(<<"owner ">>), anchor(<<"/user/", Name/binary>>, Name)
+                    ])
+                ];
+            anonymous ->
+                [ike_html:el(p, [ike_html:text(<<"owner anonymous">>)])];
+            none ->
+                []
+        end,
+    Commentary =
+        case Said of
+            <<>> ->
+                [];
+            _ ->
+                [
+                    ike_html:el(h2, [ike_html:text(<<"commentary">>)]),
+                    ike_html:el(p, plain(binary:split(Said, <<"\n">>, [global])))
+                ]
+        end,
+    Edit = ike_html:el(
+        form, [{method, <<"post">>}, {action, <<"/booru/", N/binary, "/tags">>}], [
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"tags">>}], [
+                    ike_html:text(<<"tags (accounts; -name takes one off) ">>)
+                ]),
+                ike_html:el(
+                    input, [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}], []
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"commentary">>}], [ike_html:text(<<"commentary">>)]),
+                ike_html:el(br, []),
+                ike_html:el(
+                    textarea,
+                    [{id, <<"commentary">>}, {name, <<"commentary">>}, {rows, <<"4">>}],
+                    [ike_html:text(Said)]
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(
+                    input,
+                    [
+                        {type, <<"checkbox">>},
+                        {id, <<"signed">>},
+                        {name, <<"signed">>},
+                        {value, <<"1">>}
+                    ],
+                    []
+                ),
+                ike_html:text(<<" ">>),
+                ike_html:el(label, [{for, <<"signed">>}], [ike_html:text(<<"sign with your name">>)]),
+                ike_html:text(<<" ">>),
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"save">>)])
+            ])
+        ]
+    ),
+    Newest0 = newest(Posts, 0),
+    Talk =
+        case Thread of
+            none ->
+                [];
+            _ ->
+                T = integer_to_binary(Thread),
+                [
+                    ike_html:el(h2, [ike_html:text(<<"comments">>)]),
+                    ike_html:el(ol, [ike_html:el(li, [post(P, true, Newest0)]) || P <- Posts]),
+                    ike_html:el(p, [anchor(<<"/board/trunk/", T/binary, "/reply">>, <<"comment">>)])
+                ]
         end,
     layout(
         <<"##", N/binary>>,
@@ -1296,7 +1559,10 @@ entry(
                 ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
             ])
             | Newest
-        ] ++
+        ] ++ Whose ++
+            [ike_html:el(p, [ike_html:text(<<"tags ">>) | spaced([tag_link(T) || T <- Tags])])] ++
+            Commentary ++
+            [Edit] ++
             [
                 ike_html:el(p, [ike_html:text(<<"versions">>)]),
                 ike_html:el(ol, [
@@ -1316,27 +1582,11 @@ entry(
                         )
                     ])
                  || {Position, Image} <- Versions
-                ]),
-                ike_html:el(p, [ike_html:text(<<"tags ">>) | spaced([tag_link(T) || T <- Tags])]),
-                %% a plain form for accounts, on a page the same for
-                %% everyone: guarded as the thread's is
-                ike_html:el(
-                    form, [{method, <<"post">>}, {action, <<"/booru/", N/binary, "/tags">>}], [
-                        ike_html:el(p, [
-                            ike_html:el(label, [{for, <<"tags">>}], [
-                                ike_html:text(<<"tag (accounts; -name takes one off) ">>)
-                            ]),
-                            ike_html:el(
-                                input,
-                                [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}],
-                                []
-                            ),
-                            ike_html:text(<<" ">>),
-                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"tag">>)])
-                        ])
-                    ]
-                ),
-                ike_html:el(ul, [changed(C) || C <- Changes]),
+                ])
+            ] ++
+            %% the tag history, for an entry with no thread to show it in
+            [ike_html:el(ul, [changed(C) || C <- Changes]) || Thread =:= none] ++
+            [
                 ike_html:el(p, [
                     ike_html:text(<<"shown in ">>) | spaced([permalink(P, <<>>) || P <- Shown])
                 ]),
@@ -1344,7 +1594,7 @@ entry(
                     ike_html:text(<<"pointed at by ">>)
                     | spaced([permalink(P, <<>>) || P <- Linked])
                 ])
-            ]
+            ] ++ Talk
     ).
 
 %% one change to an entry's tags: when, and what; not who

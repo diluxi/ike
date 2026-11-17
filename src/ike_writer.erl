@@ -7,6 +7,7 @@
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
 -export([report/2, dismiss/1, tag/3, wiki/1, privacy/3, sign_meta/2]).
+-export([curate/4, revise/5, comment/3]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -274,6 +275,39 @@ privacy(Meta, Owner, Private) when is_integer(Meta), Meta > 0 ->
 -spec sign_meta(Meta :: pos_integer(), ike_id:actor()) -> ok | {error, not_yours} | error().
 sign_meta(Meta, Owner) when is_integer(Meta), Meta > 0 ->
     done(call({sign_meta, Meta, ike_id:to_integer(Owner)})).
+
+%% a public meta tagged and posted to the booru (lux): its curation, an
+%% entry, whose thread is the meta's, with the curation's first revision
+%% in it. bytes with an entry already are not curated again
+-spec curate(Meta :: pos_integer(), ike_id:actor(), Signed :: boolean(), {[binary()], [binary()]}) ->
+    {ok, pos_integer()} | {error, not_public | no_such_meta | {curated, pos_integer()}} | error().
+curate(Meta, Account, Signed, {Add, _Remove}) when is_integer(Meta), Meta > 0 ->
+    case call({curate, Meta, ike_id:to_integer(Account), Signed, Add}) of
+        {ok, Entry} when is_integer(Entry), Entry > 0 -> {ok, Entry};
+        {error, {curated, Entry}} when is_integer(Entry), Entry > 0 -> {error, {curated, Entry}};
+        Other -> failed(Other)
+    end.
+
+%% a curation's tags and commentary changed: a revision in its thread,
+%% signed or not as the account asks, folded into the account's own if
+%% that is the thread's newest post (lux: amend, Q37). commentary keep
+%% leaves it as it is. the history keeps who, as for tags before
+-spec revise(
+    pos_integer(), ike_id:actor(), Signed :: boolean(), {[binary()], [binary()]}, binary() | keep
+) ->
+    ok | {error, nothing | no_such_entry | bad_text} | error().
+revise(Entry, Account, Signed, {Add, Remove}, Commentary) ->
+    done(call({revise, Entry, ike_id:to_integer(Account), Signed, Add, Remove, Commentary})).
+
+%% a comment on a meta: in its thread, started by it if it has none. who
+%% may see the meta is the asker's to have checked
+-spec comment(pos_integer(), ike_id:actor(), binary()) ->
+    {ok, ike_id:post()} | {error, bad_text | no_such_meta} | error().
+comment(Meta, Actor, Body) ->
+    case call({comment, Meta, ike_id:to_integer(Actor), Body}) of
+        {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
+        Other -> failed(Other)
+    end.
 
 %% an account adds and takes away an entry's tags; the history keeps who
 -spec tag(ike_id:booru(), ike_id:actor(), {[binary()], [binary()]}) ->
@@ -556,6 +590,62 @@ handle_call({sign_meta, Meta, Owner}, _From, Conn) when
             {ok, []} -> {error, not_yours};
             {ok, Other} -> {error, {unexpected, Other}};
             {error, _} = Error -> Error
+        end,
+    {reply, Reply, Conn};
+handle_call({curate, Meta, Account, Signed, Add}, _From, Conn) when
+    is_integer(Meta), is_integer(Account), is_boolean(Signed), is_list(Add)
+->
+    Time = erlang:system_time(second),
+    Reply = committed(
+        ike_db:transaction(Conn, fun() ->
+            curated(Conn, Meta, Account, shown_as(Account, Signed), Add, Time)
+        end)
+    ),
+    {reply, Reply, Conn};
+handle_call({revise, Entry, Account, Signed, Add, Remove, Commentary}, _From, Conn) when
+    is_integer(Entry),
+    is_integer(Account),
+    is_boolean(Signed),
+    is_list(Add),
+    is_list(Remove),
+    (is_binary(Commentary) orelse Commentary =:= keep)
+->
+    Time = erlang:system_time(second),
+    Reply =
+        case Commentary =:= keep orelse Commentary =:= <<>> orelse text(Commentary) of
+            false ->
+                {error, bad_text};
+            true ->
+                Result = ike_db:transaction(Conn, fun() ->
+                    revised_entry(
+                        Conn,
+                        Entry,
+                        Account,
+                        shown_as(Account, Signed),
+                        Add,
+                        Remove,
+                        Commentary,
+                        Time
+                    )
+                end),
+                case committed(Result) of
+                    {ok, _} -> ok;
+                    Other -> Other
+                end
+        end,
+    {reply, Reply, Conn};
+handle_call({comment, Meta, Actor, Body}, _From, Conn) when
+    is_integer(Meta), is_integer(Actor), is_binary(Body)
+->
+    Time = erlang:system_time(second),
+    Reply =
+        case text(Body) of
+            false ->
+                {error, bad_text};
+            true ->
+                committed(
+                    ike_db:transaction(Conn, fun() -> commented(Conn, Meta, Actor, Body, Time) end)
+                )
         end,
     {reply, Reply, Conn};
 handle_call({tag, Entry, Actor, Add, Remove}, _From, Conn) when
@@ -1776,6 +1866,257 @@ steps(Conn, [{Sql, Args} | Rest]) ->
     end;
 steps(_Conn, []) ->
     ok.
+
+-spec maybe_integer(term()) -> integer() | undefined.
+maybe_integer(N) when is_integer(N) -> N;
+maybe_integer(_) -> undefined.
+
+%% who a revision is posted as: the account, if it signs, else nobody
+-spec shown_as(integer(), boolean()) -> integer().
+shown_as(Account, true) -> Account;
+shown_as(_Account, false) -> ?NOBODY.
+
+-spec curated(ike_db:writer(), integer(), integer(), integer(), [term()], integer()) ->
+    {ok, {integer(), [term()]}} | error().
+curated(Conn, Meta, Account, Shown, Add, Time) ->
+    Sql = <<"SELECT asset, private, state, thread, owner, signed FROM meta WHERE id = ?1">>,
+    case ike_db:q(Conn, Sql, [Meta]) of
+        {ok, [[Asset, 0, 0, Thread1, Owner, Signed]]} when is_binary(Asset) ->
+            Thread0 = maybe_integer(Thread1),
+            Has = <<"SELECT booru FROM booru_version WHERE asset = ?1 LIMIT 1">>,
+            case ike_db:q(Conn, Has, [{blob, Asset}]) of
+                {ok, [[Known]]} ->
+                    {error, {curated, Known}};
+                {ok, []} ->
+                    case entered(Conn, [Asset], Time, []) of
+                        {ok, [Entry]} ->
+                            Added = [N || N <- Add, is_binary(N), put_tag(Conn, Entry, N)],
+                            case
+                                {
+                                    history(Conn, Entry, Account, Added, [], Time),
+                                    state_body(Conn, Entry, <<>>)
+                                }
+                            of
+                                {ok, {ok, Body}} ->
+                                    case revision(Conn, Thread0, Shown, Body, Time) of
+                                        {ok, {Thread, Threads}} ->
+                                            Steps = [
+                                                {<<"UPDATE meta SET thread = ?2 WHERE id = ?1">>, [
+                                                    Meta, Thread
+                                                ]},
+                                                {
+                                                    <<
+                                                        "UPDATE booru SET thread = ?2, meta = ?3, owner = ?4,"
+                                                        " signed = ?5 WHERE id = ?1"
+                                                    >>,
+                                                    [Entry, Thread, Meta, Owner, Signed]
+                                                }
+                                            ],
+                                            case steps(Conn, Steps) of
+                                                ok -> {ok, {Entry, Threads ++ [{booru, Entry}]}};
+                                                {error, _} = Error -> Error
+                                            end;
+                                        {error, _} = Error ->
+                                            Error
+                                    end;
+                                {{error, _} = Error, _} ->
+                                    Error;
+                                {_, {error, _} = Error} ->
+                                    Error
+                            end;
+                        {ok, Other} ->
+                            {error, {unexpected, Other}};
+                        {error, _} = Error ->
+                            Error
+                    end;
+                {ok, Other} ->
+                    {error, {unexpected, Other}};
+                {error, _} = Error ->
+                    Error
+            end;
+        {ok, [_]} ->
+            {error, not_public};
+        {ok, []} ->
+            {error, no_such_meta};
+        {ok, Other} ->
+            {error, {unexpected, Other}};
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec revised_entry(
+    ike_db:writer(), integer(), integer(), integer(), [term()], [term()], binary() | keep, integer()
+) ->
+    {ok, {integer(), [term()]}} | error().
+revised_entry(Conn, Entry, Account, Shown, Add, Remove, Commentary0, Time) ->
+    case
+        ike_db:q(
+            Conn,
+            <<"SELECT b.thread FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.id = ?1">>,
+            [Entry]
+        )
+    of
+        {ok, [[Thread1]]} ->
+            Thread0 = maybe_integer(Thread1),
+            Before = said(Conn, Thread0),
+            Commentary =
+                case Commentary0 of
+                    keep -> Before;
+                    _ -> Commentary0
+                end,
+            Added = [
+                N
+             || N <- Add, is_binary(N), not lists:member(N, Remove), put_tag(Conn, Entry, N)
+            ],
+            Removed = [N || N <- Remove, is_binary(N), take_tag(Conn, Entry, N)],
+            case {Added, Removed, Commentary =:= Before} of
+                {[], [], true} ->
+                    {error, nothing};
+                _ ->
+                    case
+                        {
+                            history(Conn, Entry, Account, Added, Removed, Time),
+                            state_body(Conn, Entry, Commentary)
+                        }
+                    of
+                        {ok, {ok, Body}} ->
+                            case revision(Conn, Thread0, Shown, Body, Time) of
+                                {ok, {Thread, Threads}} ->
+                                    Set = <<"UPDATE booru SET thread = ?2 WHERE id = ?1">>,
+                                    case ike_db:q(Conn, Set, [Entry, Thread]) of
+                                        {ok, _} -> {ok, {Entry, Threads ++ [{booru, Entry}]}};
+                                        {error, _} = Error -> Error
+                                    end;
+                                {error, _} = Error ->
+                                    Error
+                            end;
+                        {{error, _} = Error, _} ->
+                            Error;
+                        {_, {error, _} = Error} ->
+                            Error
+                    end
+            end;
+        {ok, []} ->
+            {error, no_such_entry};
+        {ok, Other} ->
+            {error, {unexpected, Other}};
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec commented(ike_db:writer(), integer(), integer(), binary(), integer()) ->
+    {ok, {integer(), [term()]}} | error().
+commented(Conn, Meta, Actor, Body, Time) ->
+    case ike_db:q(Conn, <<"SELECT thread FROM meta WHERE id = ?1">>, [Meta]) of
+        {ok, [[undefined]]} ->
+            case post(Conn, Actor, {new, <<"trunk">>}, Time, Body) of
+                {ok, {Id, Threads}} ->
+                    case
+                        ike_db:q(Conn, <<"UPDATE meta SET thread = ?2 WHERE id = ?1">>, [Meta, Id])
+                    of
+                        {ok, _} -> {ok, {Id, Threads}};
+                        {error, _} = Error -> Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end;
+        {ok, [[Thread]]} when is_integer(Thread) ->
+            insert(Conn, Actor, Thread, Time, Body);
+        {ok, []} ->
+            {error, no_such_meta};
+        {ok, Other} ->
+            {error, {unexpected, Other}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% a line in the tag history, when tags changed
+-spec history(ike_db:writer(), integer(), integer(), [binary()], [binary()], integer()) ->
+    ok | error().
+history(_Conn, _Entry, _Account, [], [], _Time) ->
+    ok;
+history(Conn, Entry, Account, Added, Removed, Time) ->
+    Line = <<
+        "INSERT INTO tag_change (booru, actor, time, added, removed) VALUES (?1, ?2, ?3, ?4, ?5)"
+    >>,
+    case ike_db:q(Conn, Line, [Entry, Account, Time, spaced(Added), spaced(Removed)]) of
+        {ok, _} -> ok;
+        {error, _} = Error -> Error
+    end.
+
+%% a curation as a revision keeps it: its tags, by name, on the first
+%% line, and its commentary after
+-spec state_body(ike_db:writer(), integer(), binary()) -> {ok, binary()} | error().
+state_body(Conn, Entry, Commentary) ->
+    Sql = <<
+        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
+        " ORDER BY t.name"
+    >>,
+    case ike_db:q(Conn, Sql, [Entry]) of
+        {ok, Rows} ->
+            {ok, <<(spaced([N || [N] <- Rows, is_binary(N)]))/binary, "\n", Commentary/binary>>};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% the commentary of a curation's newest revision in view
+-spec said(ike_db:writer(), integer() | undefined) -> binary().
+said(_Conn, undefined) ->
+    <<>>;
+said(Conn, Thread) ->
+    Sql = <<
+        "SELECT body FROM post WHERE thread = ?1 AND state = 0 AND revision = 1"
+        " ORDER BY id DESC LIMIT 1"
+    >>,
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, [[Body]]} when is_binary(Body) ->
+            case binary:split(Body, <<"\n">>) of
+                [_, Commentary] -> Commentary;
+                _ -> <<>>
+            end;
+        _ ->
+            <<>>
+    end.
+
+%% a revision in an attached thread, which it starts if there is none;
+%% folded into the thread's newest post instead when that is a revision
+%% by the same signed account
+-spec revision(ike_db:writer(), integer() | undefined, integer(), binary(), integer()) ->
+    {ok, {Thread :: integer(), [term()]}} | error().
+revision(Conn, undefined, Shown, Body, Time) ->
+    case post(Conn, Shown, {new, <<"trunk">>}, Time, Body) of
+        {ok, {Id, Threads}} ->
+            case ike_db:q(Conn, <<"UPDATE post SET revision = 1 WHERE id = ?1">>, [Id]) of
+                {ok, _} -> {ok, {Id, Threads}};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
+    end;
+revision(Conn, Thread, Shown, Body, Time) ->
+    Newest = <<
+        "SELECT id, actor, revision FROM post WHERE thread = ?1 AND state = 0"
+        " ORDER BY id DESC LIMIT 1"
+    >>,
+    case ike_db:q(Conn, Newest, [Thread]) of
+        {ok, [[Last, Shown, 1]]} when Shown =/= ?NOBODY, is_integer(Last) ->
+            case amended(Conn, Last, Thread, Body, Time) of
+                {ok, {_, Threads}} -> {ok, {Thread, Threads}};
+                {error, _} = Error -> Error
+            end;
+        {ok, _} ->
+            case insert(Conn, Shown, Thread, Time, Body) of
+                {ok, {Id, Threads}} ->
+                    case ike_db:q(Conn, <<"UPDATE post SET revision = 1 WHERE id = ?1">>, [Id]) of
+                        {ok, _} -> {ok, {Thread, Threads}};
+                        {error, _} = Error -> Error
+                    end;
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
 
 %% tags on, tags off, and a line in the history saying what changed; an
 %% entry out of sight is not tagged

@@ -137,24 +137,28 @@ variable_axes_are_sliders(Config) ->
     {_, _} = binary:match(Page, <<"<td>Ike Var</td>">>),
     {_, _} = binary:match(Page, <<"<td>font variable</td>">>).
 
-%% a font posted with a post is an entry, tagged font, tried out on its
-%% page as on its meta's
+%% a font curated is an entry, tagged font, tried out on its page as on
+%% its meta's
 posted_it_is_an_entry(Config) ->
     #{csrf := Csrf} = Session = login(Config, <<"poster-type">>),
-    {Type, Body} = ike_browser:multipart([
-        {field, <<"csrf">>, list_to_binary(Csrf)},
-        {field, <<"body">>, <<"a font">>},
-        {file, <<"file">>, {<<"v.ttf">>, read(Config, "variable.ttf")}}
+    %% the bytes have a public meta (variable_axes_are_sliders'): there
+    {303, Led, _} = ike_browser:upload(Config, Session, [
+        {<<"v.ttf">>, read(Config, "variable.ttf")}
     ]),
-    {303, _, _} = request(Config, post, "/board/b/new", cookies(Session), {Type, Body}),
-    Hex = uploaded(Config, <<"poster-type">>),
-    [[Entry]] = query(Config, "SELECT booru FROM booru_version WHERE asset = ?", [
-        {blob, binary:decode_hex(list_to_binary(Hex))}
-    ]),
-    {200, _, Page} = request(Config, get, "/booru/" ++ integer_to_list(Entry), [], none),
+    "/trunk/" ++ _ = Meta = proplists:get_value("location", Led),
+    {303, Curated, _} = request(
+        Config,
+        post,
+        Meta ++ "/curate",
+        cookies(Session),
+        {form, uri_string:compose_query([{"csrf", Csrf}, {"tags", "sans"}])}
+    ),
+    "/booru/" ++ _ = Entry = proplists:get_value("location", Curated),
+    {200, _, Page} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(Page, <<"class=\"specimen\"">>),
     {_, _} = binary:match(Page, <<"data-axis=\"wght\"">>),
-    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=font\"">>).
+    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=font\"">>),
+    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=sans\"">>).
 
 purged_its_files_go(Config) ->
     #{csrf := Csrf} = Session = login(Config, <<"purged-type">>),

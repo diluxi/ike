@@ -203,11 +203,46 @@ everything(Conn) ->
 %% a thread that is on no board has no page yet, and one whose first
 %% post was taken down has none any more: the writer unlinks that
 -spec render_thread(#state{}, integer()) -> {ok, Board :: binary()} | none.
-render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
+render_thread(#state{conn = Conn, dir = Dir} = State, Thread) ->
     Where = <<
-        "SELECT b.name, b.title, b.log, b.wiki FROM thread t JOIN board b ON b.id = t.board"
+        "SELECT b.name, b.title, b.log, b.wiki, b.attached FROM thread t"
+        " JOIN board b ON b.id = t.board"
         " WHERE t.root = ?1 AND EXISTS (SELECT 1 FROM shown s WHERE s.thread = t.root)"
     >>,
+    case ike_db:q(Conn, Where, [Thread]) of
+        %% an attached thread has no page: it is read on its curation's
+        %% (a meta's is made per request)
+        {ok, [[_, _, _, _, 1]]} ->
+            %% made now, so that whoever waits on the render reads it
+            _ =
+                case ike_db:q(Conn, <<"SELECT id FROM booru WHERE thread = ?1">>, [Thread]) of
+                    {ok, [[Entry]]} when is_integer(Entry) -> render_entry(State, Entry);
+                    _ -> ok
+                end,
+            none;
+        {ok, [[Name, Title, Logs, Wiki, _]]} when is_binary(Name), is_binary(Title) ->
+            Posts0 = thread_posts(Conn, Thread),
+            Board0 = #{
+                name => Name, title => Title, log => Logs =:= 1, wiki => Wiki =:= 1
+            },
+            {Board, Posts} =
+                case Wiki of
+                    1 -> paged(Conn, Thread, Board0, Posts0);
+                    _ -> {Board0, Posts0}
+                end,
+            File =
+                <<"board/", Name/binary, "/", (integer_to_binary(Thread))/binary, ".html">>,
+            ok = write(Dir, File, ike_view:thread(Board, Thread, Posts)),
+            {ok, Name};
+        {ok, _} ->
+            none;
+        {error, Reason} ->
+            error({render, Thread, Reason})
+    end.
+
+%% a thread's posts in view, as pages show them
+-spec thread_posts(ike_db:reader(), integer()) -> [ike_view:post()].
+thread_posts(Conn, Thread) ->
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
         "SELECT p.id, p.time, p.body, a.name, b.log, m.role, q.title, q.revision"
@@ -216,52 +251,33 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
         " JOIN board b ON b.id = t.board LEFT JOIN action m ON m.entry = p.id"
         " WHERE p.thread = ?1 ORDER BY p.id"
     >>,
-    case ike_db:q(Conn, Where, [Thread]) of
-        {ok, [[Name, Title, Logs, Wiki]]} when is_binary(Name), is_binary(Title) ->
-            case ike_db:q(Conn, Sql, [Thread]) of
-                {ok, Rows} ->
-                    Names = ike_config:anonymous_names(),
-                    Links = links(Conn, Thread),
-                    Replies = replies(Conn, Thread),
-                    Images = images(Conn, Thread),
-                    Posts0 = [
-                        #{
-                            id => Id,
-                            time => Time,
-                            body => Body,
-                            name => name(Name0, Id, Names, Log, Role),
-                            links => Links,
-                            replies => maps:get(Id, Replies, []),
-                            images => maps:get(Id, Images, []),
-                            title =>
-                                case PostTitle of
-                                    _ when is_binary(PostTitle) -> PostTitle;
-                                    _ -> none
-                                end,
-                            revision => Revision =:= 1
-                        }
-                     || [Id, Time, Body, Name0, Log, Role, PostTitle, Revision] <- Rows,
-                        is_integer(Id),
-                        is_integer(Time),
-                        is_binary(Body)
-                    ],
-                    Board0 = #{
-                        name => Name, title => Title, log => Logs =:= 1, wiki => Wiki =:= 1
-                    },
-                    {Board, Posts} =
-                        case Wiki of
-                            1 -> paged(Conn, Thread, Board0, Posts0);
-                            _ -> {Board0, Posts0}
+    case ike_db:q(Conn, Sql, [Thread]) of
+        {ok, Rows} ->
+            Names = ike_config:anonymous_names(),
+            Links = links(Conn, Thread),
+            Replies = replies(Conn, Thread),
+            Images = images(Conn, Thread),
+            [
+                #{
+                    id => Id,
+                    time => Time,
+                    body => Body,
+                    name => name(Name0, Id, Names, Log, Role),
+                    links => Links,
+                    replies => maps:get(Id, Replies, []),
+                    images => maps:get(Id, Images, []),
+                    title =>
+                        case PostTitle of
+                            _ when is_binary(PostTitle) -> PostTitle;
+                            _ -> none
                         end,
-                    File =
-                        <<"board/", Name/binary, "/", (integer_to_binary(Thread))/binary, ".html">>,
-                    ok = write(Dir, File, ike_view:thread(Board, Thread, Posts)),
-                    {ok, Name};
-                {error, Reason} ->
-                    error({render, Thread, Reason})
-            end;
-        {ok, _} ->
-            none;
+                    revision => Revision =:= 1
+                }
+             || [Id, Time, Body, Name0, Log, Role, PostTitle, Revision] <- Rows,
+                is_integer(Id),
+                is_integer(Time),
+                is_binary(Body)
+            ];
         {error, Reason} ->
             error({render, Thread, Reason})
     end.
@@ -456,7 +472,10 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
         " JOIN board b ON b.id = t.board"
         " WHERE b.name = ?1 GROUP BY p.thread ORDER BY 3 DESC LIMIT ?2"
     >>,
-    case {boards(Conn, <<" WHERE name = ?1">>, [Name]), ike_db:q(Conn, Sql, [Name, ?INDEX])} of
+    case {boards(Conn, <<" AND name = ?1">>, [Name]), ike_db:q(Conn, Sql, [Name, ?INDEX])} of
+        %% an attached board has no page: its threads are read elsewhere
+        {{ok, []}, _} ->
+            ok;
         {{ok, [Board]}, {ok, Rows}} ->
             Threads = [
                 #{root => Root, posts => Posts, body => Body}
@@ -496,8 +515,19 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
     Changes = <<
         "SELECT time, added, removed FROM tag_change WHERE booru = ?1 ORDER BY id DESC LIMIT 20"
     >>,
-    case ike_db:q(Conn, <<"SELECT time FROM shown_entry WHERE id = ?1">>, [Entry]) of
-        {ok, [[Time]]} when is_integer(Time) ->
+    Owned = <<
+        "SELECT e.time, b.thread, CASE WHEN b.signed = 1 THEN a.name END, b.owner IS NOT NULL"
+        " FROM shown_entry e JOIN booru b ON b.id = e.id LEFT JOIN actor a ON a.id = b.owner"
+        " WHERE e.id = ?1"
+    >>,
+    case ike_db:q(Conn, Owned, [Entry]) of
+        {ok, [[Time, Thread, Owner, HasOwner]]} when is_integer(Time) ->
+            %% its thread: comments, and its revisions as what each changed
+            Posts =
+                case Thread of
+                    _ when is_integer(Thread) -> curated(thread_posts(Conn, Thread), Entry);
+                    _ -> []
+                end,
             case
                 {
                     ike_db:q(Conn, Versions, [Entry]),
@@ -511,6 +541,19 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                     Page = ike_view:entry(#{
                         id => Entry,
                         time => Time,
+                        thread =>
+                            case Thread of
+                                _ when is_integer(Thread) -> Thread;
+                                _ -> none
+                            end,
+                        posts => Posts,
+                        commentary => commentary(Posts),
+                        owner =>
+                            case {HasOwner, Owner} of
+                                {1, _} when is_binary(Owner) -> {account, Owner};
+                                {1, _} -> anonymous;
+                                _ -> none
+                            end,
                         versions => [
                             {Position,
                                 case image(Hash, Type, W, H) of
@@ -543,6 +586,54 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
         {error, Reason} ->
             error({render, {booru, Entry}, Reason})
     end.
+
+%% a curation's thread: each revision named for the entry and its count,
+%% with the tags it put on and took off and what it changed of the
+%% commentary, against the revision in view before it
+-spec curated([ike_view:post()], integer()) -> [ike_view:post()].
+curated(Posts, Entry) ->
+    curated(Posts, Entry, {[], <<>>}, 1).
+
+-spec curated([ike_view:post()], integer(), {[binary()], binary()}, pos_integer()) ->
+    [ike_view:post()].
+curated([#{revision := true, body := Body} = P | Rest], Entry, {Tags0, Said0}, N) ->
+    {Tags, Said} = revision_state(Body),
+    Title = <<"##", (integer_to_binary(Entry))/binary, " ", (integer_to_binary(N))/binary>>,
+    Changed = P#{
+        title => Title,
+        curation => {[T || T <- Tags, not lists:member(T, Tags0)], [
+            T
+         || T <- Tags0, not lists:member(T, Tags)
+        ]},
+        changes => ike_wiki:diff(Said0, Said)
+    },
+    [Changed | curated(Rest, Entry, {Tags, Said}, N + 1)];
+curated([P | Rest], Entry, State, N) ->
+    [P | curated(Rest, Entry, State, N)];
+curated([], _Entry, _State, _N) ->
+    [].
+
+%% a curation's revision: its tags on the first line, its commentary after
+-spec revision_state(binary()) -> {[binary()], binary()}.
+revision_state(Body) ->
+    case binary:split(Body, <<"\n">>) of
+        [Line, Said] -> {binary:split(Line, <<" ">>, [global, trim_all]), Said};
+        [Line] -> {binary:split(Line, <<" ">>, [global, trim_all]), <<>>}
+    end.
+
+%% the commentary of the newest revision
+-spec commentary([ike_view:post()]) -> binary().
+commentary(Posts) ->
+    last_said([B || #{revision := true, body := B} <- Posts]).
+
+-spec last_said([binary()]) -> binary().
+last_said([Body]) ->
+    {_, Said} = revision_state(Body),
+    Said;
+last_said([_ | Rest]) ->
+    last_said(Rest);
+last_said([]) ->
+    <<>>.
 
 %% the booru's page: the newest entries, as thumbnails
 -spec render_entries(#state{}) -> ok.
@@ -581,7 +672,8 @@ render_lists(#state{conn = Conn, dir = Dir}) ->
 
 -spec boards(ike_db:reader(), binary(), [term()]) -> {ok, [ike_view:board()]} | ike_db:error().
 boards(Conn, Where, Args) ->
-    Sql = <<"SELECT name, title, log FROM board", Where/binary, " ORDER BY name">>,
+    Sql =
+        <<"SELECT name, title, log FROM board WHERE attached = 0", Where/binary, " ORDER BY name">>,
     case ike_db:q(Conn, Sql, Args) of
         {ok, Rows} ->
             {ok, [

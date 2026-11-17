@@ -1078,11 +1078,13 @@ inv08_purge_leaves_nothing(Config) ->
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE id = ?", [
         list_to_integer(Whole)
     ]),
-    %% (and stays public through its booru entry: the image is the
-    %% archive's, not the post's, until the entry is taken down too)
+    %% (and stays public through its public meta: the image is the
+    %% archive's, not the post's, until the meta is taken down too)
     {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ WholeHex ++ ".webp"),
     [[1]] = ike_browser:query(
-        Config, "SELECT count(*) FROM shown_entry WHERE asset = ?", [{blob, WholeHash}]
+        Config, "SELECT count(*) FROM meta WHERE asset = ? AND private = 0 AND state = 0", [
+            {blob, WholeHash}
+        ]
     ),
     true = filelib:is_regular(filename:join([?config(dir, Config), "assets", WholeHex])),
     %% and every file but the snapshots: the write-ahead log is folded
@@ -1223,6 +1225,42 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
     ],
     {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
     {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".thumb.webp"),
+    %% its comments are its own: the owner's, signed, read by the owner
+    %% and the moderator on its page, and by nobody else anywhere: not on
+    %% the owner's user page, not through the comment's number, and no
+    %% one else comments there
+    {303, Commented, _} = ike_browser:request(
+        Config,
+        post,
+        Meta ++ "/comment",
+        ike_browser:cookies(Owner),
+        {form,
+            uri_string:compose_query([{"csrf", Csrf}, {"body", "SECRET-COMMENT"}, {"signed", "1"}])}
+    ),
+    "#p" ++ Comment = string:find(proplists:get_value("location", Commented), "#"),
+    [
+        begin
+            {200, _, Read} = ike_browser:request(Config, get, Meta, Cookies, none),
+            {_, _} = binary:match(Read, <<"SECRET-COMMENT">>)
+        end
+     || Cookies <- [ike_browser:cookies(Owner), ike_browser:cookies(Moderator)]
+    ],
+    {200, _, UserPage} = ike_browser:request(Config, get, "/user/stager", [], none),
+    nomatch = binary:match(UserPage, <<"SECRET-COMMENT">>),
+    %% (a permalink finds only what everyone is shown: not even where it is)
+    {404, _, _} = ike_browser:request(Config, get, "/p/" ++ Comment, [], none),
+    [
+        {404, _, _} = ike_browser:request(Config, get, Meta, Cookies, none)
+     || Cookies <- [ike_browser:cookies(Other), ike_browser:cookies(Janitor), []]
+    ],
+    #{csrf := OtherToken} = Other,
+    {404, _, _} = ike_browser:request(
+        Config,
+        post,
+        Meta ++ "/comment",
+        ike_browser:cookies(Other),
+        {form, uri_string:compose_query([{"csrf", OtherToken}, {"body", "let me in"}])}
+    ),
     %% nor does uploading the same bytes say anything of it: the other
     %% is sent where any upload goes, and given a meta of their own
     #{csrf := OtherCsrf} = Other,
@@ -1889,6 +1927,8 @@ known_routes() ->
         [<<"user">>, name],
         [<<"trunk">>],
         [<<"trunk">>, meta],
+        [<<"trunk">>, meta, <<"comment">>],
+        [<<"trunk">>, meta, <<"curate">>],
         [<<"wiki">>, name],
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],

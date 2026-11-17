@@ -49,6 +49,8 @@ dispatch() ->
             {"/user/:name", ike_http_user, []},
             {"/trunk", ike_http_trunk, index},
             {"/trunk/:meta", [{meta, int}], ike_http_trunk, meta},
+            {"/trunk/:meta/comment", [{meta, int}], ike_http_trunk, comment},
+            {"/trunk/:meta/curate", [{meta, int}], ike_http_trunk, curate},
             {"/wiki", ike_http_wiki, index},
             {"/wiki/:name", ike_http_wiki, page},
             {"/wiki/:name/edit", ike_http_wiki, edit},

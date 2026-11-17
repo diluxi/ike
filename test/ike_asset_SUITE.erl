@@ -40,8 +40,10 @@ all() ->
         nobody_posts_still_images_when_let
     ].
 
+%% with entries made at once, as the case for what the media origin
+%% shows hides an entry too
 init_per_suite(Config) ->
-    ike_browser:start(Config, []).
+    ike_browser:start(Config, [{booru_at_once, true}]).
 
 end_per_suite(_Config) ->
     ike_browser:stop().

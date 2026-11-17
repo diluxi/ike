@@ -6,7 +6,7 @@
 -module(ike_http_wiki).
 -behaviour(cowboy_handler).
 
--export([init/2]).
+-export([init/2, trimmed/1]).
 
 -spec init(cowboy_req:req(), What) -> {ok, cowboy_req:req(), What} when
     What :: index | page | edit | history.

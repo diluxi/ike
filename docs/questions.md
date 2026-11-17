@@ -117,6 +117,14 @@ here.
   collections are refused; split them? (e) OTS gives a font without a
   version name one of its own: harmless, but a re-upload of a stored
   font carries "1.000" as commentary.
+- **Q45 Curation's open ends.** (a) Private curations: a private meta
+  curated for its owner and moderators only, its page made per request.
+  (b) Comments on metas and curations are accounts only (the trunk board
+  is locked); should nobody comment, as on open boards? (c) Is the
+  commentary markup, like posts, or plain text? (d) Should the first
+  revision count the inherent tags (image, raster...) as added, as it
+  does now, or only those the curator gave? (e) Who may curate: any
+  account now (Q34's stub).
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

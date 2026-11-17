@@ -71,13 +71,15 @@ or anonymous, moderated as posts; known bytes lead to their meta),
 `phi/quotes` (`> ` quotes and nested lists; `e` edits a wiki page),
 `phi/owners` (metas numbered and each an owner's; the first public one
 keeps it; owners sign later; trashed metas stay visible to them). `phi/fonts` (fonts by accounts: OTS and fontTools, credits as
-commentary, an F for a thumbnail, a specimen with sliders).
+commentary, an F for a thumbnail, a specimen with sliders). `phi/curate`
+(tacks make metas; a public meta curated from its page; one thread,
+with tag and commentary revisions between comments; private threads
+stay private).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
 - **Tags by what an entry is owe:** `vector` (with SVG) and `mesh`.
-- **Curation (next):** tagging on the meta's page, the comment thread,
-  curations in the trunk, `booru_at_once` gone.
+- **Curation owes:** private curations, and Q45.
 - **M2 owes:** entries from `/upload`, versions and upgrades, paging,
   tag aliases and implications (BURs are M4), GIF, meshes (rule in
   decisions.md).
@@ -87,6 +89,7 @@ commentary, an F for a thumbnail, a specimen with sliders).
 
 ## Blocked on lux
 
+- **Q45:** curation's open ends.
 - **Q44:** fonts' loose ends.
 - **Q43:** trashed posts and their owners.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with

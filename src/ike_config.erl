@@ -217,12 +217,13 @@ media_host() ->
     end.
 
 %% whether every posted image gets a booru entry at once, or only when
-%% someone tags it: open in planning (line 243); at once, for now
+%% someone curates it: open in planning (line 243); lux, 2026-11-17: a
+%% tack makes a meta, never a curation, so not at once unless asked
 -spec booru_at_once() -> boolean().
 booru_at_once() ->
     case application:get_env(ike, booru_at_once) of
-        {ok, false} -> false;
-        _ -> true
+        {ok, true} -> true;
+        _ -> false
     end.
 
 %% the most images one post shows; a stub for planning's open caps
