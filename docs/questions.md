@@ -66,17 +66,10 @@ here.
   trigger read-only, etc." Which logs (the `action` rows naming the
   account, the journal?), and what read-only means (no posts at all, or
   no posts by nobody)? Not built.
-- **Q31 Who sees staged uploads.** Answered by lux, 2026-11-16
-  (decisions.md, "Asset, meta, tack, curation"): public by default and
-  listed in `/trunk`; private on an account's word, seen by its owner and
-  moderators and up. Blocked on invariant 10, which says otherwise. A
-  wording for hazards.md, if lux wants it:
-  - invariant 10: "A private asset is served to no one but its owner
-    and moderators. A staged asset is listed in the trunk, where
-    moderators see it."
-  - G7's control: "staged assets are public and listed in the trunk,
-    where moderators see and act on them as on posts; private ones are
-    served to their owner and moderators only."
+- **Q31 Who sees staged uploads.** Answered and built (decisions.md, "The
+  trunk, first slice"). hazards.md's invariant 10 is lux's new wording;
+  G7's control there still says "served only to their uploader", for
+  lux's rewrite.
 - **Q32 Orientation and profile text.** With nothing turned, a phone
   photo whose camera wrote an orientation tag now shows on its side.
   Keeping that one tag (no pixel changed, a few bytes of EXIF that say
@@ -100,14 +93,23 @@ here.
   undoes one (decisions.md, "Edits stack, and amend").
 - **Q36 What a folded revision said.** Answered (decisions.md): discarded;
   (un)squashing may become a switch later, not acting on earlier edits.
-- **Q37 Amending tags.** lux: a change to "anything" right after its
-  author's own is folded in. Tag changes have their history
-  (`tag_change`), but no curation thread yet to tell "nothing between";
-  built with that thread.
+- **Q37 Amending tags.** Answered with curation (decisions.md,
+  "Curation"): tag and commentary changes are revisions in the
+  curation's thread, folded as wiki edits are. To build.
+- **Q38 A meta's page.** Answered: metas have pages in the trunk until
+  curated, then lead to the curation. Built but for the curation.
 - **Q39 Retracting a page's first revision.** Answered (decisions.md, "A
   page outlives its first revision").
-- **Q38 A meta's page.** lux finds Danbooru's media asset page hard to
-  justify. Is `/trunk` a list only, or does each meta have a page?
+- **Q40 Moderating a meta.** A public meta's files stay public whatever
+  is done to the posts and entries showing it; a moderator cannot take
+  one out of the trunk, only an admin's purge_image can (and that blocks
+  the bytes for good). Should moderators hide and trash metas, as posts
+  (logged, restorable)? Before launch, this is the hole G7 was about.
+- **Q41 Two uploaders of one asset.** A meta is its asset's first
+  uploader's. Should a second uploader get a meta of their own (and so a
+  second private/public switch over the same bytes), or share it?
+- **Q42 Owners and moderators.** Nobody is told whose a meta is. Should
+  moderators be (Q16 asks the same of unsigned posts)?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

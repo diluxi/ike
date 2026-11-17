@@ -7,7 +7,26 @@
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
--export_type([staged/0]).
+-export([metas/1, meta/2]).
+-export_type([staged/0, meta/0, viewer/0]).
+
+%% who looks at the trunk: an account or nobody, and whether a moderator
+%% (or above), who sees every meta (invariant 10)
+-type viewer() :: #{actor := integer() | none, moderator := boolean()}.
+%% a meta as the trunk shows it. upload: the newest upload of its asset,
+%% which a link to a private one's files names. owner is never said but
+%% to the owner (mine): an upload may be in a post nobody signed
+-type meta() :: #{
+    hash := binary(),
+    type := binary(),
+    width := pos_integer(),
+    height := pos_integer(),
+    traits := binary(),
+    time := integer(),
+    private := boolean(),
+    mine := boolean(),
+    upload := pos_integer()
+}.
 
 %% a staged upload as its uploader is shown it
 -type staged() :: #{
@@ -176,6 +195,77 @@ search(Query) ->
         _ ->
             []
     end.
+
+%% the metas a viewer may see, newest first: public ones, their own, and
+%% to a moderator every one
+-spec metas(viewer()) -> [meta()].
+metas(Viewer) ->
+    case gen_server:call(?MODULE, {metas, who(Viewer), none}) of
+        {ok, Rows} when is_list(Rows) -> metas_of(Rows);
+        _ -> []
+    end.
+
+%% one meta, if the viewer may see it, and the shown posts that show it
+-spec meta(Hash :: binary(), viewer()) -> {ok, meta(), [pos_integer()]} | none.
+meta(Hash, Viewer) when byte_size(Hash) =:= 32 ->
+    case gen_server:call(?MODULE, {metas, who(Viewer), Hash}) of
+        {ok, [_] = Rows} ->
+            case {metas_of(Rows), gen_server:call(?MODULE, {tacks, Hash})} of
+                {[M], {ok, Posts}} when is_list(Posts) ->
+                    {ok, M, [P || [P] <- Posts, is_integer(P), P > 0]};
+                _ ->
+                    none
+            end;
+        _ ->
+            none
+    end;
+meta(_, _) ->
+    none.
+
+-spec who(viewer()) -> {integer(), 0 | 1}.
+who(#{actor := Actor, moderator := Moderator}) ->
+    {
+        case Actor of
+            A when is_integer(A) -> A;
+            none -> -1
+        end,
+        case Moderator of
+            true -> 1;
+            false -> 0
+        end
+    }.
+
+-spec metas_of([term()]) -> [meta()].
+metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload] | Rows]) when
+    is_binary(Hash),
+    is_binary(Type),
+    is_integer(W),
+    W > 0,
+    is_integer(H),
+    H > 0,
+    is_binary(Traits),
+    is_integer(Time),
+    is_integer(Upload),
+    Upload > 0
+->
+    [
+        #{
+            hash => Hash,
+            type => Type,
+            width => W,
+            height => H,
+            traits => Traits,
+            time => Time,
+            private => Private =:= 1,
+            mine => Mine =:= 1,
+            upload => Upload
+        }
+        | metas_of(Rows)
+    ];
+metas_of([_ | Rows]) ->
+    metas_of(Rows);
+metas_of([]) ->
+    [].
 
 %% the shown posts an account signed, by its name, newest first
 -spec signed(Name :: binary()) -> {ok, [{pos_integer(), binary(), integer(), binary()}]} | none.
@@ -484,10 +574,33 @@ handle_call({posted, Actor}, _From, Conn) when is_integer(Actor) ->
         " ORDER BY id DESC LIMIT 200"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
+handle_call({metas, {Actor, Moderator}, Hash}, _From, Conn) when
+    is_integer(Actor), is_integer(Moderator)
+->
+    Sql = <<
+        "SELECT m.asset, x.format, x.width, x.height, x.traits, m.time, m.private,"
+        " m.owner = ?1, (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset)"
+        " FROM meta m JOIN asset x ON x.hash = m.asset"
+        " WHERE (m.private = 0 OR m.owner = ?1 OR ?2 = 1) AND (?3 IS NULL OR m.asset = ?3)"
+        " ORDER BY m.time DESC, m.asset DESC LIMIT 200"
+    >>,
+    Which =
+        case Hash of
+            none -> undefined;
+            _ when is_binary(Hash) -> {blob, Hash}
+        end,
+    {reply, ike_db:q(Conn, Sql, [Actor, Moderator, Which]), Conn};
+handle_call({tacks, Hash}, _From, Conn) when is_binary(Hash) ->
+    Sql = <<
+        "SELECT DISTINCT pa.post FROM post_image pa JOIN shown s ON s.id = pa.post"
+        " WHERE pa.asset = ?1 ORDER BY pa.post"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [{blob, Hash}]), Conn};
 handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->
+    %% any upload: a link names one only on a page that may show it
     Sql = <<
         "SELECT a.hash, a.format FROM upload u JOIN asset a ON a.hash = u.asset"
-        " WHERE u.id = ?1 AND u.posted IS NULL"
+        " WHERE u.id = ?1"
     >>,
     {reply, ike_db:q(Conn, Sql, [Upload]), Conn};
 handle_call(boards, _From, Conn) ->

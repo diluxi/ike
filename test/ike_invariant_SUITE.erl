@@ -25,7 +25,7 @@
     inv07_tripwire_no_fetcher/1,
     inv08_purge_leaves_nothing/1,
     inv09_reachability_view_is_complete/1,
-    inv10_staged_uploads_are_their_uploaders/1,
+    inv10_private_metas_are_their_owners_and_moderators/1,
     inv11_stripping_is_complete_and_deterministic/1
 ]).
 
@@ -40,7 +40,7 @@ all() ->
         inv07_tripwire_no_fetcher,
         inv08_purge_leaves_nothing,
         inv09_reachability_view_is_complete,
-        inv10_staged_uploads_are_their_uploaders,
+        inv10_private_metas_are_their_owners_and_moderators,
         inv11_stripping_is_complete_and_deterministic
     ].
 
@@ -1001,6 +1001,13 @@ inv08_purge_leaves_nothing(Config) ->
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM upload WHERE asset = ?", [
         {blob, ImageHash}
     ]),
+    %% and its meta, with the trunk's page of it
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM meta WHERE asset = ?", [
+        {blob, ImageHash}
+    ]),
+    {404, _, _} = ike_browser:request(
+        Config, get, "/trunk/" ++ ImageHex, ike_browser:cookies(Admin), none
+    ),
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE asset = ?", [
         {blob, ImageHash}
     ]),
@@ -1118,43 +1125,97 @@ inv09_reachability_view_is_complete(Config) ->
         Referencing
     ).
 
-%% 10. A staged upload is served to no one but its uploader.
+%% 10. A private meta is served only to its owner and moderators.
+%% Moderators see all metas in the trunk. Users see only public and their
+%% own metas.
 %%
-%% The media origin knows no session, so a link to a staged upload is its
-%% own credential, signed and short-lived (hazard G7), and only the
-%% uploader's own page carries one. Two accounts and nobody: the other
-%% two are shown nothing; a link changed in any part, or past its time,
-%% or asked of the main origin, gets nothing.
-inv10_staged_uploads_are_their_uploaders(Config) ->
-    Png = read(?config(data_dir, Config), "base.png"),
-    Uploader = ike_browser:login(Config, <<"stager">>),
+%% The media origin knows no session, so a link to a private meta's files
+%% is its own credential, signed and short-lived (hazard G7), and only a
+%% page its owner or a moderator asked for carries one. An owner, another
+%% account, nobody and a moderator: the owner and the moderator are shown
+%% the private meta, in the trunk and on its page, the other two nothing
+%% of it; its files are not on the media origin by name; a link changed
+%% in any part, or past its time, or asked of the main origin, gets
+%% nothing. A public meta is listed for everyone and its files are
+%% public, and the owner's switch moves a meta between the two.
+inv10_private_metas_are_their_owners_and_moderators(Config) ->
+    %% images of their own: a meta is its asset's first uploader's, and
+    %% the suite's files have been uploaded before
+    Png = png(3, 2, 17),
+    Jpeg = png(2, 3, 23),
+    Owner = ike_browser:login(Config, <<"stager">>),
     Other = ike_browser:login(Config, <<"onlooker">>),
-    {303, Sent, _} = ike_browser:upload(Config, Uploader, [{<<"a.png">>, Png}]),
+    Moderator = ike_browser:login(Config, <<"trunk-mod">>, #{groups => [<<"ike-moderator">>]}),
+    Janitor = ike_browser:login(Config, <<"trunk-janitor">>, #{groups => [<<"ike-janitor-b">>]}),
+    #{csrf := Csrf} = Owner,
+    {Type, Body} = ike_browser:multipart([
+        {field, <<"csrf">>, list_to_binary(Csrf)},
+        {field, <<"private">>, <<"1">>},
+        {file, <<"file">>, {<<"a.png">>, Png}}
+    ]),
+    {303, Sent, _} = ike_browser:request(
+        Config, post, "/upload", ike_browser:cookies(Owner), {Type, Body}
+    ),
     "/upload" = proplists:get_value("location", Sent),
-    {200, _, Mine} = ike_browser:request(
-        Config, get, "/upload", ike_browser:cookies(Uploader), none
+    [[Hash]] = ike_browser:query(
+        Config,
+        "SELECT m.asset FROM meta m JOIN actor a ON a.id = m.owner"
+        " WHERE a.subject = 'stager' AND m.private = 1",
+        []
     ),
-    {match, [[File, Thumb]]} = re:run(
-        Mine,
+    Hex = binary_to_list(binary:encode_hex(Hash, lowercase)),
+    Meta = "/trunk/" ++ Hex,
+    Signed =
         "<a href=\"(http://media\\.test/staged/[^\"]+)\"><img src=\"(http://media\\.test/staged/[^\"]+)\"",
-        [global, {capture, all_but_first, list}]
-    ),
+    %% the owner and the moderator: listed, and its page with links
+    [
+        begin
+            {200, _, Trunk} = ike_browser:request(Config, get, "/trunk", Cookies, none),
+            {_, _} = binary:match(Trunk, list_to_binary(Meta)),
+            {200, _, Page} = ike_browser:request(Config, get, Meta, Cookies, none),
+            {match, [_, _]} = re:run(Page, Signed, [{capture, all_but_first, list}])
+        end
+     || Cookies <- [ike_browser:cookies(Owner), ike_browser:cookies(Moderator)]
+    ],
+    {200, _, Mine} = ike_browser:request(Config, get, Meta, ike_browser:cookies(Owner), none),
+    {match, [File, Thumb]} = re:run(Mine, Signed, [{capture, all_but_first, list}]),
     {200, Headers, Stored} = ike_browser:media(Config, File),
     "image/png" = proplists:get_value("content-type", Headers),
     "nosniff" = proplists:get_value("x-content-type-options", Headers),
     "default-src 'none'; sandbox" = proplists:get_value("content-security-policy", Headers),
     undefined = proplists:get_value("set-cookie", Headers),
     %% it is what the stripper made of the upload
-    Golden = maps:get("base.png", golden()),
-    Golden = binary:encode_hex(crypto:hash(sha256, Stored), lowercase),
+    Hash = crypto:hash(sha256, Stored),
     {200, ThumbHeaders, _} = ike_browser:media(Config, Thumb),
     "image/webp" = proplists:get_value("content-type", ThumbHeaders),
-    %% nobody else is given a link
+    %% everyone else, a janitor too: not listed, no page, no link, and
+    %% the files are not on the media origin by name
     [
-        nomatch = binary:match(Page, <<"media.test">>)
-     || Cookies <- [ike_browser:cookies(Other), []],
-        {200, _, Page} <- [ike_browser:request(Config, get, "/upload", Cookies, none)]
+        begin
+            {200, _, Trunk} = ike_browser:request(Config, get, "/trunk", Cookies, none),
+            nomatch = binary:match(Trunk, list_to_binary(Hex)),
+            {404, _, Missing} = ike_browser:request(Config, get, Meta, Cookies, none),
+            nomatch = binary:match(Missing, <<"media.test">>),
+            {200, _, Uploads} = ike_browser:request(Config, get, "/upload", Cookies, none),
+            nomatch = binary:match(Uploads, <<"media.test">>)
+        end
+     || Cookies <- [ike_browser:cookies(Other), ike_browser:cookies(Janitor), []]
     ],
+    {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
+    {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".thumb.webp"),
+    %% only the owner switches it: not another account, not a moderator
+    Switch = fun(#{csrf := C} = Who, To) ->
+        ike_browser:request(
+            Config,
+            post,
+            Meta,
+            ike_browser:cookies(Who),
+            {form, uri_string:compose_query([{"csrf", C}, {"private", To}])}
+        )
+    end,
+    {403, _, _} = Switch(Other, "0"),
+    {403, _, _} = Switch(Moderator, "0"),
+    {404, _, _} = ike_browser:request(Config, get, Meta, [], none),
     %% a link is good for what it names and no more
     {match, [Upload, Expires, Sig]} = re:run(
         File, "/staged/([0-9]+)/([0-9]+)/([^/]+)$", [{capture, all_but_first, list}]
@@ -1178,11 +1239,56 @@ inv10_staged_uploads_are_their_uploaders(Config) ->
     %% the main origin has no such path at all
     "http://media.test" ++ Path = File,
     {404, _, _} = ike_browser:request(Config, get, Path, [], none),
+    %% made public by its owner: listed for everyone, its files public;
+    %% private again, and they are not
+    {303, _, _} = Switch(Owner, "0"),
+    {200, _, Public} = ike_browser:request(Config, get, "/trunk", [], none),
+    {_, _} = binary:match(Public, list_to_binary(Meta)),
+    {200, _, _} = ike_browser:request(Config, get, Meta, [], none),
+    {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
+    {303, _, _} = Switch(Owner, "1"),
+    {404, _, _} = ike_browser:request(Config, get, Meta, [], none),
+    {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
+    %% an upload not ticked private is public at once, to everyone
+    {303, _, _} = ike_browser:upload(Config, Other, [{<<"b.png">>, Jpeg}]),
+    [[Open]] = ike_browser:query(
+        Config,
+        "SELECT m.asset FROM meta m JOIN actor a ON a.id = m.owner"
+        " WHERE a.subject = 'onlooker' AND m.private = 0",
+        []
+    ),
+    OpenHex = binary_to_list(binary:encode_hex(Open, lowercase)),
+    {200, _, Listed} = ike_browser:request(Config, get, "/trunk", [], none),
+    {_, _} = binary:match(Listed, list_to_binary("/trunk/" ++ OpenHex)),
+    {200, _, OpenPage} = ike_browser:request(Config, get, "/trunk/" ++ OpenHex, [], none),
+    nomatch = binary:match(OpenPage, <<"onlooker">>),
+    nomatch = binary:match(OpenPage, <<"/staged/">>),
+    {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ OpenHex ++ ".png"),
     %% and once its time is up, a link is nothing
     timer:sleep((?STAGED + 1) * 1000),
     {404, _, _} = ike_browser:media(Config, File),
     known_routes(),
     known_tables(Config).
+
+%% a png of W by H pixels, its bytes made from Seed: no other test's
+png(W, H, Seed) ->
+    Chunk = fun(Kind, Data) ->
+        [<<(byte_size(Data)):32>>, Kind, Data, <<(erlang:crc32([Kind, Data])):32>>]
+    end,
+    Rows = <<
+        <<0,
+            <<
+                <<((Seed * (X + 1) * (Y + 3)) rem 256):8, (Seed + X):8, (Y * 40):8>>
+             || X <- lists:seq(0, W - 1)
+            >>/binary>>
+     || Y <- lists:seq(0, H - 1)
+    >>,
+    iolist_to_binary([
+        <<137, "PNG\r\n", 26, "\n">>,
+        Chunk(<<"IHDR">>, <<W:32, H:32, 8, 2, 0, 0, 0>>),
+        Chunk(<<"IDAT">>, zlib:compress(Rows)),
+        Chunk(<<"IEND">>, <<>>)
+    ]).
 
 other($A) -> $B;
 other(_) -> $A.
@@ -1615,6 +1721,8 @@ known_routes() ->
         [<<"style.css">>],
         [<<"ike.js">>],
         [<<"user">>, name],
+        [<<"trunk">>],
+        [<<"trunk">>, hex],
         [<<"wiki">>, name],
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],
@@ -1650,6 +1758,7 @@ known_tables(Config) ->
         [<<"booru_tag">>],
         [<<"booru_version">>],
         [<<"link">>],
+        [<<"meta">>],
         [<<"migration">>],
         [<<"page">>],
         [<<"post">>],

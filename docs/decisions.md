@@ -1051,10 +1051,10 @@ lux's model, in lux's words where they are given:
   (ActivityPub).
 - **Moderators and up see every asset:** to them `/trunk` lists the
   private metas as well.
-- **Not built:** this crosses invariant 10 ("A staged upload is served
-  to no one but its uploader") and G7's control, which are lux's words
-  in hazards.md. The wording proposed in questions.md (Q31) is needed
-  first.
+- Invariant 10 now reads (lux, 2026-11-17): "A private meta is served
+  only to its owner and moderators. Moderators see all metas in the
+  trunk. Users see only public and their own metas." Built: "The trunk,
+  first slice", below.
 
 ## A page outlives its first revision (lux, 2026-11-17; Q39)
 
@@ -1077,3 +1077,57 @@ lux's model, in lux's words where they are given:
 - **A revision's count is coloured:** `+n` green, `-n` red.
 - *Unchanged:* purging a page's first post purges its whole thread, as
   on every board.
+
+## The trunk, first slice (lux, 2026-11-17)
+
+- **A meta per asset,** made when the asset is first uploaded, by
+  whichever form: `meta` (migration 0021) holds its owner (that upload's
+  actor; the anonymous actor for nobody's), when, and whether it is
+  private. Metas are part of the reachability view, and purge_image
+  takes the meta with the asset (invariants 8 and 9, their tests
+  extended).
+- **Public unless ticked private** on `/upload`; only an account's
+  upload can be private. The owner switches it either way on the meta's
+  page. A public meta's files are on the media origin as a shown post's
+  are; a private one's are reached only through the short-lived signed
+  links (G7's mechanism, kept), which only pages asked for by the owner
+  or a moderator carry. A signed link now works for any upload, not only
+  a staged one: only pages that may show the file make one.
+- **`/trunk`** lists the newest 200 metas the asker may see: public ones,
+  their own, and to moderators and admins all (janitors are not
+  moderators here). **`/trunk/HEX`** is a meta's page: the asset, its
+  type, size, upload time, who sees it, what it is (traits), the shown
+  posts that tack it, and to its owner "owner: you" and the switch. A
+  meta the asker may not see is the same 404 as one that is not there.
+- **Nobody is told whose a meta is,** moderators included: an upload may
+  be in a post nobody signed, and a name on the meta would sign it. Q42.
+- **Migration:** existing assets get a meta owned by their first
+  upload's actor, private if never posted (they were staged under the
+  old invariant 10, so seen by their uploader alone), else public.
+- *Simplification:* one meta per asset, its first uploader's. A second
+  account uploading the same bytes owns nothing of it, and cannot make
+  it private or public (Q41).
+- *Gap:* a public meta keeps its files public whatever moderators do to
+  the posts and entries that show it, and only an admin's purge_image
+  takes it out of the trunk (Q40). The asset suite's "media follow what
+  is shown" case now uploads privately, to keep testing what it did.
+- *Not yet:* paging, curations in the list (marked), comments on a meta.
+
+## Curation (lux, 2026-11-17; to build next)
+
+- **Every asset goes the same way:** uploaded (by a tack, by a user
+  bringing their own work, later by archiving another site's post), it
+  gets a meta. Tacks make metas, never curations (`booru_at_once` is to
+  go).
+- **A meta's page has a comment thread** below it, and a field for tags,
+  space-separated for now, with a button that curates it: posts it to
+  the booru. Its comments then move to the curation's page, and the
+  meta's link leads there.
+- **The curation page stays a Danbooru-style page,** as entries are
+  now. Its comment section holds, between the comments, revision posts
+  as the wiki's: a `<details>` whose summary counts the tags added and
+  taken and summarises the commentary's diff. Not reversed, unlike the
+  wiki. No separate `/booru/` board: the thread lives under the entry.
+- **`/trunk`** lists metas and curations both, curations marked.
+- A private meta can be curated privately (a comic tagged in full before
+  release).

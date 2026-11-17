@@ -2,8 +2,8 @@
 %% (planning, Upload; hazard G7). The form is multipart, the one form
 %% that is; each file goes to the stripper before anything is kept, and
 %% what is kept is what the stripper made of it (invariant 6). Staged
-%% uploads are shown to their uploader alone, on this page, through links
-%% to the media origin (invariant 10).
+%% uploads are listed here for their uploader, and each asset's meta in
+%% the trunk: public unless the private box is ticked (invariant 10).
 -module(ike_http_upload).
 -behaviour(cowboy_handler).
 
@@ -53,7 +53,7 @@ submit(Actor, Csrf, Req0) ->
             case field(Req0) of
                 {ok, <<"csrf">>, Token, Req1} ->
                     case same(Token, Csrf) of
-                        true -> files(Actor, Csrf, Req1, 0, []);
+                        true -> files(Actor, Csrf, Req1, 0, [], false);
                         false -> ike_http:forbidden(Req1)
                     end;
                 {_, Req1} ->
@@ -94,9 +94,11 @@ field(Req0) ->
     end.
 
 %% each file part in turn, stripped and kept, or refused with a reason
--spec files(ike_id:actor(), binary(), cowboy_req:req(), non_neg_integer(), [binary()]) ->
+%% Private: whether the box was ticked, which the form puts before the
+%% files, so that it holds for every one of them
+-spec files(ike_id:actor(), binary(), cowboy_req:req(), non_neg_integer(), [binary()], boolean()) ->
     cowboy_req:req().
-files(Actor, Csrf, Req0, Count, Refused) ->
+files(Actor, Csrf, Req0, Count, Refused, Private) ->
     #{max_bytes := Max, files := Most} = ike_config:strip(),
     try cowboy_req:read_part(Req0, #{length => ?FIELD, period => ?PERIOD}) of
         {ok, Headers, Req1} ->
@@ -104,20 +106,28 @@ files(Actor, Csrf, Req0, Count, Refused) ->
                 {file, <<"file">>, _Filename, _Type} when Count < Most ->
                     case body(Req1, Max, <<>>) of
                         {ok, <<>>, Req2} ->
-                            files(Actor, Csrf, Req2, Count, Refused);
+                            files(Actor, Csrf, Req2, Count, Refused, Private);
                         {ok, Bytes, Req2} ->
                             files(
                                 Actor,
                                 Csrf,
                                 Req2,
                                 Count + 1,
-                                Refused ++ kept(Actor, Count + 1, Bytes)
+                                Refused ++ kept(Actor, Count + 1, Bytes, Private),
+                                Private
                             );
                         {too_large, Req2} ->
                             Html = ike_view:message(
                                 <<"too large">>, <<"a file was larger than this site takes.">>
                             ),
                             ike_http:page(413, Html, Req2)
+                    end;
+                {data, <<"private">>} when Count =:= 0 ->
+                    case cowboy_req:read_part_body(Req1, #{length => ?FIELD, period => ?PERIOD}) of
+                        {ok, Value, Req2} ->
+                            files(Actor, Csrf, Req2, Count, Refused, Value =:= <<"1">>);
+                        {more, _, Req2} ->
+                            ike_http:reply(400, Req2)
                     end;
                 _ ->
                     ike_http:reply(400, Req1)
@@ -151,12 +161,16 @@ body(Req0, Left, Acc) ->
 %% one file: what the stripper made of it, kept; or not taken, said the
 %% same way whatever the reason, so that a refused hash reads like a
 %% file that is no image (hazard P6)
--spec kept(ike_id:actor(), pos_integer(), binary()) -> [binary()].
-kept(Actor, N, Bytes) ->
+-spec kept(ike_id:actor(), pos_integer(), binary(), boolean()) -> [binary()].
+kept(Actor, N, Bytes, Private) ->
     Which = <<"file ", (integer_to_binary(N))/binary, ": ">>,
     case ike_strip:run(Bytes) of
         {ok, Stripped} ->
-            case ike_writer:upload(#{actor => Actor, original => Bytes, stripped => Stripped}) of
+            case
+                ike_writer:upload(#{
+                    actor => Actor, original => Bytes, stripped => Stripped, private => Private
+                })
+            of
                 {ok, _} -> [];
                 {error, refused} -> [<<Which/binary, "not taken">>];
                 {error, _} -> [<<Which/binary, "not kept, try again">>]

@@ -159,11 +159,23 @@ only_ones_own_once(Config) ->
     [[After]] = ike_browser:posts(Config),
     After = N + 1.
 
+%% an upload whose meta is private: its files are public only while a
+%% post or an entry shows them
+private(Config, #{csrf := Csrf} = Session, Name, Bytes) ->
+    {Type, Body} = ike_browser:multipart([
+        {field, <<"csrf">>, list_to_binary(Csrf)},
+        {field, <<"private">>, <<"1">>},
+        {file, <<"file">>, {Name, Bytes}}
+    ]),
+    request(Config, post, "/upload", cookies(Session), {Type, Body}).
+
 the_media_follow_what_is_shown(Config) ->
     Session = login(Config, <<"shown">>),
     Moderator = login(Config, <<"shown-mod">>, #{groups => [<<"ike-moderator">>]}),
-    %% bytes no other test posts, so that no other post shows this asset
-    {303, _, _} = upload(Config, Session, [{<<"t.webp">>, read(Config, "lossy.webp")}]),
+    %% bytes no other test posts, so that no other post shows this asset,
+    %% and private, so that the trunk does not (a public meta's files are
+    %% public whatever else shows them)
+    {303, _, _} = private(Config, Session, <<"t.webp">>, read(Config, "lossy.webp")),
     Upload = latest(Config, <<"shown">>),
     {303, H, _} = with(Config, Session, "/board/b/new", <<"look">>, Upload),
     {File, Thumb} = image(Config, page(H)),

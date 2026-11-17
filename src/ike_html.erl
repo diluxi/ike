@@ -33,6 +33,10 @@
     | h1
     | img
     | ins
+    | table
+    | tr
+    | th
+    | td
     | head
     | header
     | html
@@ -215,6 +219,10 @@ tag(textarea) -> <<"textarea">>;
 tag(time) -> <<"time">>;
 tag(title) -> <<"title">>;
 tag(ul) -> <<"ul">>;
+tag(table) -> <<"table">>;
+tag(tr) -> <<"tr">>;
+tag(th) -> <<"th">>;
+tag(td) -> <<"td">>;
 tag(video) -> <<"video">>.
 
 -spec name(atom()) -> binary().

@@ -47,6 +47,8 @@ dispatch() ->
             {"/booru", ike_http_page, booru},
             {"/booru/search", ike_http_search, []},
             {"/user/:name", ike_http_user, []},
+            {"/trunk", ike_http_trunk, index},
+            {"/trunk/:hex", ike_http_trunk, meta},
             {"/wiki", ike_http_wiki, index},
             {"/wiki/:name", ike_http_wiki, page},
             {"/wiki/:name/edit", ike_http_wiki, edit},

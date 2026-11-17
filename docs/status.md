@@ -64,11 +64,15 @@ the wiki page's thread as its history, diff colours), `phi/postfiles`
 subset, ctrl+enter, ctrl+b, ctrl+i), `phi/redlink` (a name with no page
 links to where it would be), `phi/stack` (edits stack over the newest,
 an account's next edit amends its own, unsigned edits retract by
-password).
+password), `phi/tombstone` (a wiki page outlives its first revision;
+revisions named and coloured), `phi/trunk` (metas, `/trunk`, private
+uploads, invariant 10 as lux reworded it).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
 - **Tags by what an entry is owe:** `vector` (with SVG) and `mesh`.
+- **Curation (next):** tagging on the meta's page, the comment thread,
+  curations in the trunk, `booru_at_once` gone.
 - **M2 owes:** entries from `/upload`, versions and upgrades, paging,
   tag aliases and implications (BURs are M4), GIF, meshes (rule in
   decisions.md).
@@ -78,11 +82,9 @@ password).
 
 ## Blocked on lux
 
-- **Invariant 10 before the trunk:** lux's asset, meta, tack and
-  curation model (decisions.md) makes uploads public by default, which
-  invariant 10 forbids. A wording is proposed in Q31. Also open: Q36
-  (what a folded revision said), Q37, Q38.
-
+- **Moderating metas (Q40)** before launch; Q41, Q42.
+- **hazards.md:** invariant 10 changed as asked, left uncommitted with
+  the rest of hazards.md; G7's control still has the old words.
 - **Merging** the M0 stack, then `phi/board`.
 - **Authelia's `groups` before deploying `phi/mod`:** ike now asks for
   the `groups` scope, and Authelia refuses a scope the client lacks, so

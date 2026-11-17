@@ -6,7 +6,7 @@
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
--export([style/0, script/0, user/2]).
+-export([style/0, script/0, user/2, trunk/1, meta/4]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
@@ -832,7 +832,9 @@ upload(Csrf, Refused, Staged, Posted) ->
         ike_html:el(h1, [ike_html:text(<<"uploads">>)]),
         ike_html:el(p, [
             ike_html:text(
-                <<"images wait here until they are posted, seen by you alone. jpeg, png or",
+                <<"images wait here until they are posted, and are listed in the trunk for",
+                    " everyone, unless you tick private: then only you and the moderators see",
+                    " them. jpeg, png or",
                     " webp; what a file says about itself (place, camera, time) is taken out.",
                     " an upload is tied to your account: a post that uses it shows no name",
                     " unless you sign it, but a moderator can suspend the account behind an",
@@ -844,6 +846,20 @@ upload(Csrf, Refused, Staged, Posted) ->
             [{method, <<"post">>}, {action, <<"/upload">>}, {enctype, <<"multipart/form-data">>}],
             [
                 ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+                ike_html:el(p, [
+                    ike_html:el(
+                        input,
+                        [
+                            {type, <<"checkbox">>},
+                            {id, <<"private">>},
+                            {name, <<"private">>},
+                            {value, <<"1">>}
+                        ],
+                        []
+                    ),
+                    ike_html:text(<<" ">>),
+                    ike_html:el(label, [{for, <<"private">>}], [ike_html:text(<<"private">>)])
+                ]),
                 ike_html:el(p, [
                     ike_html:el(
                         input,
@@ -886,6 +902,117 @@ staged(#{id := Id, type := Type, width := W, height := H, file := File, thumb :=
             <<" upload ", N/binary, ", ", Type/binary, ", ", (integer_to_binary(W))/binary, "x",
                 (integer_to_binary(H))/binary>>
         )
+    ]).
+
+%% the trunk: the metas the asker may see, newest first, each its
+%% thumbnail, linking to its page; a private one says so
+-spec trunk([{ike_reader:meta(), image()}]) -> ike_html:html().
+trunk(Metas) ->
+    layout(<<"trunk">>, [
+        ike_html:el(h1, [ike_html:text(<<"trunk">>)]),
+        ike_html:el(p, [
+            ike_html:text(<<"every upload, as it came in, tagged or not. ">>),
+            anchor(<<"/upload">>, <<"upload">>)
+        ]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                ike_html:el(a, [{href, meta_path(Hash)}], [
+                    ike_html:el(
+                        img, [{src, Thumb}, {alt, <<Type/binary, " ", (short(Hash))/binary>>}], []
+                    )
+                ])
+                | [ike_html:text(<<" private">>) || Private]
+            ])
+         || {#{hash := Hash, type := Type, private := Private}, #{thumb := Thumb}} <- Metas
+        ])
+    ]).
+
+-spec meta_path(binary()) -> binary().
+meta_path(Hash) ->
+    <<"/trunk/", (binary:encode_hex(Hash, lowercase))/binary>>.
+
+-spec short(binary()) -> binary().
+short(Hash) ->
+    binary:part(binary:encode_hex(Hash, lowercase), 0, 12).
+
+%% a meta's page: the asset, what is known of it, the posts that show it,
+%% and to its owner the switch between private and public. whose it is
+%% is said to nobody else (an upload may be in a post nobody signed)
+-spec meta(ike_reader:meta(), image(), [pos_integer()], Csrf :: binary() | none) ->
+    ike_html:html().
+meta(Meta, Image, Posts, Csrf) ->
+    #{
+        hash := Hash,
+        type := Type,
+        width := W,
+        height := H,
+        traits := Traits,
+        time := Time,
+        private := Private,
+        mine := Mine
+    } = Meta,
+    Short = short(Hash),
+    Row = fun(Name, Value) ->
+        ike_html:el(tr, [
+            ike_html:el(th, [ike_html:text(Name)]),
+            ike_html:el(td, [ike_html:text(Value)])
+        ])
+    end,
+    Rows =
+        [
+            Row(<<"type">>, Type),
+            Row(<<"size">>, <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>),
+            Row(<<"uploaded">>, stamp(Time)),
+            Row(
+                <<"seen by">>,
+                case Private of
+                    true -> <<"its owner and moderators">>;
+                    false -> <<"everyone">>
+                end
+            )
+        ] ++
+            [Row(<<"what it is">>, Traits) || Traits =/= <<>>] ++
+            [Row(<<"owner">>, <<"you">>) || Mine],
+    Switch =
+        case Csrf of
+            none ->
+                [];
+            _ ->
+                {Value, Label} =
+                    case Private of
+                        true -> {<<"0">>, <<"make public">>};
+                        false -> {<<"1">>, <<"make private">>}
+                    end,
+                [
+                    ike_html:el(form, [{method, <<"post">>}, {action, meta_path(Hash)}], [
+                        ike_html:el(
+                            input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
+                        ),
+                        ike_html:el(
+                            input, [{type, <<"hidden">>}, {name, <<"private">>}, {value, Value}], []
+                        ),
+                        ike_html:el(p, [
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(Label)])
+                        ])
+                    ])
+                ]
+        end,
+    Shown =
+        case Posts of
+            [] ->
+                [];
+            _ ->
+                [
+                    ike_html:el(p, [
+                        ike_html:text(<<"shown in ">>)
+                        | spaced([permalink(P, <<>>) || P <- Posts])
+                    ])
+                ]
+        end,
+    layout(<<"meta ", Short/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<"meta ", Short/binary>>)]),
+        ike_html:el(p, [anchor(<<"/trunk">>, <<"trunk">>)])
+        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Switch
     ]).
 
 -spec upload_locked() -> ike_html:html().

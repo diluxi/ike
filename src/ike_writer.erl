@@ -6,7 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
--export([report/2, dismiss/1, tag/3, wiki/1]).
+-export([report/2, dismiss/1, tag/3, wiki/1, privacy/3]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -121,14 +121,26 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
 
 %% an upload, stripped: its asset (once, whoever brought it before) and
 %% the upload itself, staged. Original is the upload as it came
--spec upload(#{actor := ike_id:actor(), original := binary(), stripped := ike_strip:stripped()}) ->
+%% and the asset's meta, if it had none, owned by the uploader: private
+%% if an account asked, else public, in the trunk
+-spec upload(#{
+    actor := ike_id:actor(),
+    original := binary(),
+    stripped := ike_strip:stripped(),
+    private => boolean()
+}) ->
     {ok, Upload :: pos_integer()} | error().
-upload(#{actor := Actor, original := Original, stripped := Stripped}) ->
+upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
+    Private =
+        case Given of
+            #{private := true} -> 1;
+            _ -> 0
+        end,
     #{type := Type, width := W, height := H, stored := Stored, thumb := Thumb} = Stripped,
     Traits = spaced([atom_to_binary(T) || T <- maps:get(traits, Stripped, [])]),
     Request =
         {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
-            H, Stored, Thumb, Traits},
+            H, Stored, Thumb, Traits, Private},
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
@@ -193,6 +205,16 @@ wiki(#{name := Name, actor := Actor, body := Body} = Edit) ->
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
+
+%% an account makes a meta it owns private, or public again
+-spec privacy(Asset :: binary(), ike_id:actor(), boolean()) -> ok | {error, not_yours} | error().
+privacy(Asset, Owner, Private) when byte_size(Asset) =:= 32 ->
+    Flag =
+        case Private of
+            true -> 1;
+            false -> 0
+        end,
+    done(call({privacy, Asset, ike_id:to_integer(Owner), Flag})).
 
 %% an account adds and takes away an entry's tags; the history keeps who
 -spec tag(ike_id:booru(), ike_id:actor(), {[binary()], [binary()]}) ->
@@ -426,6 +448,23 @@ handle_call({wiki, Name, Actor, Body, Password}, _From, Conn) when
                 )
         end,
     {reply, Reply, Conn};
+handle_call({privacy, Asset, Owner, Flag}, _From, Conn) when
+    is_binary(Asset), is_integer(Owner), Owner =/= ?NOBODY, (Flag =:= 0 orelse Flag =:= 1)
+->
+    Sql = <<"UPDATE meta SET private = ?3 WHERE asset = ?1 AND owner = ?2 RETURNING 1">>,
+    Reply =
+        case ike_db:q(Conn, Sql, [{blob, Asset}, Owner, Flag]) of
+            {ok, [_]} ->
+                ok = published(Conn, [Asset]),
+                ok;
+            {ok, []} ->
+                {error, not_yours};
+            {ok, Other} ->
+                {error, {unexpected, Other}};
+            {error, _} = Error ->
+                Error
+        end,
+    {reply, Reply, Conn};
 handle_call({tag, Entry, Actor, Add, Remove}, _From, Conn) when
     is_integer(Entry), is_integer(Actor), is_list(Add), is_list(Remove)
 ->
@@ -517,9 +556,22 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
             {Held, {ok, Rung}} -> moderated(Conn, {By, Held}, Rung, Target, Reason)
         end,
     {reply, Reply, Conn};
-handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb, Traits}, _From, Conn) when
-    is_integer(Actor), is_binary(Original), is_binary(Stored), is_binary(Thumb), is_binary(Traits)
+handle_call(
+    {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0}, _From, Conn
+) when
+    is_integer(Actor),
+    is_binary(Original),
+    is_binary(Stored),
+    is_binary(Thumb),
+    is_binary(Traits),
+    (Private0 =:= 0 orelse Private0 =:= 1)
 ->
+    %% nobody's uploads are everyone's: never private
+    Private =
+        case Actor of
+            ?NOBODY -> 0;
+            _ -> Private0
+        end,
     %% the name is what the bytes are, worked out here and not taken
     %% from the stripper's word
     Hash = crypto:hash(sha256, Stored),
@@ -545,25 +597,41 @@ handle_call({upload, Actor, Original, Type, W, H, Stored, Thumb, Traits}, _From,
                             "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
                             " RETURNING id"
                         >>,
+                        Meta = <<
+                            "INSERT INTO meta (asset, owner, time, private) VALUES (?1, ?2, ?3, ?4)"
+                            " ON CONFLICT (asset) DO NOTHING"
+                        >>,
                         Time = erlang:system_time(second),
-                        committed(
+                        Done = committed(
                             ike_db:transaction(Conn, fun() ->
                                 case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H, Traits]) of
                                     {ok, _} ->
                                         case
-                                            ike_db:q(Conn, Staged, [
-                                                {blob, Hash}, {blob, Original}, Actor, Time
-                                            ])
+                                            {
+                                                ike_db:q(Conn, Staged, [
+                                                    {blob, Hash}, {blob, Original}, Actor, Time
+                                                ]),
+                                                ike_db:q(Conn, Meta, [
+                                                    {blob, Hash}, Actor, Time, Private
+                                                ])
+                                            }
                                         of
-                                            {ok, [[Id]]} -> {ok, {Id, []}};
-                                            {ok, Other} -> {error, {unexpected, Other}};
-                                            {error, _} = Error -> Error
+                                            {{ok, [[Id]]}, {ok, _}} -> {ok, {Id, []}};
+                                            {{ok, Other}, {ok, _}} -> {error, {unexpected, Other}};
+                                            {{error, _} = Error, _} -> Error;
+                                            {_, {error, _} = Error} -> Error
                                         end;
                                     {error, _} = Error ->
                                         Error
                                 end
                             end)
-                        );
+                        ),
+                        %% a public meta's files are on the media origin
+                        case Done of
+                            {ok, _} -> ok = published(Conn, [Hash]);
+                            _ -> ok
+                        end,
+                        Done;
                     _ ->
                         {error, unwritable}
                 end
@@ -1242,6 +1310,7 @@ imaged(Conn, purge_image, Hash, Hashes, Time) ->
                 %% an entry keeps the version, empty: a gap
                 <<"UPDATE booru_version SET asset = NULL WHERE asset = ?1">>,
                 <<"DELETE FROM upload WHERE asset = ?1">>,
+                <<"DELETE FROM meta WHERE asset = ?1">>,
                 <<"DELETE FROM asset WHERE hash = ?1">>
             ],
             case each(Conn, [{blob, Hash}], Steps) of
@@ -1798,14 +1867,15 @@ each_entry(Conn, [{Hash, Time} | Rest]) ->
 each_entry(_Conn, []) ->
     {ok, []}.
 
-%% the media origin's files are the assets some shown post shows, and
-%% no others: each asset named is copied there or taken away to match.
+%% the media origin's files are the assets some shown post or entry
+%% shows, and those whose meta is public, and no others: each asset named is copied there or taken away to match.
 %% derived, like the pages, and made again whole at start
 -spec published(ike_db:writer(), [binary()]) -> ok.
 published(Conn, [Hash | Hashes]) ->
     Sql = <<
         "SELECT x.format, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset = x.hash) OR EXISTS (SELECT 1 FROM shown_entry e WHERE e.asset = x.hash)"
+        " OR EXISTS (SELECT 1 FROM meta m WHERE m.asset = x.hash AND m.private = 0)"
         " FROM asset x WHERE x.hash = ?1"
     >>,
     case ike_db:q(Conn, Sql, [{blob, Hash}]) of
@@ -1899,6 +1969,7 @@ republished(Conn) ->
     Sql = <<
         "SELECT DISTINCT pa.asset FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset IS NOT NULL UNION SELECT asset FROM shown_entry WHERE asset IS NOT NULL"
+        " UNION SELECT asset FROM meta WHERE private = 0"
     >>,
     case ike_db:q(Conn, Sql, []) of
         {ok, Rows} ->
