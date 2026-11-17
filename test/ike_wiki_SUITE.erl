@@ -65,10 +65,24 @@ started_and_read(Config) ->
     {_, _} = binary:match(
         Page, <<"<a class=\"missing\" href=\"/wiki/long_hair\">[[long_hair]]</a>">>
     ),
-    {match, [Thread]} = re:run(Page, "href=\"/board/wiki/([0-9]+)\">discussion", [
+    %% the way to edit beside the title, and the key e for it; the
+    %% revision's number leads to the history and the talk, and nothing
+    %% else does
+    {_, _} = binary:match(
+        Page, <<"<h1>blue_hair <a class=\"edit\" href=\"/wiki/blue_hair/edit\">edit</a></h1>">>
+    ),
+    nomatch = binary:match(Page, <<">discussion<">>),
+    nomatch = binary:match(Page, <<"/history\"">>),
+    {200, _, Script} = request(Config, get, "/ike.js", [], none),
+    {_, _} = binary:match(Script, <<"a.edit">>),
+    {match, [Revision]} = re:run(Page, "as of <a href=\"/p/([0-9]+)\">", [
         {capture, all_but_first, list}
     ]),
-    {200, _, Discussion} = request(Config, get, "/board/wiki/" ++ Thread, [], none),
+    {303, Led, _} = request(Config, get, "/p/" ++ Revision, [], none),
+    "/board/wiki/" ++ _ = Discussed = proplists:get_value("location", Led),
+    {200, _, Discussion} = request(
+        Config, get, hd(string:split(Discussed, "#")), [], none
+    ),
     {_, _} = binary:match(Discussion, <<"hair that is blue.">>),
     {200, _, Index} = request(Config, get, "/wiki", [], none),
     {_, _} = binary:match(Index, <<"href=\"/wiki/blue_hair\"">>),

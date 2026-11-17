@@ -1159,3 +1159,19 @@ lux's model, in lux's words where they are given:
   post is what was asked for.
 - *Owed with curation:* curations bear their owner or anon, and tag and
   commentary revisions are signed or not as wiki revisions are.
+
+## Quotes, nested lists, and the wiki page's look (lux, 2026-11-17)
+
+- **`> ` before a line quotes it,** and a quote holds blocks, so lists
+  and quotes nest in it (`> > `). `>` with no space after stays text, as
+  imageboard greentext; `>>N` is still a link. `[quote]` still works.
+- **Stars give a list item its depth:** `* `, `** `, `*** `. An item
+  deeper than the one before hangs under an item with no text.
+- *Simplification:* quotes and lists go eight deep; past that, quote
+  lines are text and items stay at the eighth level. Nothing else
+  limits them but a post's length.
+- **A wiki page's title has its edit link beside it** (`a.edit`, a word
+  until there is a pen), and `e` follows it where scripts run, unless a
+  text box or a modifier key has the keypress. The history and
+  discussion links are gone: the "as of >>N" note leads to the page's
+  thread, which is both.

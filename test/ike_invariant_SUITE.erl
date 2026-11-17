@@ -556,6 +556,8 @@ inv04_text_is_escaped(Config) ->
             <<"https://x.org/a\"><script>alert(1)</script> http://y.org/<b>">>,
             <<"{{\"><script>alert(1)</script>}} [[x|<b>label</b>]] [code]<script>[/code]">>,
             <<"[[doesn't]] [[a?b]] [[x\"y]] [[x'onclick='y]] [[../login]] [[a/b]] [[a#b]]">>,
+            %% quotes and lists past any depth, and tags across them
+            <<"> > > > > > > > > > > > > > <script>x\n> **************** <b>\n> [quote]\n> </blockquote>\n*** [i]\n* [/i]">>,
             <<"h1. <script>alert(1)</script>\n* <img src=x onerror=alert(1)>\n[quote]\n<b>\n[/quote]">>
         ]
     ),

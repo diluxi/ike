@@ -196,7 +196,18 @@ marked_up(Config) ->
         "\"XMPP\":[https://xmpp.org/about] and https://example.org/a.\n"
         "{{blue_hair -x}} [[xmpp|the page]] [b]never closed\n"
         "[quote]\nsaid [i]so[/i]\n[/quote]\n"
-        "[code]\nlet x = <y>;\n[/code]"
+        "[code]\nlet x = <y>;\n[/code]\n"
+        "\n"
+        "> ike [ieh-keh] (noun):\n"
+        "> * (at amartia.online) a board, booru, and wiki hybrid\n"
+        "> * (Toki Pona from \"nimi.li/ike\":[https://nimi.li/ike]) negative quality\n"
+        "> > nested\n"
+        "> > * deep\n"
+        "> > ** deeper\n"
+        "> > *** deepest\n"
+        "\n"
+        ">implying >>1 is text\n"
+        "*not a list*"
     >>,
     {Op, Op} = new(Config, Session, "b", Text),
     [_, Article] = articles(page(Config, "b", Op)),
@@ -213,4 +224,14 @@ marked_up(Config) ->
     Has(<<"<a class=\"missing\" href=\"/wiki/xmpp\">the page</a>">>),
     Has(<<"[b]never closed">>),
     Has(<<"<blockquote><p>said <i>so</i></p></blockquote>">>),
-    Has(<<"<pre><code>let x = &lt;y&gt;;</code></pre>">>).
+    Has(<<"<pre><code>let x = &lt;y&gt;;</code></pre>">>),
+    %% quotes by "> ", lists by stars, each in each, as deep as given
+    Has(
+        <<"<blockquote><p>ike [ieh-keh] (noun):</p><ul><li>(at amartia.online) a board, booru, and wiki hybrid</li>",
+            "<li>(Toki Pona from <a href=\"https://nimi.li/ike\" rel=\"nofollow noreferrer\">nimi.li/ike</a>)",
+            " negative quality</li></ul>",
+            "<blockquote><p>nested</p><ul><li>deep<ul><li>deeper<ul><li>deepest</li></ul></li></ul></li></ul>",
+            "</blockquote></blockquote>">>
+    ),
+    Has(<<"<p>&gt;implying ">>),
+    Has(<<"<br>*not a list*</p>">>).

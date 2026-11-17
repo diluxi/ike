@@ -1350,10 +1350,18 @@ wiki_index(Names) ->
     #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()},
     #{integer() | {booru, integer()} | {page, binary()} => binary()}
 ) -> ike_html:html().
-wiki_page(Name, #{thread := Thread, revision := Revision, time := Time, body := Body}, Links) ->
+%% the page, its title with the way to edit it beside it (a word for now,
+%% a pen later; the key e too, where scripts run), and the revision it
+%% is as of, whose number leads to the history and the talk alike
+wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links) ->
     Stamp = stamp(Time),
+    Edit = ike_html:el(
+        a, [{class, <<"edit">>}, {href, <<(ike_wiki:path(Name))/binary, "/edit">>}], [
+            ike_html:text(<<"edit">>)
+        ]
+    ),
     layout(Name, [
-        ike_html:el(h1, [ike_html:text(Name)])
+        ike_html:el(h1, [ike_html:text(Name), ike_html:text(<<" ">>), Edit])
         | blocks(ike_markup:parse(Body), Links) ++
             [
                 ike_html:el(p, [
@@ -1361,17 +1369,7 @@ wiki_page(Name, #{thread := Thread, revision := Revision, time := Time, body := 
                     permalink(Revision, <<>>),
                     ike_html:text(<<", ">>),
                     ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
-                ]),
-                ike_html:el(
-                    p,
-                    spaced([
-                        anchor(<<(ike_wiki:path(Name))/binary, "/edit">>, <<"edit">>),
-                        anchor(<<(ike_wiki:path(Name))/binary, "/history">>, <<"history">>),
-                        anchor(
-                            <<"/board/wiki/", (integer_to_binary(Thread))/binary>>, <<"discussion">>
-                        )
-                    ])
-                )
+                ])
             ]
     ]).
 
@@ -1539,10 +1537,12 @@ style() ->
         ".removed { color: #82071e; }\n"
         "a.missing { color: #cf222e; }\n"
         ".title { font-weight: bold; }\n"
+        "h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }\n"
     >>.
 
 %% keys for a text box, for whoever runs scripts: ctrl+enter sends the
-%% form, ctrl+b and ctrl+i put [b] and [i] around what is selected.
+%% form, ctrl+b and ctrl+i put [b] and [i] around what is selected; and
+%% e, outside a text box, follows a page's edit link.
 %% nothing a page needs (invariant 2); no library, ike's own
 -spec script() -> iodata().
 script() ->
@@ -1568,6 +1568,15 @@ script() ->
         "  }\n"
         "  t.selectionStart = start + tag.length + 2;\n"
         "  t.selectionEnd = t.selectionStart + inside.length;\n"
+        "});\n"
+        "document.addEventListener('keydown', function (e) {\n"
+        "  if (e.key !== 'e' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;\n"
+        "  var t = e.target;\n"
+        "  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;\n"
+        "  var a = document.querySelector('a.edit');\n"
+        "  if (!a) return;\n"
+        "  e.preventDefault();\n"
+        "  window.location.href = a.href;\n"
         "});\n"
     >>.
 
@@ -1620,13 +1629,28 @@ blocks([{heading, Level, Inline} | Rest], Links) ->
         end,
     [ike_html:el(Tag, inline(Inline, Links)) | blocks(Rest, Links)];
 blocks([{list, Items} | Rest], Links) ->
-    [ike_html:el(ul, [ike_html:el(li, inline(I, Links)) || I <- Items]) | blocks(Rest, Links)];
+    [listed(Items, Links) | blocks(Rest, Links)];
 blocks([{quote, Inner} | Rest], Links) ->
     [ike_html:el(blockquote, blocks(Inner, Links)) | blocks(Rest, Links)];
 blocks([{code, Code} | Rest], Links) ->
     [ike_html:el(pre, [ike_html:el(code, [ike_html:text(Code)])]) | blocks(Rest, Links)];
 blocks([], _Links) ->
     [].
+
+-spec listed([ike_markup:item()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+    ike_html:html().
+listed(Items, Links) ->
+    ike_html:el(ul, [
+        ike_html:el(
+            li,
+            inline(Text, Links) ++
+                case Under of
+                    [] -> [];
+                    _ -> [listed(Under, Links)]
+                end
+        )
+     || {Text, Under} <- Items
+    ]).
 
 -spec broken([[ike_html:html()]]) -> [ike_html:html()].
 broken([Line]) -> Line;
