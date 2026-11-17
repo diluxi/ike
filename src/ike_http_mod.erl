@@ -226,10 +226,10 @@ look_entry({_, Csrf, Role}, Req) ->
 %% rungs this role may take
 -spec look_meta(who(), cowboy_req:req()) -> cowboy_req:req().
 look_meta({Actor, Csrf, Role}, Req) ->
-    case meta_hash(Req) of
-        {ok, Hash} ->
+    case cowboy_req:binding(meta, Req) of
+        Id when is_integer(Id), Id > 0 ->
             Viewer = #{actor => ike_id:to_integer(Actor), moderator => true},
-            case ike_reader:meta(Hash, Viewer) of
+            case ike_reader:meta(Id, Viewer) of
                 {ok, #{state := State}, _} ->
                     Ladder =
                         case State of
@@ -239,32 +239,20 @@ look_meta({Actor, Csrf, Role}, Req) ->
                         end,
                     Facts = #{board => <<"trunk">>, self => false, account => 0, undo => 0},
                     Kinds = [K || K <- Ladder, ike_role:permits(Role, K, Facts)],
-                    Html = ike_view:moderated_meta(Csrf, Hash, State, Kinds),
+                    Html = ike_view:moderated_meta(Csrf, Id, State, Kinds),
                     ike_http:page(200, Html, Req);
                 none ->
                     ike_http:not_found(Req)
             end;
-        error ->
-            ike_http:not_found(Req)
-    end.
-
--spec meta_hash(cowboy_req:req()) -> {ok, binary()} | error.
-meta_hash(Req) ->
-    case cowboy_req:binding(hex, Req) of
-        Hex when is_binary(Hex), byte_size(Hex) =:= 64 ->
-            case re:run(Hex, "^[0-9a-f]{64}$", [{capture, none}]) of
-                match -> {ok, binary:decode_hex(Hex)};
-                nomatch -> error
-            end;
         _ ->
-            error
+            ike_http:not_found(Req)
     end.
 
 -spec target(what(), cowboy_req:req()) ->
     {ok,
         ike_id:post()
         | {entry, ike_id:booru()}
-        | {meta, binary()}
+        | {meta, pos_integer()}
         | ike_id:actor()
         | binary(),
         Back :: binary()}
@@ -294,10 +282,10 @@ target(booru, Req) ->
             none
     end;
 target(meta, Req) ->
-    case meta_hash(Req) of
-        {ok, Hash} ->
-            {ok, {meta, Hash}, <<"/mod/meta/", (binary:encode_hex(Hash, lowercase))/binary>>};
-        error ->
+    case cowboy_req:binding(meta, Req) of
+        N when is_integer(N), N > 0 ->
+            {ok, {meta, N}, <<"/mod/meta/", (integer_to_binary(N))/binary>>};
+        _ ->
             none
     end;
 target(_, _Req) ->

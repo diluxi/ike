@@ -61,47 +61,69 @@ posted(Config, #{csrf := Csrf} = Session, Text, More, Files) ->
     ),
     request(Config, post, "/board/b/new", cookies(Session), {Type, Body}).
 
-%% the meta of the newest upload of the account called Subject
+%% the meta of the newest upload of the account called Subject: its
+%% page, and its asset's hex
 newest(Config, Subject) ->
-    [[Hash]] = query(
+    [[Id, Hash]] = query(
         Config,
-        "SELECT u.asset FROM upload u JOIN actor a ON a.id = u.actor"
-        " WHERE a.subject = ? ORDER BY u.id DESC LIMIT 1",
+        "SELECT m.id, m.asset FROM upload u JOIN actor a ON a.id = u.actor"
+        " JOIN meta m ON m.asset = u.asset"
+        " WHERE a.subject = ? ORDER BY u.id DESC, m.owner = u.actor DESC LIMIT 1",
         [Subject]
     ),
-    "/trunk/" ++ binary_to_list(binary:encode_hex(Hash, lowercase)).
+    {"/trunk/" ++ integer_to_list(Id), binary_to_list(binary:encode_hex(Hash, lowercase))}.
+
+page(Config, Subject) ->
+    element(1, newest(Config, Subject)).
+
+%% the owner's forms on a meta's page
+owned(Config, #{csrf := Csrf} = Session, Meta, Field, Value) ->
+    request(
+        Config,
+        post,
+        Meta,
+        cookies(Session),
+        {form, uri_string:compose_query([{"csrf", Csrf}, {Field, Value}])}
+    ).
 
 named_or_anonymous(Config) ->
     Session = login(Config, <<"namer">>),
     {200, _, Form} = request(Config, get, "/upload", cookies(Session), none),
     {_, _} = binary:match(Form, <<"sign as namer">>),
     {303, _, _} = upload(Config, Session, png(2, 2, 3), ["signed"]),
-    Signed = newest(Config, <<"namer">>),
+    Signed = page(Config, <<"namer">>),
     {200, _, Named} = request(Config, get, Signed, [], none),
     {_, _} = binary:match(Named, <<"<a href=\"/user/namer\">namer</a>">>),
+    %% to its owner, "(you)", leading to their page
+    {200, _, Yours} = request(Config, get, Signed, cookies(Session), none),
+    {_, _} = binary:match(Yours, <<"<a href=\"/user/namer\">(you)</a>">>),
     {303, _, _} = upload(Config, Session, png(2, 2, 5), []),
-    Unsigned = newest(Config, <<"namer">>),
+    Unsigned = page(Config, <<"namer">>),
     {200, _, Anonymous} = request(Config, get, Unsigned, [], none),
     {_, _} = binary:match(Anonymous, <<"<td>anonymous</td>">>),
     nomatch = binary:match(Anonymous, <<"namer">>),
-    %% its owner is told it is theirs, and nobody else
     {200, _, Mine} = request(Config, get, Unsigned, cookies(Session), none),
-    {_, _} = binary:match(Mine, <<"anonymous (you)">>),
+    {_, _} = binary:match(Mine, <<"<a href=\"/user/namer\">(you)</a>, unsigned">>),
+    %% its owner puts their name on it later; nobody else can
+    Other = login(Config, <<"not-namer">>),
+    {403, _, _} = owned(Config, Other, Unsigned, "sign", "1"),
+    {303, _, _} = owned(Config, Session, Unsigned, "sign", "1"),
+    {200, _, Taken} = request(Config, get, Unsigned, [], none),
+    {_, _} = binary:match(Taken, <<"<a href=\"/user/namer\">namer</a>">>),
+    nomatch = binary:match(
+        element(3, request(Config, get, Unsigned, cookies(Session), none)), <<"sign as">>
+    ),
     %% a file posted with a signed post bears the name; with an unsigned
     %% one it does not
-    {303, _, _} = posted(
-        Config, Session, <<"signed, with a file">>, [{<<"signed">>, <<"1">>}], [
-            {<<"x.png">>, png(2, 2, 7)}
-        ]
-    ),
-    {200, _, Posted} = request(Config, get, newest(Config, <<"namer">>), [], none),
+    {303, _, _} = posted(Config, Session, <<"signed, with a file">>, [{<<"signed">>, <<"1">>}], [
+        {<<"x.png">>, png(2, 2, 7)}
+    ]),
+    {200, _, Posted} = request(Config, get, page(Config, <<"namer">>), [], none),
     {_, _} = binary:match(Posted, <<"<a href=\"/user/namer\">namer</a>">>),
-    {303, _, _} = posted(
-        Config, Session, <<"unsigned, with a file">>, [], [
-            {<<"x.png">>, png(2, 2, 9)}
-        ]
-    ),
-    {200, _, Unnamed} = request(Config, get, newest(Config, <<"namer">>), [], none),
+    {303, _, _} = posted(Config, Session, <<"unsigned, with a file">>, [], [
+        {<<"x.png">>, png(2, 2, 9)}
+    ]),
+    {200, _, Unnamed} = request(Config, get, page(Config, <<"namer">>), [], none),
     nomatch = binary:match(Unnamed, <<"namer">>).
 
 moderated_as_posts(Config) ->
@@ -110,8 +132,8 @@ moderated_as_posts(Config) ->
     Moderator = login(Config, <<"meta-mod">>, #{groups => [<<"ike-moderator">>]}),
     Janitor = login(Config, <<"meta-jan">>, #{groups => [<<"ike-janitor-b">>]}),
     {303, _, _} = upload(Config, Owner, png(3, 3, 11), []),
-    "/trunk/" ++ Hex = Meta = newest(Config, <<"modded">>),
-    Mod = "/mod/meta/" ++ Hex,
+    {"/trunk/" ++ N = Meta, Hex} = newest(Config, <<"modded">>),
+    Mod = "/mod/meta/" ++ N,
     File = "http://media.test/" ++ Hex ++ ".png",
     {200, _, _} = media(Config, File),
     Act = fun(#{csrf := Csrf} = Who, Kind) ->
@@ -136,74 +158,102 @@ moderated_as_posts(Config) ->
      || Cookies <- [cookies(Owner), cookies(Other), []]
     ],
     {200, _, Trunk} = request(Config, get, "/trunk", cookies(Owner), none),
-    nomatch = binary:match(Trunk, list_to_binary(Hex)),
+    nomatch = binary:match(Trunk, list_to_binary(Meta ++ "\"")),
     {200, _, Seen} = request(Config, get, "/trunk", cookies(Moderator), none),
-    {_, _} = binary:match(Seen, list_to_binary(Meta)),
+    {_, _} = binary:match(Seen, list_to_binary(Meta ++ "\"")),
     {_, _} = binary:match(Seen, <<" hidden">>),
     {404, _, _} = media(Config, File),
-    %% logged, publicly, by its short name, as a post by its number
-    Short = list_to_binary(lists:sublist(Hex, 12)),
-    [[<<"hide">>, 1]] = query(
-        Config,
-        "SELECT kind, meta = ? FROM action WHERE meta IS NOT NULL ORDER BY entry DESC LIMIT 1",
-        [{blob, binary:decode_hex(list_to_binary(Hex))}]
+    %% logged, by its number
+    [[<<"hide">>]] = query(
+        Config, "SELECT kind FROM action WHERE meta = ? ORDER BY entry DESC LIMIT 1", [
+            list_to_integer(N)
+        ]
     ),
     [[Text]] = query(
         Config,
         "SELECT p.body FROM action a JOIN post p ON p.id = a.entry ORDER BY a.entry DESC LIMIT 1",
         []
     ),
-    {_, _} = binary:match(Text, <<"hide meta ", Short/binary>>),
+    {_, _} = binary:match(Text, list_to_binary("hide meta #" ++ N)),
     %% and undone
     409 = Act(Moderator, "restore"),
     303 = Act(Moderator, "unhide"),
     {200, _, _} = request(Config, get, Meta, [], none),
     {200, _, _} = media(Config, File),
+    %% trashed: its owner still sees it, marked, its files kept and
+    %% shown them by signed links; nobody else sees anything
     303 = Act(Moderator, "trash"),
-    {404, _, _} = request(Config, get, Meta, cookies(Owner), none),
     {404, _, _} = media(Config, File),
+    [
+        404 = element(1, request(Config, get, Meta, Cookies, none))
+     || Cookies <- [cookies(Other), []]
+    ],
+    {200, _, Trashed} = request(Config, get, Meta, cookies(Owner), none),
+    {_, _} = binary:match(Trashed, <<"<td>trashed</td>">>),
+    {match, [Signed]} = re:run(
+        Trashed, "<a href=\"(http://media\\.test/staged/[^\"]+)\"", [{capture, all_but_first, list}]
+    ),
+    {200, _, _} = media(Config, Signed),
+    {200, _, Listed} = request(Config, get, "/trunk", cookies(Owner), none),
+    {_, _} = binary:match(Listed, <<" trashed">>),
     303 = Act(Moderator, "restore"),
-    {200, _, _} = request(Config, get, Meta, cookies(Owner), none),
-    {200, _, _} = media(Config, File),
-    %% a private meta's hash is not written in the public log
-    {303, _, _} = upload(Config, Owner, png(3, 3, 13), ["private"]),
-    "/trunk/" ++ Hidden = newest(Config, <<"modded">>),
-    #{csrf := C} = Moderator,
-    {303, _, _} = request(
-        Config,
-        post,
-        "/mod/meta/" ++ Hidden,
-        cookies(Moderator),
-        {form, uri_string:compose_query([{"csrf", C}, {"kind", "hide"}, {"reason", "x"}])}
-    ),
-    [[Private]] = query(
-        Config,
-        "SELECT p.body FROM action a JOIN post p ON p.id = a.entry ORDER BY a.entry DESC LIMIT 1",
-        []
-    ),
-    {_, _} = binary:match(Private, <<"hide a private meta">>),
-    nomatch = binary:match(Private, list_to_binary(lists:sublist(Hidden, 12))).
+    {200, _, _} = request(Config, get, Meta, [], none),
+    {200, _, _} = media(Config, File).
 
+%% bytes are one asset however many bring them, but a meta is an
+%% owner's: someone else's private meta is never seen through an upload,
+%% the first to make one public keeps the public one, and the others'
+%% private metas stay theirs (lux, Q41)
 known_bytes_lead_to_them(Config) ->
     A = login(Config, <<"first-up">>),
     B = login(Config, <<"second-up">>),
+    C = login(Config, <<"third-up">>),
+    Count = fun(Hex) ->
+        [[K]] = query(Config, "SELECT count(*) FROM meta WHERE asset = ?", [
+            {blob, binary:decode_hex(list_to_binary(Hex))}
+        ]),
+        K
+    end,
+    %% public bytes again: to their meta, and no meta more
     Bytes = png(4, 2, 17),
     {303, First, _} = upload(Config, A, Bytes, []),
     "/upload" = proplists:get_value("location", First),
-    Meta = newest(Config, <<"first-up">>),
-    %% the same bytes again, by anyone: to the meta they have
+    {Meta, Hex} = newest(Config, <<"first-up">>),
     {303, Again, _} = upload(Config, B, Bytes, []),
     Meta = proplists:get_value("location", Again),
-    %% but not to a private one that is not theirs: it is not said there
-    %% is one
+    1 = Count(Hex),
+    %% private bytes again: a private meta of the second's own, and
+    %% nothing said of the first's
     Hidden = png(4, 2, 19),
     {303, _, _} = upload(Config, A, Hidden, ["private"]),
-    {303, Quiet, _} = upload(Config, B, Hidden, []),
+    {MetaA, HiddenHex} = newest(Config, <<"first-up">>),
+    {303, Quiet, _} = upload(Config, B, Hidden, ["private"]),
     "/upload" = proplists:get_value("location", Quiet),
+    2 = Count(HiddenHex),
+    [[IdB]] = query(
+        Config,
+        "SELECT m.id FROM meta m JOIN actor a ON a.id = m.owner WHERE a.subject = 'second-up'"
+        " AND m.asset = ?",
+        [{blob, binary:decode_hex(list_to_binary(HiddenHex))}]
+    ),
+    MetaB = "/trunk/" ++ integer_to_list(IdB),
+    {200, _, PageB} = request(Config, get, MetaB, cookies(B), none),
+    nomatch = binary:match(PageB, <<"first-up">>),
+    {404, _, _} = request(Config, get, MetaA, cookies(B), none),
+    %% the second makes theirs public first: it is the public one; the
+    %% first's stays private, and making it public leads to the second's
+    {303, _, _} = owned(Config, B, MetaB, "private", "0"),
+    {200, _, _} = request(Config, get, MetaB, [], none),
+    {303, Taken, _} = owned(Config, A, MetaA, "private", "0"),
+    MetaB = proplists:get_value("location", Taken),
+    {404, _, _} = request(Config, get, MetaA, [], none),
+    {200, _, _} = request(Config, get, MetaA, cookies(A), none),
+    %% a third brings the bytes: to the public meta
+    {303, Third, _} = upload(Config, C, Hidden, []),
+    MetaB = proplists:get_value("location", Third),
+    2 = Count(HiddenHex),
     %% and to its booru entry, if it has one
     Posted = png(4, 2, 23),
-    {303, _, _} = posted(Config, A, <<"entered">>, [], [
-        {<<"x.png">>, Posted}
-    ]),
+    {303, _, _} = posted(Config, A, <<"entered">>, [], [{<<"x.png">>, Posted}]),
     {303, Entered, _} = upload(Config, B, Posted, []),
     "/booru/" ++ _ = proplists:get_value("location", Entered).

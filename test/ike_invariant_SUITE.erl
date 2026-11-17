@@ -982,19 +982,21 @@ inv08_purge_leaves_nothing(Config) ->
     ImageHex = binary_to_list(binary:encode_hex(ImageHash, lowercase)),
     #{csrf := ImageCsrf} = Admin,
     %% its meta hidden and shown again, so that the log names it
+    [[ImageMeta]] = ike_browser:query(Config, "SELECT id FROM meta WHERE asset = ?", [
+        {blob, ImageHash}
+    ]),
+    ImageMetaPath = integer_to_list(ImageMeta),
     [
         {303, _, _} = ike_browser:request(
             Config,
             post,
-            "/mod/meta/" ++ ImageHex,
+            "/mod/meta/" ++ ImageMetaPath,
             ike_browser:cookies(Admin),
             {form, uri_string:compose_query([{"csrf", ImageCsrf}, {"kind", K}, {"reason", "x"}])}
         )
      || K <- ["hide", "unhide"]
     ],
-    [[2]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [
-        {blob, ImageHash}
-    ]),
+    [[2]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [ImageMeta]),
     {303, _, _} = ike_browser:request(
         Config,
         post,
@@ -1021,12 +1023,10 @@ inv08_purge_leaves_nothing(Config) ->
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM meta WHERE asset = ?", [
         {blob, ImageHash}
     ]),
-    %% the log keeps its entries, but not the hash (G5)
-    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [
-        {blob, ImageHash}
-    ]),
+    %% the log keeps its entries, but not which meta (G5)
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [ImageMeta]),
     {404, _, _} = ike_browser:request(
-        Config, get, "/trunk/" ++ ImageHex, ike_browser:cookies(Admin), none
+        Config, get, "/trunk/" ++ ImageMetaPath, ike_browser:cookies(Admin), none
     ),
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM post WHERE asset = ?", [
         {blob, ImageHash}
@@ -1177,14 +1177,14 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
         Config, post, "/upload", ike_browser:cookies(Owner), {Type, Body}
     ),
     "/upload" = proplists:get_value("location", Sent),
-    [[Hash]] = ike_browser:query(
+    [[Id, Hash]] = ike_browser:query(
         Config,
-        "SELECT m.asset FROM meta m JOIN actor a ON a.id = m.owner"
+        "SELECT m.id, m.asset FROM meta m JOIN actor a ON a.id = m.owner"
         " WHERE a.subject = 'stager' AND m.private = 1",
         []
     ),
     Hex = binary_to_list(binary:encode_hex(Hash, lowercase)),
-    Meta = "/trunk/" ++ Hex,
+    Meta = "/trunk/" ++ integer_to_list(Id),
     Signed =
         "<a href=\"(http://media\\.test/staged/[^\"]+)\"><img src=\"(http://media\\.test/staged/[^\"]+)\"",
     %% the owner and the moderator: listed, and its page with links
@@ -1213,7 +1213,7 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
     [
         begin
             {200, _, Trunk} = ike_browser:request(Config, get, "/trunk", Cookies, none),
-            nomatch = binary:match(Trunk, list_to_binary(Hex)),
+            nomatch = binary:match(Trunk, list_to_binary(Meta ++ "\"")),
             {404, _, Missing} = ike_browser:request(Config, get, Meta, Cookies, none),
             nomatch = binary:match(Missing, <<"media.test">>),
             {200, _, Uploads} = ike_browser:request(Config, get, "/upload", Cookies, none),
@@ -1223,6 +1223,34 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
     ],
     {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
     {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".thumb.webp"),
+    %% nor does uploading the same bytes say anything of it: the other
+    %% is sent where any upload goes, and given a meta of their own
+    #{csrf := OtherCsrf} = Other,
+    {SameType, SameBody} = ike_browser:multipart([
+        {field, <<"csrf">>, list_to_binary(OtherCsrf)},
+        {field, <<"private">>, <<"1">>},
+        {file, <<"file">>, {<<"same.png">>, Png}}
+    ]),
+    {303, Same, _} = ike_browser:request(
+        Config, post, "/upload", ike_browser:cookies(Other), {SameType, SameBody}
+    ),
+    "/upload" = proplists:get_value("location", Same),
+    [[Theirs]] = ike_browser:query(
+        Config,
+        "SELECT m.id FROM meta m JOIN actor a ON a.id = m.owner"
+        " WHERE a.subject = 'onlooker' AND m.asset = ?",
+        [{blob, Hash}]
+    ),
+    true = Theirs =/= Id,
+    {200, _, OwnPage} = ike_browser:request(
+        Config, get, "/trunk/" ++ integer_to_list(Theirs), ike_browser:cookies(Other), none
+    ),
+    nomatch = binary:match(OwnPage, <<"stager">>),
+    nomatch = binary:match(OwnPage, list_to_binary(Meta ++ "\"")),
+    {200, _, OtherTrunk} = ike_browser:request(
+        Config, get, "/trunk", ike_browser:cookies(Other), none
+    ),
+    nomatch = binary:match(OtherTrunk, list_to_binary(Meta ++ "\"")),
     %% only the owner switches it: not another account, not a moderator
     Switch = fun(#{csrf := C} = Who, To) ->
         ike_browser:request(
@@ -1271,16 +1299,17 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
     {404, _, _} = ike_browser:media(Config, "http://media.test/" ++ Hex ++ ".png"),
     %% an upload not ticked private is public at once, to everyone
     {303, _, _} = ike_browser:upload(Config, Other, [{<<"b.png">>, Jpeg}]),
-    [[Open]] = ike_browser:query(
+    [[OpenId, Open]] = ike_browser:query(
         Config,
-        "SELECT m.asset FROM meta m JOIN actor a ON a.id = m.owner"
+        "SELECT m.id, m.asset FROM meta m JOIN actor a ON a.id = m.owner"
         " WHERE a.subject = 'onlooker' AND m.private = 0",
         []
     ),
     OpenHex = binary_to_list(binary:encode_hex(Open, lowercase)),
+    OpenMeta = "/trunk/" ++ integer_to_list(OpenId),
     {200, _, Listed} = ike_browser:request(Config, get, "/trunk", [], none),
-    {_, _} = binary:match(Listed, list_to_binary("/trunk/" ++ OpenHex)),
-    {200, _, OpenPage} = ike_browser:request(Config, get, "/trunk/" ++ OpenHex, [], none),
+    {_, _} = binary:match(Listed, list_to_binary(OpenMeta ++ "\"")),
+    {200, _, OpenPage} = ike_browser:request(Config, get, OpenMeta, [], none),
     nomatch = binary:match(OpenPage, <<"onlooker">>),
     nomatch = binary:match(OpenPage, <<"/staged/">>),
     {200, _, _} = ike_browser:media(Config, "http://media.test/" ++ OpenHex ++ ".png"),
@@ -1742,12 +1771,12 @@ known_routes() ->
         [<<"ike.js">>],
         [<<"user">>, name],
         [<<"trunk">>],
-        [<<"trunk">>, hex],
+        [<<"trunk">>, meta],
         [<<"wiki">>, name],
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],
         [<<"mod">>, <<"booru">>, booru],
-        [<<"mod">>, <<"meta">>, hex],
+        [<<"mod">>, <<"meta">>, meta],
         [<<"mod">>, <<"report">>, report],
         [<<"login">>],
         [<<"login">>, <<"callback">>],

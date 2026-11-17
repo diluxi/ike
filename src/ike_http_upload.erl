@@ -186,7 +186,7 @@ kept({Actor, Name}, N, Bytes, #{private := Private, signed := Signed0} = Opts) -
         {ok, #{stored := Stored} = Stripped} ->
             Hash = crypto:hash(sha256, Stored),
             Viewer = #{actor => ike_id:to_integer(Actor), moderator => false},
-            Before = ike_reader:meta(Hash, Viewer),
+            Before = ike_reader:known(Hash, Viewer),
             case
                 ike_writer:upload(#{
                     actor => Actor,
@@ -199,10 +199,10 @@ kept({Actor, Name}, N, Bytes, #{private := Private, signed := Signed0} = Opts) -
                 {ok, _} ->
                     Found =
                         case Before of
-                            {ok, #{entry := E}, _} when is_integer(E) ->
+                            {ok, #{entry := E}} when is_integer(E) ->
                                 <<"/booru/", (integer_to_binary(E))/binary>>;
-                            {ok, _, _} ->
-                                <<"/trunk/", (binary:encode_hex(Hash, lowercase))/binary>>;
+                            {ok, #{id := M}} ->
+                                <<"/trunk/", (integer_to_binary(M))/binary>>;
                             none ->
                                 none
                         end,

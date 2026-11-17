@@ -6,7 +6,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
--export([report/2, dismiss/1, tag/3, wiki/1, privacy/3]).
+-export([report/2, dismiss/1, tag/3, wiki/1, privacy/3, sign_meta/2]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -36,7 +36,7 @@
         ike_id:post()
         | {image, ike_id:post(), non_neg_integer()}
         | {entry, ike_id:booru()}
-        | {meta, Asset :: binary()}
+        | {meta, pos_integer()}
         | ike_id:actor()
         | binary(),
     reason := binary()
@@ -122,8 +122,8 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
 
 %% an upload, stripped: its asset (once, whoever brought it before) and
 %% the upload itself, staged. Original is the upload as it came
-%% and the asset's meta, if it had none, owned by the uploader: private
-%% if an account asked, else public, in the trunk
+%% and a meta of the asset for the uploader, unless they have one or it
+%% has a public one: private if an account asked, else public
 -spec upload(#{
     actor := ike_id:actor(),
     original := binary(),
@@ -213,15 +213,25 @@ wiki(#{name := Name, actor := Actor, body := Body} = Edit) ->
         Other -> failed(Other)
     end.
 
-%% an account makes a meta it owns private, or public again
--spec privacy(Asset :: binary(), ike_id:actor(), boolean()) -> ok | {error, not_yours} | error().
-privacy(Asset, Owner, Private) when byte_size(Asset) =:= 32 ->
+%% an account makes a meta it owns private, or public again; an asset
+%% has one public meta, and one made public first keeps it
+-spec privacy(Meta :: pos_integer(), ike_id:actor(), boolean()) ->
+    ok | {error, not_yours | {taken, pos_integer()}} | error().
+privacy(Meta, Owner, Private) when is_integer(Meta), Meta > 0 ->
     Flag =
         case Private of
             true -> 1;
             false -> 0
         end,
-    done(call({privacy, Asset, ike_id:to_integer(Owner), Flag})).
+    case call({privacy, Meta, ike_id:to_integer(Owner), Flag}) of
+        {error, {taken, Other}} when is_integer(Other), Other > 0 -> {error, {taken, Other}};
+        Reply -> done(Reply)
+    end.
+
+%% an account puts its name on a meta it owns that bore none (lux, Q42)
+-spec sign_meta(Meta :: pos_integer(), ike_id:actor()) -> ok | {error, not_yours} | error().
+sign_meta(Meta, Owner) when is_integer(Meta), Meta > 0 ->
+    done(call({sign_meta, Meta, ike_id:to_integer(Owner)})).
 
 %% an account adds and takes away an entry's tags; the history keeps who
 -spec tag(ike_id:booru(), ike_id:actor(), {[binary()], [binary()]}) ->
@@ -258,7 +268,7 @@ moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Rea
             _ when is_binary(Target) -> Target;
             {image, Post, Image} -> {ike_id:to_integer(Post), Image};
             {entry, Entry} -> {entry, ike_id:to_integer(Entry)};
-            {meta, Asset} -> {meta, Asset};
+            {meta, Meta} -> {meta, Meta};
             _ -> ike_id:to_integer(Target)
         end,
     done(call({moderate, ike_id:to_integer(By), Role, ike_role:to_binary(Kind), Subject, Reason})).
@@ -463,21 +473,47 @@ handle_call({wiki, Name, Actor, Body, Password}, _From, Conn) when
                 )
         end,
     {reply, Reply, Conn};
-handle_call({privacy, Asset, Owner, Flag}, _From, Conn) when
-    is_binary(Asset), is_integer(Owner), Owner =/= ?NOBODY, (Flag =:= 0 orelse Flag =:= 1)
+handle_call({privacy, Meta, Owner, Flag}, _From, Conn) when
+    is_integer(Meta), is_integer(Owner), Owner =/= ?NOBODY, (Flag =:= 0 orelse Flag =:= 1)
 ->
-    Sql = <<"UPDATE meta SET private = ?3 WHERE asset = ?1 AND owner = ?2 RETURNING 1">>,
+    Mine = <<"SELECT asset FROM meta WHERE id = ?1 AND owner = ?2">>,
+    Public = <<"SELECT id FROM meta WHERE asset = ?1 AND private = 0 AND id <> ?2">>,
     Reply =
-        case ike_db:q(Conn, Sql, [{blob, Asset}, Owner, Flag]) of
-            {ok, [_]} ->
-                ok = published(Conn, [Asset]),
-                ok;
+        case ike_db:q(Conn, Mine, [Meta, Owner]) of
+            {ok, [[Asset]]} when is_binary(Asset) ->
+                case {Flag, ike_db:q(Conn, Public, [{blob, Asset}, Meta])} of
+                    {0, {ok, [[Other]]}} ->
+                        {error, {taken, Other}};
+                    {_, {ok, _}} ->
+                        Set = <<"UPDATE meta SET private = ?2 WHERE id = ?1">>,
+                        case ike_db:q(Conn, Set, [Meta, Flag]) of
+                            {ok, _} ->
+                                ok = published(Conn, [Asset]),
+                                ok;
+                            {error, _} = Error ->
+                                Error
+                        end;
+                    {_, {error, _} = Error} ->
+                        Error
+                end;
             {ok, []} ->
                 {error, not_yours};
             {ok, Other} ->
                 {error, {unexpected, Other}};
             {error, _} = Error ->
                 Error
+        end,
+    {reply, Reply, Conn};
+handle_call({sign_meta, Meta, Owner}, _From, Conn) when
+    is_integer(Meta), is_integer(Owner), Owner =/= ?NOBODY
+->
+    Sql = <<"UPDATE meta SET signed = 1 WHERE id = ?1 AND owner = ?2 RETURNING 1">>,
+    Reply =
+        case ike_db:q(Conn, Sql, [Meta, Owner]) of
+            {ok, [_]} -> ok;
+            {ok, []} -> {error, not_yours};
+            {ok, Other} -> {error, {unexpected, Other}};
+            {error, _} = Error -> Error
         end,
     {reply, Reply, Conn};
 handle_call({tag, Entry, Actor, Add, Remove}, _From, Conn) when
@@ -613,9 +649,13 @@ handle_call(
                             "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
                             " RETURNING id"
                         >>,
+                        %% a meta of the uploader's own, unless they have one,
+                        %% or the bytes have a public one: someone else's
+                        %% private meta is not seen here (lux, Q41)
                         Meta = <<
                             "INSERT INTO meta (asset, owner, time, private, signed)"
-                            " VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (asset) DO NOTHING"
+                            " SELECT ?1, ?2, ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM meta"
+                            " WHERE asset = ?1 AND (owner = ?2 OR private = 0))"
                         >>,
                         Time = erlang:system_time(second),
                         Done = committed(
@@ -1030,19 +1070,18 @@ act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
     end;
 act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     act(Conn, Who, Kind, {Post, -1}, Reason, Time);
-act(Conn, Who, Kind, {meta, Asset}, Reason, Time) when
-    is_binary(Asset),
-    byte_size(Asset) =:= 32,
+act(Conn, Who, Kind, {meta, Meta}, Reason, Time) when
+    is_integer(Meta),
     (Kind =:= hide orelse Kind =:= unhide orelse Kind =:= trash orelse Kind =:= restore)
 ->
     %% a meta is moderated as a post is, on the trunk as a board would be
     Sql = <<
-        "SELECT m.state, m.private, (SELECT role FROM action WHERE meta = m.asset"
+        "SELECT m.state, m.asset, (SELECT role FROM action WHERE meta = m.id"
         " AND kind IN ('hide', 'trash') ORDER BY entry DESC LIMIT 1)"
-        " FROM meta m WHERE m.asset = ?1"
+        " FROM meta m WHERE m.id = ?1"
     >>,
-    case ike_db:q(Conn, Sql, [{blob, Asset}]) of
-        {ok, [[State, Private, Undo]]} when is_integer(State) ->
+    case ike_db:q(Conn, Sql, [Meta]) of
+        {ok, [[State, Asset, Undo]]} when is_integer(State), is_binary(Asset) ->
             Facts = #{board => <<"trunk">>, account => 0, undo => ike_role:rank_of(Undo)},
             To =
                 case {Kind, State} of
@@ -1058,17 +1097,12 @@ act(Conn, Who, Kind, {meta, Asset}, Reason, Time) when
                 {true, not_now} ->
                     {error, not_now};
                 {true, {ok, New}} ->
-                    %% the public log names a public meta; a private one's
-                    %% hash would tell the world that someone holds it
-                    Named =
-                        case Private of
-                            0 ->
-                                <<" meta ",
-                                    (binary:part(binary:encode_hex(Asset, lowercase), 0, 12))/binary>>;
-                            _ ->
-                                <<" a private meta">>
-                        end,
-                    Text = <<(ike_role:to_binary(Kind))/binary, Named/binary>>,
+                    %% by its number: nothing of its bytes
+                    Text = <<
+                        (ike_role:to_binary(Kind))/binary,
+                        " meta #",
+                        (integer_to_binary(Meta))/binary
+                    >>,
                     %% the log's row just made is the newest
                     Logged =
                         <<"UPDATE action SET meta = ?1 WHERE entry = (SELECT max(entry) FROM action)">>,
@@ -1077,10 +1111,8 @@ act(Conn, Who, Kind, {meta, Asset}, Reason, Time) when
                     of
                         {ok, Threads} ->
                             Steps = [
-                                {Logged, [{blob, Asset}]},
-                                {<<"UPDATE meta SET state = ?2 WHERE asset = ?1">>, [
-                                    {blob, Asset}, New
-                                ]}
+                                {Logged, [Meta]},
+                                {<<"UPDATE meta SET state = ?2 WHERE id = ?1">>, [Meta, New]}
                             ],
                             case steps(Conn, Steps) of
                                 ok -> {ok, (effects())#{threads := Threads, assets := [Asset]}};
@@ -1393,8 +1425,8 @@ imaged(Conn, purge_image, Hash, Hashes, Time) ->
                 %% an entry keeps the version, empty: a gap
                 <<"UPDATE booru_version SET asset = NULL WHERE asset = ?1">>,
                 <<"DELETE FROM upload WHERE asset = ?1">>,
+                <<"UPDATE action SET meta = NULL WHERE meta IN (SELECT id FROM meta WHERE asset = ?1)">>,
                 <<"DELETE FROM meta WHERE asset = ?1">>,
-                <<"UPDATE action SET meta = NULL WHERE meta = ?1">>,
                 <<"DELETE FROM asset WHERE hash = ?1">>
             ],
             case each(Conn, [{blob, Hash}], Steps) of

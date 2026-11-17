@@ -48,7 +48,7 @@ dispatch() ->
             {"/booru/search", ike_http_search, []},
             {"/user/:name", ike_http_user, []},
             {"/trunk", ike_http_trunk, index},
-            {"/trunk/:hex", ike_http_trunk, meta},
+            {"/trunk/:meta", [{meta, int}], ike_http_trunk, meta},
             {"/wiki", ike_http_wiki, index},
             {"/wiki/:name", ike_http_wiki, page},
             {"/wiki/:name/edit", ike_http_wiki, edit},
@@ -72,7 +72,7 @@ dispatch() ->
             {"/mod/account/:account", [{account, int}], ike_http_mod, account},
             {"/mod/report/:report", [{report, int}], ike_http_mod, report},
             {"/mod/booru/:booru", [{booru, int}], ike_http_mod, booru},
-            {"/mod/meta/:hex", ike_http_mod, meta},
+            {"/mod/meta/:meta", [{meta, int}], ike_http_mod, meta},
             %% everything else, so that a miss is answered by ike and not
             %% by cowboy's bare 404
             {'_', ike_http_page, missing}

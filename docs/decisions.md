@@ -1146,11 +1146,12 @@ lux's model, in lux's words where they are given:
   `/trunk` and its page for everyone but moderators (its owner too, as
   with posts), and its files leave the media origin unless a post or an
   entry shows them. The public log names a public meta by its first 12
-  hex digits, and a private one only as "a private meta": its hash
-  would tell everyone that someone holds those bytes. `action.meta`
+  hex digits, and a private one only as "a private meta" (now by
+  number for both, below). `action.meta`
   keeps the hash for moderators, and purge_image clears it (invariant 8,
   test extended).
-- **Known bytes lead to what is known of them** (Q41): one file uploaded
+- **Known bytes lead to what is known of them** (Q41, refined below in
+  "Metas are their owners'"): one file uploaded
   at `/upload` whose meta the uploader may already see sends them there,
   to its booru entry if it has a shown one, else to its meta. Bytes
   under someone else's private meta go to `/upload` as any upload does,
@@ -1175,3 +1176,31 @@ lux's model, in lux's words where they are given:
   text box or a modifier key has the keypress. The history and
   discussion links are gone: the "as of >>N" note leads to the page's
   thread, which is both.
+
+## Metas are their owners' (lux, 2026-11-17)
+
+- **A meta is an owner's, not an asset's** (Q41; migration 0023). Bytes
+  under someone else's private meta, uploaded again, get a meta of the
+  uploader's own, and nothing tells either that the other exists; the
+  asset is still one, by its hash. An asset has at most one public
+  meta, and each owner at most one meta of it. Uploading bytes that have
+  a public meta, or one of your own, makes none and leads to it.
+- **Publishing is making a meta public** (lux's correction: not
+  curating). The first owner to do it holds the asset's public meta;
+  another owner making theirs public is sent to that one, and theirs
+  stays private, with whatever it has (its comment thread, once there
+  are threads). When the public meta is curated, its thread moves to the
+  curation; private ones never merge into it, since that would show them
+  without their owners' say.
+- **Metas are numbered:** `/trunk/N`, `/mod/meta/N`, "meta #N" in the
+  log, for private ones too (a number says nothing of the bytes).
+- **Owner text** (Q42): to its owner, "(you)", a link to their user
+  page; to others the owner's nick as a link, or "anonymous". The owner
+  of an unsigned meta can sign it later ("sign as NAME"), which is how
+  they take it as theirs in public; signing is not undone.
+- **A trashed meta stays visible to its owner** (Q40), marked trashed,
+  its files kept and shown to them by signed links, until a moderator
+  restores it or an admin purges the asset. *Interpretation:* lux wrote
+  "trashed posts"; built for metas only. A hidden meta stays out of its
+  owner's sight, and board posts are unchanged: their pages are the same
+  for everyone, and an unsigned post has no owner to show it to (Q43).

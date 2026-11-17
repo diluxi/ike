@@ -929,7 +929,8 @@ staged(#{id := Id, type := Type, width := W, height := H, file := File, thumb :=
     ]).
 
 %% the trunk: the metas the asker may see, newest first, each its
-%% thumbnail, linking to its page; a private one says so
+%% thumbnail, linking to its page; a private one says so, and one a
+%% moderator took down says how
 -spec trunk([{ike_reader:meta(), image()}]) -> ike_html:html().
 trunk(Metas) ->
     layout(<<"trunk">>, [
@@ -940,37 +941,41 @@ trunk(Metas) ->
         ]),
         ike_html:el(ul, [
             ike_html:el(li, [
-                ike_html:el(a, [{href, meta_path(Hash)}], [
+                ike_html:el(a, [{href, meta_path(Id)}], [
                     ike_html:el(
-                        img, [{src, Thumb}, {alt, <<Type/binary, " ", (short(Hash))/binary>>}], []
+                        img, [{src, Thumb}, {alt, <<Type/binary, " ", (number(Id))/binary>>}], []
                     )
                 ])
                 | [ike_html:text(<<" private">>) || Private] ++
                     [ike_html:text(<<" ", (atom_to_binary(State))/binary>>) || State =/= shown]
             ])
-         || {#{hash := Hash, type := Type, private := Private, state := State}, #{thumb := Thumb}} <-
+         || {#{id := Id, type := Type, private := Private, state := State}, #{thumb := Thumb}} <-
                 Metas
         ])
     ]).
 
--spec meta_path(binary()) -> binary().
-meta_path(Hash) ->
-    <<"/trunk/", (binary:encode_hex(Hash, lowercase))/binary>>.
+-spec meta_path(pos_integer()) -> binary().
+meta_path(Id) ->
+    <<"/trunk/", (integer_to_binary(Id))/binary>>.
 
--spec short(binary()) -> binary().
-short(Hash) ->
-    binary:part(binary:encode_hex(Hash, lowercase), 0, 12).
+-spec number(pos_integer()) -> binary().
+number(Id) ->
+    <<"#", (integer_to_binary(Id))/binary>>.
 
-%% a meta's page: the asset, what is known of it, the posts that show it,
-%% and to its owner the switch between private and public. whose it is
-%% is said to nobody else (an upload may be in a post nobody signed)
+%% a meta's page: the asset, what is known of it, its owner (a name, or
+%% anonymous; "(you)" to the owner), the posts that show it, and to its
+%% owner the switch between private and public, and, while it bears no
+%% name, the way to put theirs on it (lux, Q42)
 -spec meta(
-    ike_reader:meta(), image(), [pos_integer()], #{csrf := binary() | none, moderator := boolean()}
+    ike_reader:meta(),
+    image(),
+    [pos_integer()],
+    #{csrf := binary() | none, moderator := boolean(), name := binary() | none}
 ) ->
     ike_html:html().
-meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator}) ->
+meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}) ->
     #{
-        hash := Hash,
+        id := Id,
         type := Type,
         width := W,
         height := H,
@@ -981,26 +986,27 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator}) ->
         name := Owner,
         state := State
     } = Meta,
-    Short = short(Hash),
+    Title = <<"meta ", (number(Id))/binary>>,
     Row = fun(Name, Value) ->
         ike_html:el(tr, [
             ike_html:el(th, [ike_html:text(Name)]),
             ike_html:el(td, [ike_html:text(Value)])
         ])
     end,
+    Whose =
+        case {Mine, Viewer, Owner} of
+            {true, V, _} when is_binary(V) -> anchor(<<"/user/", V/binary>>, <<"(you)">>);
+            {true, _, _} -> ike_html:text(<<"(you)">>);
+            {false, _, none} -> ike_html:text(<<"anonymous">>);
+            {false, _, O} when is_binary(O) -> anchor(<<"/user/", O/binary>>, O)
+        end,
     Rows =
         [
             Row(<<"type">>, Type),
             Row(<<"size">>, <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>),
             ike_html:el(tr, [
                 ike_html:el(th, [ike_html:text(<<"owner">>)]),
-                ike_html:el(td, [
-                    case Owner of
-                        none -> ike_html:text(<<"anonymous">>);
-                        _ -> anchor(<<"/user/", Owner/binary>>, Owner)
-                    end
-                    | [ike_html:text(<<" (you)">>) || Mine]
-                ])
+                ike_html:el(td, [Whose | [ike_html:text(<<", unsigned">>) || Mine, Owner =:= none]])
             ]),
             Row(<<"uploaded">>, stamp(Time)),
             Row(
@@ -1013,29 +1019,26 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator}) ->
         ] ++
             [Row(<<"what it is">>, Traits) || Traits =/= <<>>] ++
             [Row(<<"state">>, atom_to_binary(State)) || State =/= shown],
-    Switch =
+    Form = fun(Token, Field, Value, Label) ->
+        ike_html:el(form, [{method, <<"post">>}, {action, meta_path(Id)}], [
+            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}], []),
+            ike_html:el(input, [{type, <<"hidden">>}, {name, Field}, {value, Value}], []),
+            ike_html:el(p, [ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(Label)])])
+        ])
+    end,
+    Owned =
         case Csrf of
             none ->
                 [];
-            _ ->
-                {Value, Label} =
-                    case Private of
-                        true -> {<<"0">>, <<"make public">>};
-                        false -> {<<"1">>, <<"make private">>}
-                    end,
-                [
-                    ike_html:el(form, [{method, <<"post">>}, {action, meta_path(Hash)}], [
-                        ike_html:el(
-                            input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []
-                        ),
-                        ike_html:el(
-                            input, [{type, <<"hidden">>}, {name, <<"private">>}, {value, Value}], []
-                        ),
-                        ike_html:el(p, [
-                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(Label)])
-                        ])
-                    ])
-                ]
+            _ when is_binary(Csrf) ->
+                case Private of
+                    true -> [Form(Csrf, <<"private">>, <<"0">>, <<"make public">>)];
+                    false -> [Form(Csrf, <<"private">>, <<"1">>, <<"make private">>)]
+                end ++
+                    [
+                        Form(Csrf, <<"sign">>, <<"1">>, <<"sign as ", Viewer/binary>>)
+                     || Owner =:= none, is_binary(Viewer)
+                    ]
         end,
     Shown =
         case Posts of
@@ -1049,36 +1052,32 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator}) ->
                     ])
                 ]
         end,
-    layout(<<"meta ", Short/binary>>, [
-        ike_html:el(h1, [ike_html:text(<<"meta ", Short/binary>>)]),
+    layout(Title, [
+        ike_html:el(h1, [ike_html:text(Title)]),
         ike_html:el(p, [anchor(<<"/trunk">>, <<"trunk">>)])
-        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Switch ++
+        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Owned ++
             [
                 ike_html:el(p, [
-                    anchor(
-                        <<"/mod/meta/", (binary:encode_hex(Hash, lowercase))/binary>>,
-                        <<"moderate">>
-                    )
+                    anchor(<<"/mod/meta/", (integer_to_binary(Id))/binary>>, <<"moderate">>)
                 ])
              || Moderator
             ]
     ]).
 
 %% a meta on its moderation page
--spec moderated_meta(binary(), binary(), shown | hidden | trashed, [ike_role:kind()]) ->
+-spec moderated_meta(binary(), pos_integer(), shown | hidden | trashed, [ike_role:kind()]) ->
     ike_html:html().
-moderated_meta(Csrf, Hash, State, Kinds) ->
-    Hex = binary:encode_hex(Hash, lowercase),
-    Short = short(Hash),
-    layout(<<"moderating meta ", Short/binary>>, [
-        ike_html:el(h1, [ike_html:text(<<"meta ", Short/binary>>)]),
+moderated_meta(Csrf, Id, State, Kinds) ->
+    Title = <<"meta ", (number(Id))/binary>>,
+    layout(<<"moderating ", Title/binary>>, [
+        ike_html:el(h1, [ike_html:text(Title)]),
         ike_html:el(p, [
             anchor(<<"/mod">>, <<"moderation">>),
             ike_html:text(<<" ">>),
-            anchor(meta_path(Hash), <<"its page">>)
+            anchor(meta_path(Id), <<"its page">>)
         ]),
         ike_html:el(p, [ike_html:text(atom_to_binary(State))])
-        | act(<<"/mod/meta/", Hex/binary>>, Csrf, Kinds, [])
+        | act(<<"/mod/meta/", (integer_to_binary(Id))/binary>>, Csrf, Kinds, [])
     ]).
 
 -spec upload_locked() -> ike_html:html().

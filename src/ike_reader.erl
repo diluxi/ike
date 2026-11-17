@@ -7,17 +7,19 @@
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
--export([metas/1, meta/2]).
+-export([metas/1, meta/2, known/2]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
 %% (or above), who sees every meta (invariant 10)
 -type viewer() :: #{actor := integer() | none, moderator := boolean()}.
-%% a meta as the trunk shows it. upload: the newest upload of its asset,
-%% which a link to a private one's files names. name: its owner's, if
-%% the upload was signed, else none (anonymous; lux, Q42). state: as a
-%% moderator left it; only moderators see one that is not shown
+%% a meta as the trunk shows it. upload: its owner's newest upload of
+%% the asset (else anyone's), which a link to its files names when they
+%% are not public. name: its owner's, if signed, else none (anonymous;
+%% lux, Q42). state: as a moderator left it; a meta not shown is seen
+%% by moderators, and a trashed one by its owner too (lux, Q40)
 -type meta() :: #{
+    id := pos_integer(),
     hash := binary(),
     type := binary(),
     width := pos_integer(),
@@ -211,13 +213,18 @@ metas(Viewer) ->
     end.
 
 %% one meta, if the viewer may see it, and the shown posts that show it
--spec meta(Hash :: binary(), viewer()) -> {ok, meta(), [pos_integer()]} | none.
-meta(Hash, Viewer) when byte_size(Hash) =:= 32 ->
-    case gen_server:call(?MODULE, {metas, who(Viewer), Hash}) of
+-spec meta(Id :: pos_integer(), viewer()) -> {ok, meta(), [pos_integer()]} | none.
+meta(Id, Viewer) when is_integer(Id), Id > 0 ->
+    case gen_server:call(?MODULE, {metas, who(Viewer), {id, Id}}) of
         {ok, [_] = Rows} ->
-            case {metas_of(Rows), gen_server:call(?MODULE, {tacks, Hash})} of
-                {[M], {ok, Posts}} when is_list(Posts) ->
-                    {ok, M, [P || [P] <- Posts, is_integer(P), P > 0]};
+            case metas_of(Rows) of
+                [#{hash := Hash} = M] ->
+                    case gen_server:call(?MODULE, {tacks, Hash}) of
+                        {ok, Posts} when is_list(Posts) ->
+                            {ok, M, [P || [P] <- Posts, is_integer(P), P > 0]};
+                        _ ->
+                            none
+                    end;
                 _ ->
                     none
             end;
@@ -226,6 +233,27 @@ meta(Hash, Viewer) when byte_size(Hash) =:= 32 ->
     end;
 meta(_, _) ->
     none.
+
+%% the meta of these bytes a viewer may see, if any: their own first,
+%% else the public one (another's private meta is never found here)
+-spec known(Hash :: binary(), viewer()) -> {ok, meta()} | none.
+known(Hash, Viewer) when byte_size(Hash) =:= 32 ->
+    case gen_server:call(?MODULE, {metas, who(Viewer), {asset, Hash}}) of
+        {ok, Rows} when is_list(Rows) ->
+            case metas_of(Rows) of
+                [#{mine := true} = M | _] -> {ok, M};
+                Ms -> first_public(Ms)
+            end;
+        _ ->
+            none
+    end;
+known(_, _) ->
+    none.
+
+-spec first_public([meta()]) -> {ok, meta()} | none.
+first_public([#{private := false} = M | _]) -> {ok, M};
+first_public([_ | Ms]) -> first_public(Ms);
+first_public([]) -> none.
 
 -spec who(viewer()) -> {integer(), 0 | 1}.
 who(#{actor := Actor, moderator := Moderator}) ->
@@ -241,7 +269,9 @@ who(#{actor := Actor, moderator := Moderator}) ->
     }.
 
 -spec metas_of([term()]) -> [meta()].
-metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, State, Entry] | Rows]) when
+metas_of([[Id, Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, State, Entry] | Rows]) when
+    is_integer(Id),
+    Id > 0,
     is_binary(Hash),
     is_binary(Type),
     is_integer(W),
@@ -258,6 +288,7 @@ metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, State, E
 ->
     [
         #{
+            id => Id,
             hash => Hash,
             type => Type,
             width => W,
@@ -598,25 +629,28 @@ handle_call({posted, Actor}, _From, Conn) when is_integer(Actor) ->
         " ORDER BY id DESC LIMIT 200"
     >>,
     {reply, ike_db:q(Conn, Sql, [Actor]), Conn};
-handle_call({metas, {Actor, Moderator}, Hash}, _From, Conn) when
+handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
     is_integer(Actor), is_integer(Moderator)
 ->
     Sql = <<
-        "SELECT m.asset, x.format, x.width, x.height, x.traits, m.time, m.private,"
-        " m.owner = ?1, (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset),"
+        "SELECT m.id, m.asset, x.format, x.width, x.height, x.traits, m.time, m.private,"
+        " m.owner = ?1, coalesce((SELECT max(u.id) FROM upload u WHERE u.asset = m.asset"
+        " AND u.actor = m.owner), (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset)),"
         " CASE WHEN m.signed = 1 THEN a.name END, m.state,"
         " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset)"
         " FROM meta m JOIN asset x ON x.hash = m.asset JOIN actor a ON a.id = m.owner"
-        " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1)) OR ?2 = 1)"
-        " AND (?3 IS NULL OR m.asset = ?3)"
-        " ORDER BY m.time DESC, m.asset DESC LIMIT 200"
+        " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1))"
+        " OR (m.state = 2 AND m.owner = ?1) OR ?2 = 1)"
+        " AND (?3 IS NULL OR m.id = ?3) AND (?4 IS NULL OR m.asset = ?4)"
+        " ORDER BY m.time DESC, m.id DESC LIMIT 200"
     >>,
-    Which =
-        case Hash of
-            none -> undefined;
-            _ when is_binary(Hash) -> {blob, Hash}
+    {Id, Asset} =
+        case Which of
+            none -> {undefined, undefined};
+            {id, I} when is_integer(I) -> {I, undefined};
+            {asset, H} when is_binary(H) -> {undefined, {blob, H}}
         end,
-    {reply, ike_db:q(Conn, Sql, [Actor, Moderator, Which]), Conn};
+    {reply, ike_db:q(Conn, Sql, [Actor, Moderator, Id, Asset]), Conn};
 handle_call({tacks, Hash}, _From, Conn) when is_binary(Hash) ->
     Sql = <<
         "SELECT DISTINCT pa.post FROM post_image pa JOIN shown s ON s.id = pa.post"

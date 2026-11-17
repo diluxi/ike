@@ -102,6 +102,13 @@ here.
   page outlives its first revision").
 - **Q40, Q41, Q42.** Answered and built (decisions.md, "Metas: names,
   moderation, known bytes").
+- **Q43 Trashed posts and their owners.** lux (Q40): trashed posts should
+  stay visible to their owners, marked. Built for metas. For board
+  posts: a thread page is one static file for everyone, and an unsigned
+  post has no owner but by its password. Show a signed poster their
+  trashed posts on their user page (or a page of their own), and leave
+  unsigned ones as they are? And should a hidden meta, like a trashed
+  one, be shown to its owner?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

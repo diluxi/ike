@@ -67,7 +67,10 @@ an account's next edit amends its own, unsigned edits retract by
 password), `phi/tombstone` (a wiki page outlives its first revision;
 revisions named and coloured), `phi/trunk` (metas, `/trunk`, private
 uploads, invariant 10 as lux reworded it), `phi/metamod` (metas named
-or anonymous, moderated as posts; known bytes lead to their meta).
+or anonymous, moderated as posts; known bytes lead to their meta),
+`phi/quotes` (`> ` quotes and nested lists; `e` edits a wiki page),
+`phi/owners` (metas numbered and each an owner's; the first public one
+keeps it; owners sign later; trashed metas stay visible to them).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -83,6 +86,7 @@ or anonymous, moderated as posts; known bytes lead to their meta).
 
 ## Blocked on lux
 
+- **Q43:** trashed posts and their owners.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with
   the rest of hazards.md; G7's control still has the old words.
 - **Merging** the M0 stack, then `phi/board`.
