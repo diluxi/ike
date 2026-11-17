@@ -2129,8 +2129,10 @@ first_line(Text) ->
     hd(binary:split(Text, <<"\n">>)).
 
 benign($\n) -> $\n;
-%% a link is a link in both, so what makes one stays
+%% a link is a link in both, and a quote a quote ("> " at a line's
+%% start), so what makes one stays
 benign($>) -> $>;
+benign($\s) -> $\s;
 benign(C) when C >= $0, C =< $9 -> C;
 benign(_) -> $x.
 
