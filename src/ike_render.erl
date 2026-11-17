@@ -177,7 +177,7 @@ step(State) ->
 
 -spec everything(ike_db:reader()) -> {ok, [integer()], [binary()], [integer()]} | ike_db:error().
 everything(Conn) ->
-    case ike_db:q(Conn, <<"SELECT id FROM shown WHERE id = thread ORDER BY id">>, []) of
+    case ike_db:q(Conn, <<"SELECT DISTINCT thread FROM shown ORDER BY thread">>, []) of
         {ok, Threads} ->
             case
                 {
@@ -206,7 +206,7 @@ everything(Conn) ->
 render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
     Where = <<
         "SELECT b.name, b.title, b.log, b.wiki FROM thread t JOIN board b ON b.id = t.board"
-        " JOIN shown s ON s.id = t.root WHERE t.root = ?1"
+        " WHERE t.root = ?1 AND EXISTS (SELECT 1 FROM shown s WHERE s.thread = t.root)"
     >>,
     %% the role is there on the log's entries, and stands for the name
     Sql = <<
@@ -245,9 +245,14 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
                         is_integer(Time),
                         is_binary(Body)
                     ],
-                    %% a revision shown as what it changed of the one before
-                    Posts = revised(Posts0, <<>>),
-                    Board = #{name => Name, title => Title, log => Logs =:= 1, wiki => Wiki =:= 1},
+                    Board0 = #{
+                        name => Name, title => Title, log => Logs =:= 1, wiki => Wiki =:= 1
+                    },
+                    {Board, Posts} =
+                        case Wiki of
+                            1 -> paged(Conn, Thread, Board0, Posts0);
+                            _ -> {Board0, Posts0}
+                        end,
                     File =
                         <<"board/", Name/binary, "/", (integer_to_binary(Thread))/binary, ".html">>,
                     ok = write(Dir, File, ike_view:thread(Board, Thread, Posts)),
@@ -261,12 +266,49 @@ render_thread(#state{conn = Conn, dir = Dir}, Thread) ->
             error({render, Thread, Reason})
     end.
 
--spec revised([ike_view:post()], binary()) -> [ike_view:post()].
-revised([#{revision := true, body := Body} = P | Rest], Before) ->
-    [P#{changes => ike_wiki:diff(Before, Body)} | revised(Rest, Body)];
-revised([P | Rest], Before) ->
-    [P | revised(Rest, Before)];
-revised([], _Before) ->
+%% a page's thread: headed by the page's name, its first post a titled
+%% tombstone if it is out of view, and each revision in view named for
+%% the page and its count, shown as what it changed of the one in view
+%% before it, which so takes over what a revision out of view did (lux)
+-spec paged(ike_db:reader(), integer(), ike_view:board(), [ike_view:post()]) ->
+    {ike_view:board(), [ike_view:post()]}.
+paged(Conn, Thread, Board, Posts0) ->
+    Page =
+        case ike_db:q(Conn, <<"SELECT name FROM page WHERE thread = ?1">>, [Thread]) of
+            {ok, [[N]]} when is_binary(N) -> N;
+            _ -> <<">>", (integer_to_binary(Thread))/binary>>
+        end,
+    Posts1 =
+        case Posts0 of
+            [#{id := Thread} | _] ->
+                Posts0;
+            _ ->
+                [
+                    #{
+                        id => Thread,
+                        time => 0,
+                        body => <<>>,
+                        name => {nobody, <<>>},
+                        links => #{},
+                        replies => [],
+                        title => Page,
+                        tombstone => true
+                    }
+                    | Posts0
+                ]
+        end,
+    {Board#{page => Page}, revised(Posts1, <<>>, Page, 1)}.
+
+-spec revised([ike_view:post()], binary(), binary(), pos_integer()) -> [ike_view:post()].
+revised([#{revision := true, body := Body} = P | Rest], Before, Page, N) ->
+    Title = <<Page/binary, " ", (integer_to_binary(N))/binary>>,
+    [
+        P#{changes => ike_wiki:diff(Before, Body), title => Title}
+        | revised(Rest, Body, Page, N + 1)
+    ];
+revised([P | Rest], Before, Page, N) ->
+    [P | revised(Rest, Before, Page, N)];
+revised([], _Before, _Page, _N) ->
     [].
 
 %% the posts this thread's posts point at, those that are there to be

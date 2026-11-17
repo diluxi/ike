@@ -94,9 +94,20 @@ edits_stack(Config) ->
     {200, _, History} = request(Config, get, Thread, [], none),
     {_, _} = binary:match(History, <<"<ol reversed>">>),
     {_, _} = binary:match(History, <<"<h1>long_hair</h1>">>),
-    {_, _} = binary:match(History, <<"<details open><summary>+2 -2</summary>">>),
-    {_, _} = binary:match(History, <<"<details><summary>+2 -1</summary>">>),
-    {_, _} = binary:match(History, <<"<details><summary>+3</summary>">>),
+    {_, _} = binary:match(
+        History,
+        <<"<details open><summary><span class=\"added\">+2</span> <span class=\"removed\">-2</span></summary>">>
+    ),
+    {_, _} = binary:match(
+        History,
+        <<"<details><summary><span class=\"added\">+2</span> <span class=\"removed\">-1</span></summary>">>
+    ),
+    {_, _} = binary:match(
+        History, <<"<details><summary><span class=\"added\">+3</span></summary>">>
+    ),
+    %% each revision is named for the page and its count
+    {_, _} = binary:match(History, <<"<span class=\"title\">long_hair 3</span>">>),
+    {_, _} = binary:match(History, <<"<span class=\"title\">long_hair 1</span>">>),
     {_, _} = binary:match(History, <<"<del>two</del>">>),
     {_, _} = binary:match(History, <<"<ins>2</ins>">>),
     {_, _} = binary:match(History, <<"<del>four</del>">>),
@@ -135,7 +146,9 @@ signed_edits_are_amended(Config) ->
     {303, Away, _} = request(Config, get, "/wiki/amended/history", [], none),
     Thread = proplists:get_value("location", Away),
     {200, _, History} = request(Config, get, Thread, [], none),
-    {_, _} = binary:match(History, <<"<details open><summary>+3</summary>">>),
+    {_, _} = binary:match(
+        History, <<"<details open><summary><span class=\"added\">+3</span></summary>">>
+    ),
     %% another account's signed edit is its own revision, and so is the
     %% first account's after it
     {303, _, _} = save(Config, B, "amended", <<"one\ntwo\nthree\nfour">>, Signed),
@@ -232,7 +245,17 @@ a_hidden_revision_steps_back(Config) ->
     ),
     {200, _, Page} = request(Config, get, "/wiki/steps", [], none),
     {_, _} = binary:match(Page, <<"first">>),
-    nomatch = binary:match(Page, <<"vandalised">>).
+    nomatch = binary:match(Page, <<"vandalised">>),
+    %% a revision after one out of view takes over what that one did
+    {303, _, _} = save(Config, Session, "steps", <<"first\nsecond\nthird">>),
+    [[Root]] = query(Config, "SELECT thread FROM page WHERE name = 'steps'", []),
+    {200, _, History} = request(Config, get, "/board/wiki/" ++ integer_to_list(Root), [], none),
+    {_, _} = binary:match(History, <<"<span class=\"title\">steps 2</span>">>),
+    nomatch = binary:match(History, <<"steps 3">>),
+    {_, _} = binary:match(
+        History,
+        <<"<details open><summary><span class=\"added\">+2</span></summary>">>
+    ).
 
 %% a page not yet written is a red link to where it would be, which asks
 %% for it, whatever the name holds that a path would read otherwise
@@ -294,28 +317,46 @@ amend_reads_links_again(Config) ->
     nomatch = binary:match(Page, <<"relink_gone">>),
     {_, _} = binary:match(Page, <<"<a href=\"/wiki/relinked\">[[relinked]]</a>">>).
 
-%% the first revision is the thread's first post: retracted, the page and
-%% its thread are out of view, and an edit is refused rather than
-%% written where nobody sees it, until lux says otherwise (Q39)
+%% the first revision is the thread's first post. retracted, it leaves a
+%% titled tombstone while anything else of the thread is in view, and the
+%% next revision is the page, named its first; with nothing else, the
+%% thread is gone, and an edit starts the page again (lux, Q39)
 first_revision_retracted(Config) ->
     A = login(Config, <<"rooter">>),
     B = login(Config, <<"rooter-b">>),
+    Retract = fun(Post) ->
+        Act = uri_string:compose_query([
+            {"post", integer_to_list(Post)}, {"kind", "retract"}, {"password", "pw"}
+        ]),
+        {200, _, Said} = request(
+            Config, post, "/act", [{"origin", ?config(base, Config)}], {form, Act}
+        ),
+        {_, _} = binary:match(Said, <<": retracted">>)
+    end,
     {303, _, _} = save(Config, A, "rooted", <<"root">>, [{"password", "pw"}]),
-    {303, _, _} = save(Config, B, "rooted", <<"over it">>),
+    {303, _, _} = save(Config, B, "rooted", <<"root\nover it">>),
     [[Root]] = query(Config, "SELECT thread FROM page WHERE name = 'rooted'", []),
-    Act = uri_string:compose_query([
-        {"post", integer_to_list(Root)}, {"kind", "retract"}, {"password", "pw"}
-    ]),
-    {200, _, Said} = request(
-        Config, post, "/act", [{"origin", ?config(base, Config)}], {form, Act}
-    ),
-    {_, _} = binary:match(Said, <<": retracted">>),
-    {404, _, _} = request(Config, get, "/wiki/rooted", [], none),
-    %% an edit is refused, saying why, and nothing is written (Q39)
-    {409, _, Refused} = save(Config, A, "rooted", <<"again">>),
-    {_, _} = binary:match(Refused, <<"taken down">>),
-    [[2]] = query(
-        Config,
-        "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'rooted'",
-        []
-    ).
+    Thread = "/board/wiki/" ++ integer_to_list(Root),
+    Retract(Root),
+    {200, _, Page} = request(Config, get, "/wiki/rooted", [], none),
+    {_, _} = binary:match(Page, <<"over it">>),
+    {200, _, History} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(History, <<"<h1>rooted</h1>">>),
+    {_, _} = binary:match(History, <<"<span class=\"gone\">taken down</span>">>),
+    %% the next revision takes over what the first did
+    {_, _} = binary:match(History, <<"<span class=\"title\">rooted 1</span>">>),
+    {_, _} = binary:match(History, <<"<summary><span class=\"added\">+2</span></summary>">>),
+    nomatch = binary:match(History, <<"rooted 2">>),
+    %% a page with nothing in view after its first revision goes with it
+    {303, _, _} = save(Config, A, "alone", <<"lonely">>, [{"password", "pw"}]),
+    [[Alone]] = query(Config, "SELECT thread FROM page WHERE name = 'alone'", []),
+    Retract(Alone),
+    {404, _, _} = request(Config, get, "/wiki/alone", [], none),
+    {404, _, _} = request(Config, get, "/board/wiki/" ++ integer_to_list(Alone), [], none),
+    %% and is started again by an edit, under the tombstone
+    {303, _, _} = save(Config, A, "alone", <<"again">>),
+    {200, _, Again} = request(Config, get, "/wiki/alone", [], none),
+    {_, _} = binary:match(Again, <<"again">>),
+    {200, _, Started} = request(Config, get, "/board/wiki/" ++ integer_to_list(Alone), [], none),
+    {_, _} = binary:match(Started, <<"<span class=\"gone\">taken down</span>">>),
+    nomatch = binary:match(Started, <<"lonely">>).

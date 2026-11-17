@@ -105,12 +105,6 @@ write(Name, Req0) ->
                         {ok, _} ->
                             _ = ike_render:sync(),
                             ike_http:see_other(ike_wiki:path(Name), Req);
-                        {error, taken_down} ->
-                            Html = ike_view:message(
-                                <<"not saved">>,
-                                <<"this page was taken down; a moderator may bring it back.">>
-                            ),
-                            ike_http:page(409, Html, Req);
                         {error, bad_text} ->
                             Html = ike_view:message(
                                 <<"not saved">>,

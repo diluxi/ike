@@ -24,7 +24,9 @@
     title => binary() | none,
     %% a wiki revision, and what it changed of the one before
     revision => boolean(),
-    changes => [ike_wiki:change()]
+    changes => [ike_wiki:change()],
+    %% a wiki page's first post, out of view: its title and nothing else
+    tombstone => true
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -38,7 +40,10 @@
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
 %% log: the board is the record of what moderators did, and takes no posts
 %% wiki: its threads are pages, newest first, revisions shown as changes
--type board() :: #{name := binary(), title := binary(), log := boolean(), wiki => boolean()}.
+%% page: a wiki thread's page name, which heads it
+-type board() :: #{
+    name := binary(), title := binary(), log := boolean(), wiki => boolean(), page => binary()
+}.
 %% a post as a moderator is shown it, whatever state it is in
 -type held() :: #{
     id := integer(),
@@ -85,9 +90,10 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
                 ike_html:el(ol, [ike_html:el(li, [post(P, Log, Newest)]) || P <- Posts])
         end,
     Heading =
-        case [T || #{id := I, title := T} <- Posts, I =:= Root, is_binary(T)] of
-            [T | _] -> T;
-            [] -> <<">>", N/binary>>
+        case {Board, [T || #{id := I, title := T} <- Posts, I =:= Root, is_binary(T)]} of
+            {#{page := Page}, _} -> Page;
+            {_, [T | _]} -> T;
+            {_, []} -> <<">>", N/binary>>
         end,
     Body =
         case Log of
@@ -169,6 +175,21 @@ acted(Lines, Back) ->
     ]).
 
 -spec post(post(), Log :: boolean(), Newest :: non_neg_integer()) -> ike_html:html().
+post(#{id := Id, tombstone := true} = Post, _Log, _Newest) ->
+    N = integer_to_binary(Id),
+    Title =
+        case maps:get(title, Post, none) of
+            T when is_binary(T) -> T;
+            _ -> <<>>
+        end,
+    ike_html:el(article, [{id, <<"p", N/binary>>}], [
+        ike_html:el(header, [
+            ike_html:el(span, [{class, <<"title">>}], [ike_html:text(Title)]),
+            ike_html:text(<<" ">>),
+            anchor(<<"#p", N/binary>>, <<">>", N/binary>>)
+        ]),
+        ike_html:el(p, [gone(<<"taken down">>)])
+    ]);
 post(
     #{id := Id, time := Time, body := Body, name := {Kind, Name}, links := Links} = Post,
     Log,
@@ -218,18 +239,27 @@ post(
             #{revision := true, changes := Changes} ->
                 Added = length([x || {added, _} <- Changes]),
                 Removed = length([x || {removed, _} <- Changes]),
-                Count = iolist_to_binary([
-                    [<<"+", (integer_to_binary(Added))/binary>> || Added > 0],
-                    [<<" ">> || Added > 0, Removed > 0],
-                    [<<"-", (integer_to_binary(Removed))/binary>> || Removed > 0],
-                    [<<"=">> || Added =:= 0, Removed =:= 0]
-                ]),
+                Count =
+                    [
+                        ike_html:el(span, [{class, <<"added">>}], [
+                            ike_html:text(<<"+", (integer_to_binary(Added))/binary>>)
+                        ])
+                     || Added > 0
+                    ] ++
+                        [ike_html:text(<<" ">>) || Added > 0, Removed > 0] ++
+                        [
+                            ike_html:el(span, [{class, <<"removed">>}], [
+                                ike_html:text(<<"-", (integer_to_binary(Removed))/binary>>)
+                            ])
+                         || Removed > 0
+                        ] ++
+                        [ike_html:text(<<"=">>) || Added =:= 0, Removed =:= 0],
                 Open = [open || Id =:= Newest],
                 {
                     [
                         ike_html:text(<<" ">>),
                         ike_html:el(details, Open, [
-                            ike_html:el(summary, [ike_html:text(Count)]),
+                            ike_html:el(summary, Count),
                             ike_html:el(p, changes(Changes))
                         ])
                     ],
@@ -1312,6 +1342,8 @@ style() ->
         ".spoiler { background: #24292f; color: #24292f; }\n"
         ".spoiler:hover { color: #ffffff; }\n"
         ".gone { color: #6e7781; }\n"
+        ".added { color: #116329; }\n"
+        ".removed { color: #82071e; }\n"
         "a.missing { color: #cf222e; }\n"
         ".title { font-weight: bold; }\n"
     >>.

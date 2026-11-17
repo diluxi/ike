@@ -1015,14 +1015,12 @@ router reads both back. The invariant suite's href check admits exactly
   "user/anon": the one thing that could tell two unsigned edits apart is
   the password, a new edit's opening the seal of the one before (never an
   address, by rule). Not built unasked (Q36).
-- **A page whose first revision is out of view** (retracted, hidden or
-  trashed: it is the thread's first post, so the thread goes with it)
-  reads as missing, and an edit to it is refused with 409, "taken down",
-  rather than written into a thread nobody sees (Q39).
+- **What a fold replaces is discarded** (lux, Q36): nothing keeps an
+  intermediate edit. Squashing may later become a switch (and
+  unsquashing with it); turning it on or off then will not touch edits
+  made before.
 - *Not yet:* amend for tags (Q37), which needs the curation's thread
   first.
-- What a folded revision said before is gone, as a retracted post's is
-  not: Q36.
 
 ## Asset, meta, tack, curation (lux, 2026-11-16; recorded, not built)
 
@@ -1057,3 +1055,25 @@ lux's model, in lux's words where they are given:
   to no one but its uploader") and G7's control, which are lux's words
   in hazards.md. The wording proposed in questions.md (Q31) is needed
   first.
+
+## A page outlives its first revision (lux, 2026-11-17; Q39)
+
+- **On the wiki board, a thread stands while any post of it is in
+  view** (migration 0020 widens `shown`; elsewhere a thread still goes
+  with its first post). A first revision retracted, hidden or trashed
+  leaves a tombstone: the page's name as title, "taken down", nothing
+  of its text. With nothing else in view the thread is gone, as before,
+  and the next edit starts the page again in the same thread, under the
+  tombstone.
+- **The next revision in view takes over** what one out of view did: it
+  is shown as its change from the revision in view before it, and the
+  first in view reads as the page's start. This holds past the first
+  revision too. A talk post between the tombstone and the next revision
+  reads as if it came first; lux: that is fine.
+- **Revisions are named `<page> <n>`,** n counted over the revisions in
+  view, so a revision's number moves when one before it is taken down.
+  *Simplification:* the count is made when the page is rendered and
+  kept nowhere. The thread is headed by the page's name.
+- **A revision's count is coloured:** `+n` green, `-n` red.
+- *Unchanged:* purging a page's first post purges its whole thread, as
+  on every board.

@@ -182,7 +182,7 @@ retract(Post, By) ->
 -spec wiki(#{
     name := binary(), actor := ike_id:actor(), body := binary(), password => binary()
 }) ->
-    {ok, ike_id:post()} | {error, bad_text | taken_down} | error().
+    {ok, ike_id:post()} | {error, bad_text} | error().
 wiki(#{name := Name, actor := Actor, body := Body} = Edit) ->
     Password =
         case Edit of
@@ -750,8 +750,8 @@ page(Pages, Board, Root) ->
 swept(Conn) ->
     Pages = ike_config:pages_dir(),
     Sql = <<
-        "SELECT b.name, s.id FROM shown s JOIN thread t ON t.root = s.id"
-        " JOIN board b ON b.id = t.board WHERE s.id = s.thread"
+        "SELECT DISTINCT b.name, s.thread FROM shown s JOIN thread t ON t.root = s.thread"
+        " JOIN board b ON b.id = t.board"
     >>,
     case ike_db:q(Conn, Sql, []) of
         {ok, Rows} ->
@@ -893,8 +893,8 @@ open(Conn, {new, Name}) when is_binary(Name) ->
     end;
 open(Conn, Home) when is_integer(Home) ->
     Sql = <<
-        "SELECT 1 FROM shown s JOIN thread t ON t.root = s.id"
-        " JOIN board b ON b.id = t.board WHERE s.id = ?1 AND s.thread = ?1 AND b.log = 0"
+        "SELECT 1 FROM shown s JOIN thread t ON t.root = s.thread"
+        " JOIN board b ON b.id = t.board WHERE s.thread = ?1 AND b.log = 0 LIMIT 1"
     >>,
     case ike_db:q(Conn, Sql, [Home]) of
         {ok, [_]} -> ok;
@@ -1314,8 +1314,18 @@ suspend(Conn, Who, Post, Actor, Reason, Time) ->
             Error
     end.
 
+%% whether anything of a thread is in view: on most boards, whether its
+%% first post is; on the wiki, whether any post is (0020)
+-spec standing(ike_db:writer(), integer()) -> boolean().
+standing(Conn, Thread) ->
+    case ike_db:q(Conn, <<"SELECT 1 FROM shown WHERE thread = ?1 LIMIT 1">>, [Thread]) of
+        {ok, [_]} -> true;
+        _ -> false
+    end.
+
 %% a post out of sight, back in it, or gone for good; a thread's first
-%% post takes the thread with it
+%% post takes the thread with it, but on the wiki only once nothing else
+%% of it is in view
 -spec state(
     ike_db:writer(),
     who(),
@@ -1346,11 +1356,10 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
                 {ok, Logged} ->
                     case changed(Conn, Post, Thread, To) of
                         {ok, Destroyed} ->
-                            Gone =
-                                case Post =:= Thread andalso To =/= {0, undefined} of
-                                    true -> [{Board, Thread}];
-                                    false -> []
-                                end,
+                            Gone = [
+                                {Board, Thread}
+                             || Post =:= Thread, not standing(Conn, Thread)
+                            ],
                             {ok, #{
                                 threads => [Thread | Logged] ++ [T || [T] <- Rows],
                                 gone => Gone,
@@ -1400,9 +1409,6 @@ revised(Conn, Name, Actor, Body, Password, Time) ->
             end;
         {ok, [[Thread]]} when is_integer(Thread) ->
             case newest(Conn, Thread) of
-                %% its first revision, which is its thread, out of view
-                {ok, {undefined, undefined}} ->
-                    {error, taken_down};
                 {ok, {Base, Last}} when Actor =/= ?NOBODY, is_integer(Last), Base =:= Last ->
                     case ike_db:q(Conn, <<"SELECT actor FROM post WHERE id = ?1">>, [Last]) of
                         {ok, [[Actor]]} -> amended(Conn, Last, Thread, Body, Time);
@@ -1621,11 +1627,7 @@ retracted(Conn, Post, Thread, Board, Time) ->
         }
     of
         {{ok, Rows}, {ok, Assets}, {ok, _}} ->
-            Gone =
-                case Post =:= Thread of
-                    true -> [{Board, Thread}];
-                    false -> []
-                end,
+            Gone = [{Board, Thread} || Post =:= Thread, not standing(Conn, Thread)],
             {ok, (effects())#{
                 threads := [Thread | [T || [T] <- Rows]],
                 gone := Gone,
