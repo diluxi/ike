@@ -28,6 +28,7 @@
     | button
     | del
     | details
+    | 'div'
     | footer
     | form
     | h1
@@ -82,7 +83,13 @@
         | src
         | type
         | value
-        | width,
+        | width
+        | min
+        | max
+        | step
+        %% a font's file, and an axis a slider moves, for ike.js
+        | data_font
+        | data_axis,
         binary()
     }
     | required
@@ -196,6 +203,7 @@ tag(br) -> <<"br">>;
 tag(button) -> <<"button">>;
 tag(del) -> <<"del">>;
 tag(details) -> <<"details">>;
+tag('div') -> <<"div">>;
 tag(footer) -> <<"footer">>;
 tag(form) -> <<"form">>;
 tag(h1) -> <<"h1">>;
@@ -249,4 +257,9 @@ name(rows) -> <<"rows">>;
 name(src) -> <<"src">>;
 name(type) -> <<"type">>;
 name(value) -> <<"value">>;
-name(width) -> <<"width">>.
+name(width) -> <<"width">>;
+name(min) -> <<"min">>;
+name(max) -> <<"max">>;
+name(step) -> <<"step">>;
+name(data_font) -> <<"data-font">>;
+name(data_axis) -> <<"data-axis">>.

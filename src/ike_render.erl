@@ -406,7 +406,7 @@ name(_, Id, [First | _] = Names, _, _) ->
 -spec images(ike_db:reader(), integer()) -> #{integer() => [ike_view:image() | gone]}.
 images(Conn, Thread) ->
     Sql = <<
-        "SELECT pa.post, pa.gone, x.hash, x.format, x.width, x.height"
+        "SELECT pa.post, pa.gone, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0)"
         " FROM post_image pa JOIN shown s ON s.id = pa.post"
         " LEFT JOIN asset x ON x.hash = pa.asset"
         " WHERE s.thread = ?1 ORDER BY pa.post DESC, pa.position DESC"
@@ -476,7 +476,8 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
 -spec render_entry(#state{}, integer()) -> ok | none.
 render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
     Versions = <<
-        "SELECT v.position, x.hash, x.format, x.width, x.height FROM booru_version v"
+        "SELECT v.position, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0),"
+        " x.family, x.axes FROM booru_version v"
         " LEFT JOIN asset x ON x.hash = v.asset WHERE v.booru = ?1 ORDER BY v.position DESC"
     >>,
     Shown = <<
@@ -513,10 +514,17 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                         versions => [
                             {Position,
                                 case image(Hash, Type, W, H) of
-                                    #{} = Image -> Image;
-                                    none -> gone
+                                    #{} = Image when is_binary(Family) ->
+                                        %% a font: tried out on its page
+                                        Image#{axes => ike_reader:axes(Axes)};
+                                    #{} = Image ->
+                                        Image;
+                                    none ->
+                                        gone
                                 end}
-                         || [Position, Hash, Type, W, H] <- Vs, is_integer(Position)
+                         || [Position, Hash, Type, W, H, Family, Axes] <- Vs,
+                            is_integer(Position),
+                            is_binary(Axes) orelse Axes =:= undefined
                         ],
                         shown_in => [P || [P] <- Ps, is_integer(P)],
                         linked_from => [L || [L] <- Ls, is_integer(L)],
@@ -540,7 +548,7 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
 -spec render_entries(#state{}) -> ok.
 render_entries(#state{conn = Conn, dir = Dir}) ->
     Sql = <<
-        "SELECT e.id, x.hash, x.format, x.width, x.height FROM shown_entry e"
+        "SELECT e.id, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0) FROM shown_entry e"
         " LEFT JOIN asset x ON x.hash = e.asset ORDER BY e.id DESC LIMIT ?1"
     >>,
     case ike_db:q(Conn, Sql, [?INDEX]) of

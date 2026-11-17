@@ -103,12 +103,13 @@ headers() ->
         <<"cache-control">> => <<"no-store">>
     }.
 
-%% images come from the media origin, and from nowhere else
+%% images, videos and fonts come from the media origin, and from nowhere
+%% else
 -spec csp() -> binary().
 csp() ->
     Media = ike_config:media_origin(),
     <<"default-src 'none'; script-src 'self'; style-src 'self'; img-src ", Media/binary,
-        "; media-src ", Media/binary,
+        "; media-src ", Media/binary, "; font-src ", Media/binary,
         "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>.
 
 -spec html(cowboy:http_status(), iodata(), cowboy_req:req()) -> cowboy_req:req().

@@ -145,13 +145,55 @@ upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
         end,
     #{type := Type, width := W, height := H, stored := Stored, thumb := Thumb} = Stripped,
     Traits = spaced([atom_to_binary(T) || T <- maps:get(traits, Stripped, [])]),
+    %% a font's family and axes are the asset's; what else it said of
+    %% itself is this upload's commentary
+    Font =
+        case Stripped of
+            #{font := #{family := Family, axes := Axes, commentary := Said}} ->
+                {Family, axes(Axes), commentary(Said)};
+            _ ->
+                {undefined, undefined, undefined}
+        end,
     Request =
         {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
-            H, Stored, Thumb, Traits, Private, Signed},
+            H, Stored, Thumb, Traits, Private, Signed, Font},
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
     end.
+
+%% a font's axes as kept, one a line: tag, least, default, most
+-spec axes([{binary(), float(), float(), float()}]) -> binary().
+axes(Axes) ->
+    iolist_to_binary([
+        [Tag, $\s, number(Min), $\s, number(Default), $\s, number(Most), $\n]
+     || {Tag, Min, Default, Most} <- Axes
+    ]).
+
+-spec number(float()) -> binary().
+number(F) ->
+    float_to_binary(F, [short]).
+
+%% a font's commentary as kept: one record a line, its kind and its text
+%% with backslashes, tabs and line ends escaped, as ike-font wrote them
+-spec commentary([{binary(), binary()}]) -> binary().
+commentary(Said) ->
+    iolist_to_binary([[Kind, $\t, escaped(Text), $\n] || {Kind, Text} <- Said]).
+
+-spec escaped(binary()) -> binary().
+escaped(Text) ->
+    <<
+        <<
+            (case C of
+                $\\ -> <<"\\\\">>;
+                $\t -> <<"\\t">>;
+                $\n -> <<"\\n">>;
+                $\r -> <<"\\r">>;
+                _ -> <<C>>
+            end)/binary
+        >>
+     || <<C>> <= Text
+    >>.
 
 %% a password as a post keeps it: a salt of its own and a slow hash
 %% under it, so that two posts with one password have nothing in common
@@ -608,7 +650,10 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
         end,
     {reply, Reply, Conn};
 handle_call(
-    {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0, Signed}, _From, Conn
+    {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0, Signed,
+        {Family, Axes, Commentary}},
+    _From,
+    Conn
 ) when
     is_integer(Actor),
     is_binary(Original),
@@ -641,13 +686,16 @@ handle_call(
                 case {kept(Dir, Name, Stored), kept(Dir, <<Name/binary, ".thumb">>, Thumb)} of
                     {ok, ok} ->
                         Insert = <<
-                            "INSERT INTO asset (hash, type, format, width, height, traits) VALUES"
-                            " (?1, CASE WHEN ?2 IN ('jpeg', 'png', 'webp') THEN ?2 END, ?2, ?3, ?4, ?5)"
+                            "INSERT INTO asset (hash, type, format, filetype, width, height,"
+                            " traits, family, axes) VALUES"
+                            " (?1, CASE WHEN ?2 IN ('jpeg', 'png', 'webp') THEN ?2 END,"
+                            " CASE WHEN ?2 IN ('jpeg', 'png', 'webp', 'webm', 'mp4') THEN ?2 END,"
+                            " ?2, nullif(?3, 0), nullif(?4, 0), ?5, ?6, ?7)"
                             " ON CONFLICT (hash) DO NOTHING"
                         >>,
                         Staged = <<
-                            "INSERT INTO upload (asset, original, actor, time) VALUES (?1, ?2, ?3, ?4)"
-                            " RETURNING id"
+                            "INSERT INTO upload (asset, original, actor, time, commentary)"
+                            " VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id"
                         >>,
                         %% a meta of the uploader's own, unless they have one,
                         %% or the bytes have a public one: someone else's
@@ -660,12 +708,20 @@ handle_call(
                         Time = erlang:system_time(second),
                         Done = committed(
                             ike_db:transaction(Conn, fun() ->
-                                case ike_db:q(Conn, Insert, [{blob, Hash}, Type, W, H, Traits]) of
+                                case
+                                    ike_db:q(Conn, Insert, [
+                                        {blob, Hash}, Type, W, H, Traits, Family, Axes
+                                    ])
+                                of
                                     {ok, _} ->
                                         case
                                             {
                                                 ike_db:q(Conn, Staged, [
-                                                    {blob, Hash}, {blob, Original}, Actor, Time
+                                                    {blob, Hash},
+                                                    {blob, Original},
+                                                    Actor,
+                                                    Time,
+                                                    Commentary
                                                 ]),
                                                 ike_db:q(Conn, Meta, [
                                                     {blob, Hash}, Actor, Time, Private, Signed
@@ -1917,13 +1973,20 @@ entered(_Conn, [], _Time, Acc) ->
 %% so no one's history line says so
 -spec inherent(ike_db:writer(), integer(), binary()) -> ok.
 inherent(Conn, Entry, Hash) ->
-    case ike_db:q(Conn, <<"SELECT format, traits FROM asset WHERE hash = ?1">>, [{blob, Hash}]) of
+    case ike_db:q(Conn, <<"SELECT filetype, traits FROM asset WHERE hash = ?1">>, [{blob, Hash}]) of
         {ok, [[Format, Traits]]} when is_binary(Format), is_binary(Traits) ->
             Words = binary:split(Traits, <<" ">>, [global, trim_all]),
             Names =
                 case Format of
                     _ when Format =:= <<"webm">>; Format =:= <<"mp4">> ->
                         [<<"video">>] ++ [<<"audio">> || lists:member(<<"audio">>, Words)];
+                    _ when
+                        Format =:= <<"ttf">>;
+                        Format =:= <<"otf">>;
+                        Format =:= <<"woff">>;
+                        Format =:= <<"woff2">>
+                    ->
+                        [<<"font">>];
                     _ ->
                         [<<"image">>, <<"raster">>] ++
                             [<<"animation">> || lists:member(<<"animated">>, Words)]
@@ -1989,7 +2052,7 @@ each_entry(_Conn, []) ->
 -spec published(ike_db:writer(), [binary()]) -> ok.
 published(Conn, [Hash | Hashes]) ->
     Sql = <<
-        "SELECT x.format, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
+        "SELECT x.filetype, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset = x.hash) OR EXISTS (SELECT 1 FROM shown_entry e WHERE e.asset = x.hash)"
         " OR EXISTS (SELECT 1 FROM meta m WHERE m.asset = x.hash AND m.private = 0 AND m.state = 0)"
         " FROM asset x WHERE x.hash = ?1"
@@ -2071,7 +2134,20 @@ unlinked([Hex | Rest]) ->
         file:delete(<<Media/binary, "/", Name/binary>>)
      || Name <- [
             ike_media:thumb(Hex)
-            | [ike_media:file(Hex, T) || T <- [<<"jpeg">>, <<"png">>, <<"webp">>]]
+            | [
+                ike_media:file(Hex, T)
+             || T <- [
+                    <<"jpeg">>,
+                    <<"png">>,
+                    <<"webp">>,
+                    <<"webm">>,
+                    <<"mp4">>,
+                    <<"ttf">>,
+                    <<"otf">>,
+                    <<"woff">>,
+                    <<"woff2">>
+                ]
+            ]
         ]
     ],
     unlinked(Rest);

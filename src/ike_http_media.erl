@@ -22,8 +22,7 @@ init(Req, public = State) ->
                             file:read_file(<<(ike_config:media_dir())/binary, "/", Name/binary>>)
                         of
                             {ok, Bytes} ->
-                                Headers = (headers())#{
-                                    <<"content-type">> => Mime,
+                                Headers = (typed(Mime))#{
                                     <<"cache-control">> => <<"public, max-age=31536000, immutable">>
                                 },
                                 cowboy_req:reply(200, Headers, Bytes, Req);
@@ -80,7 +79,7 @@ serve(Upload, Expires, Sig, Part, Req) ->
                 end,
             case file:read_file(<<(ike_config:assets_dir())/binary, "/", File/binary>>) of
                 {ok, Bytes} ->
-                    cowboy_req:reply(200, (headers())#{<<"content-type">> => Mime}, Bytes, Req);
+                    cowboy_req:reply(200, typed(Mime), Bytes, Req);
                 {error, _} ->
                     missing(Req)
             end;
@@ -92,6 +91,16 @@ serve(Upload, Expires, Sig, Part, Req) ->
 -spec missing(cowboy_req:req()) -> cowboy_req:req().
 missing(Req) ->
     cowboy_req:reply(404, (headers())#{<<"content-type">> => <<"text/plain">>}, <<>>, Req).
+
+%% the headers for a file of this type. a font is fetched by a page with
+%% cors, as a font must be (a page of ike's, which the media origin
+%% cannot tell apart, hence any origin): its bytes are public, or behind
+%% a link that is its own credential, and a font runs nothing
+-spec typed(binary()) -> cowboy:http_headers().
+typed(<<"font/", _/binary>> = Mime) ->
+    (headers())#{<<"content-type">> => Mime, <<"access-control-allow-origin">> => <<"*">>};
+typed(Mime) ->
+    (headers())#{<<"content-type">> => Mime}.
 
 %% the bytes are someone's, typed as the stripper found them, and may
 %% neither run nor be sniffed into something that does (hazard P3)

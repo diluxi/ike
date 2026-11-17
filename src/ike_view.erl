@@ -33,8 +33,11 @@
     file := binary(),
     thumb := binary(),
     type := binary(),
-    width := pos_integer(),
-    height := pos_integer()
+    %% 0 for a font, which has none
+    width := non_neg_integer(),
+    height := non_neg_integer(),
+    %% a font's variable axes, where its page tries it out
+    axes => [{binary(), float(), float(), float()}]
 }.
 %% a thread as its board lists it
 -type summary() :: #{root := integer(), posts := integer(), body := binary()}.
@@ -298,7 +301,7 @@ figures([]) -> [].
 %% the thumbnail, a link to the whole, and what it is
 -spec figure(image() | gone) -> [ike_html:html()].
 figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) ->
-    Size = <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>,
+    Size = size(W, H),
     case ike_media:moving(Type) of
         %% a video plays where it is, its first frame shown until then,
         %% nothing fetched before it is asked for; works without a script
@@ -308,7 +311,7 @@ figure(#{file := File, thumb := Thumb, type := Type, width := W, height := H}) -
                     ike_html:el(
                         video,
                         [{src, File}, {poster, Thumb}, {preload, <<"none">>}, controls],
-                        [anchor(File, <<Type/binary, ", ", Size/binary>>)]
+                        [anchor(File, <<Type/binary, Size/binary>>)]
                     )
                 ])
             ];
@@ -324,10 +327,16 @@ still(File, Thumb, Type, Size) ->
     [
         ike_html:el(p, [
             ike_html:el(a, [{href, File}], [
-                ike_html:el(img, [{src, Thumb}, {alt, <<Type/binary, ", ", Size/binary>>}], [])
+                ike_html:el(img, [{src, Thumb}, {alt, <<Type/binary, Size/binary>>}], [])
             ])
         ])
     ].
+
+%% ", WxH", or nothing for what has no size (a font)
+-spec size(non_neg_integer(), non_neg_integer()) -> binary().
+size(0, _) -> <<>>;
+size(_, 0) -> <<>>;
+size(W, H) -> <<", ", (integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>.
 
 -spec replies([integer()]) -> [ike_html:html()].
 replies([]) ->
@@ -890,7 +899,10 @@ upload({Csrf, Name}, Refused, Staged, Posted) ->
                         [
                             {type, <<"file">>},
                             {name, <<"file">>},
-                            {accept, <<"image/jpeg,image/png,image/webp,video/webm,video/mp4">>},
+                            {accept, <<
+                                "image/jpeg,image/png,image/webp,video/webm,video/mp4,",
+                                ".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
+                            >>},
                             multiple,
                             required
                         ],
@@ -922,10 +934,7 @@ staged(#{id := Id, type := Type, width := W, height := H, file := File, thumb :=
         ike_html:el(a, [{href, File}], [
             ike_html:el(img, [{src, Thumb}, {alt, <<"upload ", N/binary>>}], [])
         ]),
-        ike_html:text(
-            <<" upload ", N/binary, ", ", Type/binary, ", ", (integer_to_binary(W))/binary, "x",
-                (integer_to_binary(H))/binary>>
-        )
+        ike_html:text(<<" upload ", N/binary, ", ", Type/binary, (size(W, H))/binary>>)
     ]).
 
 %% the trunk: the metas the asker may see, newest first, each its
@@ -984,7 +993,10 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         private := Private,
         mine := Mine,
         name := Owner,
-        state := State
+        state := State,
+        family := Family,
+        axes := Axes,
+        commentary := Said
     } = Meta,
     Title = <<"meta ", (number(Id))/binary>>,
     Row = fun(Name, Value) ->
@@ -1003,7 +1015,14 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
     Rows =
         [
             Row(<<"type">>, Type),
-            Row(<<"size">>, <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>),
+            case Family of
+                none ->
+                    Row(<<"size">>, <<
+                        (integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary
+                    >>);
+                _ ->
+                    Row(<<"family">>, Family)
+            end,
             ike_html:el(tr, [
                 ike_html:el(th, [ike_html:text(<<"owner">>)]),
                 ike_html:el(td, [Whose | [ike_html:text(<<", unsigned">>) || Mine, Owner =:= none]])
@@ -1018,6 +1037,20 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
             )
         ] ++
             [Row(<<"what it is">>, Traits) || Traits =/= <<>>] ++
+            [
+                Row(
+                    <<"axis ", Tag/binary>>,
+                    <<
+                        (axis_number(A))/binary,
+                        " to ",
+                        (axis_number(C))/binary,
+                        ", ",
+                        (axis_number(B))/binary,
+                        " by default"
+                    >>
+                )
+             || {Tag, A, B, C} <- Axes
+            ] ++
             [Row(<<"state">>, atom_to_binary(State)) || State =/= shown],
     Form = fun(Token, Field, Value, Label) ->
         ike_html:el(form, [{method, <<"post">>}, {action, meta_path(Id)}], [
@@ -1055,7 +1088,10 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
     layout(Title, [
         ike_html:el(h1, [ike_html:text(Title)]),
         ike_html:el(p, [anchor(<<"/trunk">>, <<"trunk">>)])
-        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Owned ++
+        | case Family of
+            none -> figure(Image);
+            _ -> specimen(Image, Axes)
+        end ++ [ike_html:el(table, Rows)] ++ commentary(Said) ++ Shown ++ Owned ++
             [
                 ike_html:el(p, [
                     anchor(<<"/mod/meta/", (integer_to_binary(Id))/binary>>, <<"moderate">>)
@@ -1063,6 +1099,98 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
              || Moderator
             ]
     ]).
+
+%% a font tried out: a line of text to type, its size, its weight, and
+%% each other axis it has, the sample drawn in it. ike.js loads the font
+%% from the media origin and moves the sample with the sliders; without
+%% scripts the sample stands in the page's own font, and the thumbnail
+%% (an F the stripper drew in it) shows the font
+-spec specimen(image(), [{binary(), float(), float(), float()}]) -> [ike_html:html()].
+specimen(#{file := File, thumb := Thumb, type := Type}, Axes) ->
+    Sample = <<"The quick brown fox jumps over the lazy dog">>,
+    Slider = fun(Label, Axis, Min, Default, Max) ->
+        ike_html:el(p, [
+            ike_html:el(label, [
+                ike_html:text(<<Label/binary, " ">>),
+                ike_html:el(
+                    input,
+                    [
+                        {type, <<"range">>},
+                        {data_axis, Axis},
+                        {min, axis_number(Min)},
+                        {max, axis_number(Max)},
+                        {value, axis_number(Default)},
+                        {step, <<"any">>}
+                    ],
+                    []
+                )
+            ])
+        ])
+    end,
+    %% a variable font's own weight axis, else the weights a browser makes
+    Weight =
+        case lists:keyfind(<<"wght">>, 1, Axes) of
+            {_, A, B, C} -> Slider(<<"weight">>, <<"wght">>, A, B, C);
+            false -> Slider(<<"weight">>, <<"weight">>, 100.0, 400.0, 900.0)
+        end,
+    still(File, Thumb, Type, <<>>) ++
+        [
+            ike_html:el('div', [{class, <<"specimen">>}, {data_font, File}], [
+                ike_html:el(p, [
+                    ike_html:el(label, [
+                        ike_html:text(<<"text ">>),
+                        ike_html:el(
+                            input,
+                            [{type, <<"text">>}, {class, <<"specimen-text">>}, {value, Sample}],
+                            []
+                        )
+                    ])
+                ]),
+                Slider(<<"size">>, <<"size">>, 8.0, 48.0, 200.0),
+                Weight
+                | [Slider(Tag, Tag, A, B, C) || {Tag, A, B, C} <- Axes, Tag =/= <<"wght">>] ++
+                    [ike_html:el(p, [{class, <<"sample">>}], [ike_html:text(Sample)])]
+            ])
+        ].
+
+-spec axis_number(float()) -> binary().
+axis_number(F) when F == trunc(F) -> integer_to_binary(trunc(F));
+axis_number(F) -> float_to_binary(F, [short]).
+
+%% what a font said of itself beyond its names, as danbooru shows an
+%% artist's commentary: text, links in it left as text
+-spec commentary([{binary(), binary()}]) -> [ike_html:html()].
+commentary([]) ->
+    [];
+commentary(Said) ->
+    [
+        ike_html:el(h2, [ike_html:text(<<"commentary">>)]),
+        ike_html:el(table, [
+            ike_html:el(tr, [
+                ike_html:el(th, [ike_html:text(said(Kind))]),
+                ike_html:el(td, plain(binary:split(Text, <<"\n">>, [global])))
+            ])
+         || {Kind, Text} <- Said
+        ])
+    ].
+
+%% a name record's number, as OpenType calls it
+-spec said(binary()) -> binary().
+said(<<"0">>) -> <<"copyright">>;
+said(<<"3">>) -> <<"unique id">>;
+said(<<"5">>) -> <<"version">>;
+said(<<"7">>) -> <<"trademark">>;
+said(<<"8">>) -> <<"manufacturer">>;
+said(<<"9">>) -> <<"designer">>;
+said(<<"10">>) -> <<"description">>;
+said(<<"11">>) -> <<"vendor url">>;
+said(<<"12">>) -> <<"designer url">>;
+said(<<"13">>) -> <<"license">>;
+said(<<"14">>) -> <<"license url">>;
+said(<<"19">>) -> <<"sample text">>;
+said(<<"vendor">>) -> <<"vendor id">>;
+said(<<"meta">>) -> <<"woff metadata">>;
+said(Other) -> <<"name ", Other/binary>>.
 
 %% a meta on its moderation page
 -spec moderated_meta(binary(), pos_integer(), shown | hidden | trashed, [ike_role:kind()]) ->
@@ -1154,6 +1282,7 @@ entry(
     Stamp = stamp(Time),
     Newest =
         case Versions of
+            [{_, #{axes := Axes} = Font} | _] -> specimen(Font, Axes);
             [{_, Image} | _] -> figure(Image);
             [] -> []
         end,
@@ -1179,10 +1308,7 @@ entry(
                                         (integer_to_binary(Position + 1))/binary,
                                         ": ",
                                         Type/binary,
-                                        ", ",
-                                        (integer_to_binary(W))/binary,
-                                        "x",
-                                        (integer_to_binary(H))/binary
+                                        (size(W, H))/binary
                                     >>;
                                 gone ->
                                     <<(integer_to_binary(Position + 1))/binary, ": purged">>
@@ -1499,8 +1625,10 @@ changes([]) ->
 files_field(Which) ->
     Accept =
         case Which of
-            any -> <<"image/jpeg,image/png,image/webp,video/webm,video/mp4">>;
-            still -> <<"image/jpeg,image/png,image/webp">>
+            any ->
+                <<"image/jpeg,image/png,image/webp,video/webm,video/mp4,.ttf,.otf,.woff,.woff2">>;
+            still ->
+                <<"image/jpeg,image/png,image/webp">>
         end,
     ike_html:el(p, [
         ike_html:el(label, [{for, <<"file">>}], [ike_html:text(<<"files ">>)]),
@@ -1536,6 +1664,8 @@ style() ->
         ".removed { color: #82071e; }\n"
         "a.missing { color: #cf222e; }\n"
         ".title { font-weight: bold; }\n"
+        ".specimen .sample { font-size: 48px; overflow-wrap: anywhere; }\n"
+        ".specimen input[type=text] { width: 100%; max-width: 40em; }\n"
         "h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }\n"
     >>.
 
@@ -1567,6 +1697,30 @@ script() ->
         "  }\n"
         "  t.selectionStart = start + tag.length + 2;\n"
         "  t.selectionEnd = t.selectionStart + inside.length;\n"
+        "});\n"
+        "document.querySelectorAll('.specimen[data-font]').forEach(function (s) {\n"
+        "  var sample = s.querySelector('.sample'), text = s.querySelector('.specimen-text');\n"
+        "  var wght = s.querySelector('input[data-axis=wght]');\n"
+        "  var family = 'ike-specimen-' + Math.random().toString(36).slice(2);\n"
+        "  if (window.FontFace && sample) {\n"
+        "    var how = wght ? { weight: wght.min + ' ' + wght.max } : {};\n"
+        "    new FontFace(family, 'url(\"' + s.dataset.font + '\")', how).load().then(function (f) {\n"
+        "      document.fonts.add(f);\n"
+        "      sample.style.fontFamily = '\"' + family + '\", sans-serif';\n"
+        "    }, function () {});\n"
+        "  }\n"
+        "  function apply() {\n"
+        "    var settings = [];\n"
+        "    s.querySelectorAll('input[data-axis]').forEach(function (i) {\n"
+        "      var a = i.dataset.axis;\n"
+        "      if (a === 'size') sample.style.fontSize = i.value + 'px';\n"
+        "      else if (a === 'wght' || a === 'weight') sample.style.fontWeight = i.value;\n"
+        "      else settings.push('\"' + a + '\" ' + i.value);\n"
+        "    });\n"
+        "    sample.style.fontVariationSettings = settings.length ? settings.join(', ') : 'normal';\n"
+        "    if (text) sample.textContent = text.value;\n"
+        "  }\n"
+        "  if (sample) { s.addEventListener('input', apply); apply(); }\n"
         "});\n"
         "document.addEventListener('keydown', function (e) {\n"
         "  if (e.key !== 'e' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;\n"

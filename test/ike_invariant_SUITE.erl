@@ -1513,13 +1513,56 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
     exiftool(["-q", "-overwrite_original", "-Orientation#=6", Turned]),
     {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, Turned),
     {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, filename:join(Data, "base.jpg")),
+    %% a font (lux, 2026-11-17): the names that say which font it is stay,
+    %% and nothing else it says of itself (credits, license, vendor, a
+    %% woff's metadata), which is the upload's commentary instead; so the
+    %% same font credited to someone else is the same bytes. the fonts are
+    %% ike's own, made by ike_font_SUITE_data/make.py, credits SECRET-*
+    Font = filename:join(Data, "font.ttf"),
+    {ok, <<"ttf">>, 0, 0, Kept0, FontThumb} = strip(Work, Font),
+    {ok, <<"ttf">>, 0, 0, Kept0, FontThumb} = strip(Work, Font),
+    {ok, <<"ttf">>, 0, 0, Kept0, _} = strip(Work, filename:join(Data, "font-other.ttf")),
+    FontGolden = maps:get("font.ttf", golden()),
+    FontGolden = binary:encode_hex(crypto:hash(sha256, Kept0), lowercase),
+    {_, _} = binary:match(read(Data, "font.ttf"), <<"SCRT">>),
+    nomatch = binary:match(Kept0, <<"SCRT">>),
+    [] = secrets(Kept0),
+    named_only(Work, Kept0),
+    bare(Work, FontThumb),
+    %% a woff2, compressed, is looked at by what the stripper itself
+    %% reads of it again: no record, no vendor, no metadata left to say
+    Woff2 = filename:join(Data, "font.woff2"),
+    {ok, <<"woff2">>, 0, 0, Kept2, _} = strip(Work, Woff2),
+    {ok, <<"woff2">>, 0, 0, Kept2, _} = strip(Work, Woff2),
+    Woff2Golden = maps:get("font.woff2", golden()),
+    Woff2Golden = binary:encode_hex(crypto:hash(sha256, Kept2), lowercase),
+    {_, Said} = said(Work, read(Data, "font.woff2")),
+    {_, _} = binary:match(Said, <<"SECRET-META">>),
+    %% (OTS gives a font with no version name one of its own, from the
+    %% version its head table holds: not the upload's, and the same for
+    %% every copy)
+    {Kept2, Again} = said(Work, Kept2),
+    [<<"family\tIke Test">>] = [
+        L
+     || L <- binary:split(Again, <<"\n">>, [global, trim_all]), L =/= <<"name\t5\t1.000">>
+    ],
+    {Kept0, Plain} = said(Work, Kept0),
+    [<<"family\tIke Test">>] = [
+        L
+     || L <- binary:split(Plain, <<"\n">>, [global, trim_all]), L =/= <<"name\t5\t1.000">>
+    ],
+    %% the thumbnail: the F alone, on nothing
+    true = alpha(FontThumb),
     %% what is not taken
     Refused = [
         {<<"not an image">>, "not-an-image"},
         {binary:part(read(Data, "base.png"), 0, 200), "unreadable"},
         {<<(read(Data, "base.png"))/binary>>, "too-large", ["10000000", "32", "20000000", "128"]},
         {<<(read(Data, "base.png"))/binary>>, "too-large", ["1000", "4096", "20000000", "128"]},
-        {<<"RIFF", 4:32/little, "WEBP">>, "unreadable"}
+        {<<"RIFF", 4:32/little, "WEBP">>, "unreadable"},
+        %% a font's header and nothing that OTS would take for a font
+        {<<0, 1, 0, 0, 0, 1, "nothing", 0:800>>, "unreadable"},
+        {<<"wOF2", 0:800>>, "unreadable"}
     ],
     lists:foreach(
         fun
@@ -1546,7 +1589,11 @@ golden() ->
         "base.mp4" =>
             <<"efb8883bfa667674c911168e7af19ca38e01a127a243e3e9dab90e064a618f37">>,
         "lossless.webp" =>
-            <<"12860a83c965555f000702cd5d7c7098662cd8c868a787448e7757f322e0e1d1">>
+            <<"12860a83c965555f000702cd5d7c7098662cd8c868a787448e7757f322e0e1d1">>,
+        "font.ttf" =>
+            <<"c0c5831b481be88752538ebed3c7b1804da2d031cb7137e0ee05111361dfc01e">>,
+        "font.woff2" =>
+            <<"70823b986299629980046b2df7b6776f0eb593ba78e7cee0589e300da43b7b0f">>
     }.
 
 caps() -> ["10000000", "4096", "20000000", "128"].
@@ -1557,6 +1604,68 @@ read(Data, Name) ->
 
 strip(Work, File) ->
     strip_bytes(Work, read(filename:dirname(File), filename:basename(File)), caps()).
+
+%% a font's stored bytes and what the stripper says the font says of
+%% itself beyond its names
+said(Work, Bytes) ->
+    In = filename:join(Work, "said-in"),
+    Out = filename:join(Work, "said-out"),
+    ok = file:write_file(In, Bytes),
+    _ = os:cmd(
+        lists:flatten([
+            lists:join(" ", [quote(A) || A <- [os:find_executable("ike-strip") | caps()]]),
+            " <",
+            quote(In),
+            " >",
+            quote(Out)
+        ])
+    ),
+    {ok, Answer} = file:read_file(Out),
+    [Line, Rest] = binary:split(Answer, <<"\n">>),
+    [<<"ok">>, _, <<"-">>, <<"-">>, L1, L2, _, L3] = binary:split(Line, <<" ">>, [global]),
+    S = binary_to_integer(L1),
+    T = binary_to_integer(L2),
+    I = binary_to_integer(L3),
+    <<Stored:S/binary, _:T/binary, Info:I/binary>> = Rest,
+    {Stored, Info}.
+
+%% what exiftool finds in a stored font: the names that say which font it
+%% is (in any language), and nothing else of its own
+named_only(Work, Bytes) ->
+    File = filename:join(Work, "named"),
+    ok = file:write_file(File, Bytes),
+    [Found] = json:decode(list_to_binary(exiftool(["-j", "-G1", "-a", "-u", File]))),
+    Names = [
+        <<"FontFamily">>,
+        <<"FontSubfamily">>,
+        <<"FontName">>,
+        <<"PostScriptFontName">>,
+        <<"PreferredFamily">>,
+        <<"PreferredSubfamily">>
+    ],
+    Other = [
+        K
+     || K := _ <- Found,
+        not system(K),
+        not lists:member(K, [
+            <<"SourceFile">>,
+            <<"ExifTool:ExifToolVersion">>,
+            <<"File:FileType">>,
+            <<"File:FileTypeExtension">>,
+            <<"File:MIMEType">>
+        ]),
+        not lists:member(hd(binary:split(font_tag(K), <<"-">>)), Names)
+    ],
+    [] = Other,
+    <<"Ike Test">> = maps:get(<<"Font:FontFamily">>, Found).
+
+%% whether a webp says it has an alpha channel: the extended header's
+%% flag for one (VP8X, bit 4)
+alpha(<<"RIFF", _:32, "WEBP", "VP8X", _:32, Flags, _/binary>>) -> Flags band 16 =:= 16;
+alpha(_) -> false.
+
+font_tag(<<"Font:", Tag/binary>>) -> Tag;
+font_tag(Other) -> Other.
 
 %% ike-strip, as a unit would run it: the upload on stdin
 strip_bytes(Work, Bytes, Caps) ->
@@ -1573,6 +1682,14 @@ strip_bytes(Work, Bytes, Caps) ->
     {ok, Answer} = file:read_file(Out),
     [Line, Rest] = binary:split(Answer, <<"\n">>),
     case binary:split(Line, <<" ">>, [global]) of
+        %% a font: no size, and what it says of itself after
+        [<<"ok">>, Type, <<"-">>, <<"-">>, L1, L2, _Traits, L3] ->
+            S = binary_to_integer(L1),
+            T = binary_to_integer(L2),
+            I = binary_to_integer(L3),
+            S = byte_size(Rest) - T - I,
+            <<Stored:S/binary, Thumb:T/binary, _:I/binary>> = Rest,
+            {ok, Type, 0, 0, Stored, Thumb};
         [<<"ok">>, Type, W, H, L1, L2, _Traits] ->
             S = binary_to_integer(L1),
             T = binary_to_integer(L2),

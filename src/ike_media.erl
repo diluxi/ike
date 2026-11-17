@@ -9,6 +9,10 @@
 -spec mime(binary()) -> binary().
 mime(<<"webm">>) -> <<"video/webm">>;
 mime(<<"mp4">>) -> <<"video/mp4">>;
+mime(<<"ttf">>) -> <<"font/ttf">>;
+mime(<<"otf">>) -> <<"font/otf">>;
+mime(<<"woff">>) -> <<"font/woff">>;
+mime(<<"woff2">>) -> <<"font/woff2">>;
 mime(Type) -> <<"image/", Type/binary>>.
 
 %% whether a type is shown as a video
@@ -37,6 +41,10 @@ ext(<<"png">>) -> <<"png">>;
 ext(<<"webp">>) -> <<"webp">>;
 ext(<<"webm">>) -> <<"webm">>;
 ext(<<"mp4">>) -> <<"mp4">>;
+ext(<<"ttf">>) -> <<"ttf">>;
+ext(<<"otf">>) -> <<"otf">>;
+ext(<<"woff">>) -> <<"woff">>;
+ext(<<"woff2">>) -> <<"woff2">>;
 ext(_) -> <<"bin">>.
 
 %% a file's name back to its asset and what it is served as; nothing
@@ -48,6 +56,10 @@ parse(<<Hex:64/binary, ".png">>) -> hex(Hex, <<"image/png">>);
 parse(<<Hex:64/binary, ".webp">>) -> hex(Hex, <<"image/webp">>);
 parse(<<Hex:64/binary, ".webm">>) -> hex(Hex, <<"video/webm">>);
 parse(<<Hex:64/binary, ".mp4">>) -> hex(Hex, <<"video/mp4">>);
+parse(<<Hex:64/binary, ".ttf">>) -> hex(Hex, <<"font/ttf">>);
+parse(<<Hex:64/binary, ".otf">>) -> hex(Hex, <<"font/otf">>);
+parse(<<Hex:64/binary, ".woff">>) -> hex(Hex, <<"font/woff">>);
+parse(<<Hex:64/binary, ".woff2">>) -> hex(Hex, <<"font/woff2">>);
 parse(_) -> error.
 
 -spec hex(binary(), binary()) -> {ok, binary(), binary()} | error.

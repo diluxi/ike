@@ -6,23 +6,37 @@
 %% the stored hash is ike's own to compute.
 -module(ike_strip).
 
--export([run/1]).
+-export([run/1, unescaped/1]).
 -export_type([stripped/0]).
 
 -type stripped() :: #{
-    type := jpeg | png | webp | webm | mp4,
-    width := pos_integer(),
-    height := pos_integer(),
+    type := type(),
+    %% none for a font
+    width := non_neg_integer(),
+    height := non_neg_integer(),
     stored := binary(),
     thumb := binary(),
-    %% a video with sound, an animated png
-    traits := [audio | animated]
+    %% a video with sound, an animated png, a font, a variable one
+    traits := [audio | animated | font | variable],
+    %% what a font says of itself, beyond the names its file keeps
+    font => font()
 }.
+-type type() :: jpeg | png | webp | webm | mp4 | ttf | otf | woff | woff2.
+%% axes: tag, least, default, most. commentary: each a name record's
+%% number (or vendor, or meta for a woff's block) and its text
+-type font() :: #{
+    family := binary(),
+    axes := [{binary(), float(), float(), float()}],
+    commentary := [{binary(), binary()}]
+}.
+-export_type([type/0, font/0]).
 
 %% milliseconds, for the whole exchange
 -define(TIMEOUT, 60000).
 %% bytes; a thumbnail is small
 -define(MAX_THUMB, 1048576).
+%% bytes; what a font says of itself
+-define(MAX_INFO, 262144).
 
 -spec run(binary()) -> {ok, stripped()} | {no, binary()} | {error, unavailable}.
 run(Upload) ->
@@ -50,7 +64,7 @@ exchange(Socket, Upload, Max) ->
     case gen_tcp:send(Socket, Upload) of
         ok ->
             ok = gen_tcp:shutdown(Socket, write),
-            case answer(Socket, Deadline, Max + ?MAX_THUMB + 256, <<>>) of
+            case answer(Socket, Deadline, Max + ?MAX_THUMB + ?MAX_INFO + 256, <<>>) of
                 {ok, Bytes} -> parse(Bytes, Max);
                 error -> {error, unavailable}
             end;
@@ -104,6 +118,8 @@ parse(Bytes, Max) ->
                         _ ->
                             {error, unavailable}
                     end;
+                [<<"ok">>, Type0, <<"-">>, <<"-">>, S0, T0, Traits0, I0] ->
+                    font(type(Type0), int(S0), int(T0), int(I0), Traits0, Rest, Max);
                 [<<"no">>, Reason] when byte_size(Reason) =< 32, Rest =:= <<>> ->
                     {no, Reason};
                 _ ->
@@ -113,12 +129,118 @@ parse(Bytes, Max) ->
             {error, unavailable}
     end.
 
--spec type(binary()) -> {ok, jpeg | png | webp | webm | mp4} | error.
+%% a font's answer: no size, its info after its thumbnail
+-spec font(
+    {ok, type()} | error, integer(), integer(), integer(), binary(), binary(), pos_integer()
+) ->
+    {ok, stripped()} | {error, unavailable}.
+font({ok, Type}, S, T, I, Traits, Rest, Max) when
+    (Type =:= ttf orelse Type =:= otf orelse Type =:= woff orelse Type =:= woff2),
+    S > 0,
+    S =< Max,
+    T > 0,
+    T =< ?MAX_THUMB,
+    I > 0,
+    I =< ?MAX_INFO,
+    S + T + I =:= byte_size(Rest),
+    (Traits =:= <<"font">> orelse Traits =:= <<"font,variable">>)
+->
+    <<Stored:S/binary, Thumb:T/binary, Info:I/binary>> = Rest,
+    case info(Info) of
+        {ok, Font} ->
+            {ok, #{
+                type => Type,
+                width => 0,
+                height => 0,
+                stored => Stored,
+                thumb => Thumb,
+                traits => [font] ++ [variable || Traits =:= <<"font,variable">>],
+                font => Font
+            }};
+        error ->
+            {error, unavailable}
+    end;
+font(_, _, _, _, _, _, _) ->
+    {error, unavailable}.
+
+%% ike-font's lines, each a kind and its fields, tab-separated, text
+%% escaped; believed only in shape
+-spec info(binary()) -> {ok, font()} | error.
+info(Info) ->
+    case unicode:characters_to_binary(Info) of
+        Info ->
+            Lines = [L || L <- binary:split(Info, <<"\n">>, [global]), L =/= <<>>],
+            lines(Lines, #{family => <<>>, axes => [], commentary => []});
+        _ ->
+            error
+    end.
+
+-spec lines([binary()], font()) -> {ok, font()} | error.
+lines([], #{axes := Axes, commentary := Said} = Font) ->
+    {ok, Font#{axes := rev(Axes, []), commentary := rev(Said, [])}};
+lines([Line | Rest], #{axes := Axes, commentary := Said} = Font) ->
+    case binary:split(Line, <<"\t">>, [global]) of
+        [<<"family">>, Family] when byte_size(Family) =< 256 ->
+            lines(Rest, Font#{family := unescaped(Family)});
+        [<<"axis">>, Tag, Min, Default, Most] when byte_size(Tag) =:= 4 ->
+            %% a tag goes into css as a slider moves it: letters, digits
+            %% and spaces only
+            Plain = re:run(Tag, "^[A-Za-z0-9 ]{4}$", [{capture, none}]) =:= match,
+            case {Plain, number(Min), number(Default), number(Most)} of
+                {true, {ok, A}, {ok, B}, {ok, C}} when A =< B, B =< C ->
+                    lines(Rest, Font#{axes := [{Tag, A, B, C} | Axes]});
+                _ ->
+                    error
+            end;
+        [<<"name">>, Id, Text] when byte_size(Text) =< 65536 ->
+            case int(Id) of
+                N when N >= 0, N < 256 ->
+                    lines(Rest, Font#{commentary := [{Id, unescaped(Text)} | Said]});
+                _ ->
+                    error
+            end;
+        [Kind, Text] when
+            (Kind =:= <<"vendor">> orelse Kind =:= <<"meta">>), byte_size(Text) =< 65536
+        ->
+            lines(Rest, Font#{commentary := [{Kind, unescaped(Text)} | Said]});
+        _ ->
+            error
+    end.
+
+-spec rev([T], [T]) -> [T].
+rev([X | Xs], Acc) -> rev(Xs, [X | Acc]);
+rev([], Acc) -> Acc.
+
+-spec number(binary()) -> {ok, float()} | error.
+number(Bin) ->
+    try binary_to_float(Bin) of
+        F -> {ok, F}
+    catch
+        _:_ ->
+            case int(Bin) of
+                -1 when Bin =/= <<"-1">> -> error;
+                N -> {ok, float(N)}
+            end
+    end.
+
+-spec unescaped(binary()) -> binary().
+unescaped(<<"\\\\", Rest/binary>>) -> <<"\\", (unescaped(Rest))/binary>>;
+unescaped(<<"\\t", Rest/binary>>) -> <<"\t", (unescaped(Rest))/binary>>;
+unescaped(<<"\\n", Rest/binary>>) -> <<"\n", (unescaped(Rest))/binary>>;
+unescaped(<<"\\r", Rest/binary>>) -> <<"\r", (unescaped(Rest))/binary>>;
+unescaped(<<C, Rest/binary>>) -> <<C, (unescaped(Rest))/binary>>;
+unescaped(<<>>) -> <<>>.
+
+-spec type(binary()) -> {ok, type()} | error.
 type(<<"webm">>) -> {ok, webm};
 type(<<"mp4">>) -> {ok, mp4};
 type(<<"jpeg">>) -> {ok, jpeg};
 type(<<"png">>) -> {ok, png};
 type(<<"webp">>) -> {ok, webp};
+type(<<"ttf">>) -> {ok, ttf};
+type(<<"otf">>) -> {ok, otf};
+type(<<"woff">>) -> {ok, woff};
+type(<<"woff2">>) -> {ok, woff2};
 type(_) -> error.
 
 -spec int(binary()) -> integer().

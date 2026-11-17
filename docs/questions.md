@@ -109,6 +109,14 @@ here.
   trashed posts on their user page (or a page of their own), and leave
   unsigned ones as they are? And should a hidden meta, like a trashed
   one, be shown to its owner?
+- **Q44 Fonts' loose ends.** (a) `Access-Control-Allow-Origin: *` on
+  fonts lets any site load ike's public fonts; naming ike's own origin
+  needs it configured. (b) A tag for variable fonts? (c) The black F on
+  a transparent background disappears on a dark page; a light backdrop
+  behind thumbnails, or an F that follows the theme? (d) TTC
+  collections are refused; split them? (e) OTS gives a font without a
+  version name one of its own: harmless, but a re-upload of a stored
+  font carries "1.000" as commentary.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

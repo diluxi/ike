@@ -118,7 +118,15 @@ fog to an exact tree, so the pin bump is the commit to review.
   passes only signed links to staged uploads to ike. It needs DNS like
   the main host. Changing it is a restart; pages are made again then.
   For now `https://cdn.amartia.online`, accepted while ike is not public;
-  it belongs on a registered domain of its own (decisions.md).
+  it belongs on a registered domain of its own (decisions.md). Fonts
+  are served with `Access-Control-Allow-Origin: *` and their font/*
+  types (the module's Caddy sets both); a web server of fog's own in
+  front of the media directory must do the same, or pages cannot load
+  them.
+- **Fonts in the stripper.** ike-strip now runs OTS and fontTools
+  (Python) and draws a font's thumbnail with libvips' text, so its unit
+  needs no more than it had: a writable temporary directory, which
+  mktemp already uses for fontconfig's cache.
 - **Stripper.** A socket unit `ike-strip.socket` at
   `/run/ike-strip/strip.sock`, and `ike-strip@.service`, one sandboxed
   instance per upload: no network, a dynamic user, no privileges, 1 GB

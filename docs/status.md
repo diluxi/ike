@@ -70,7 +70,8 @@ uploads, invariant 10 as lux reworded it), `phi/metamod` (metas named
 or anonymous, moderated as posts; known bytes lead to their meta),
 `phi/quotes` (`> ` quotes and nested lists; `e` edits a wiki page),
 `phi/owners` (metas numbered and each an owner's; the first public one
-keeps it; owners sign later; trashed metas stay visible to them).
+keeps it; owners sign later; trashed metas stay visible to them). `phi/fonts` (fonts by accounts: OTS and fontTools, credits as
+commentary, an F for a thumbnail, a specimen with sliders).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -86,6 +87,7 @@ keeps it; owners sign later; trashed metas stay visible to them).
 
 ## Blocked on lux
 
+- **Q44:** fonts' loose ends.
 - **Q43:** trashed posts and their owners.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with
   the rest of hazards.md; G7's control still has the old words.

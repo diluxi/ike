@@ -2,7 +2,12 @@
 # hazard P1). The driver sees no tool but those named here; libvips and
 # jpegtran are pinned with nixpkgs, and a bump that changes what they
 # write changes stored hashes (hazard P7)
-{ lib, stdenvNoCC, zig, makeWrapper, bash, coreutils, vips, libjpeg_turbo, ffmpeg-headless }:
+{ lib, stdenvNoCC, zig, makeWrapper, bash, coreutils, gnugrep, vips, libjpeg_turbo, ffmpeg-headless, opentype-sanitizer, python3 }:
+let
+	# fonts (lux, 2026-11-17): OTS reads one as a browser would, fontTools
+	# cuts its name table and writes it back in its own format
+	python = python3.withPackages (p: [ p.fonttools p.brotli ]);
+in
 stdenvNoCC.mkDerivation {
 	pname = "ike-strip";
 	version = "0.0.0";
@@ -23,12 +28,16 @@ stdenvNoCC.mkDerivation {
 		runHook preInstall
 		install -Dm755 ike-chunks $out/libexec/ike-chunks
 		install -Dm755 ike-strip $out/bin/ike-strip
+		install -Dm755 ike-font $out/libexec/ike-font
 		wrapProgram $out/bin/ike-strip --set PATH ${lib.makeBinPath [
 			bash
 			coreutils
 			(lib.getBin vips)
 			(lib.getBin libjpeg_turbo)
 			(lib.getBin ffmpeg-headless)
+			gnugrep
+			opentype-sanitizer
+			python
 		]}:$out/libexec
 		runHook postInstall
 	'';

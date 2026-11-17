@@ -7,7 +7,7 @@
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
--export([metas/1, meta/2, known/2]).
+-export([metas/1, meta/2, known/2, axes/1]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -22,8 +22,9 @@
     id := pos_integer(),
     hash := binary(),
     type := binary(),
-    width := pos_integer(),
-    height := pos_integer(),
+    %% 0 for a font, which has none
+    width := non_neg_integer(),
+    height := non_neg_integer(),
     traits := binary(),
     time := integer(),
     private := boolean(),
@@ -32,15 +33,21 @@
     name := binary() | none,
     state := shown | hidden | trashed,
     %% the shown booru entry with this asset, if there is one
-    entry := pos_integer() | none
+    entry := pos_integer() | none,
+    %% a font's: its family, its variable axes (tag, least, default,
+    %% most), and what its owner's upload of it said of itself
+    family := binary() | none,
+    axes := [{binary(), float(), float(), float()}],
+    commentary := [{binary(), binary()}]
 }.
 
 %% a staged upload as its uploader is shown it
 -type staged() :: #{
     id := pos_integer(),
     type := binary(),
-    width := pos_integer(),
-    height := pos_integer(),
+    %% 0 for a font, which has none
+    width := non_neg_integer(),
+    height := non_neg_integer(),
     time := integer()
 }.
 -export([init/1, handle_call/3, handle_cast/2, terminate/2]).
@@ -255,6 +262,39 @@ first_public([#{private := false} = M | _]) -> {ok, M};
 first_public([_ | Ms]) -> first_public(Ms);
 first_public([]) -> none.
 
+%% a font's axes as the writer kept them, one a line
+-spec axes(binary() | undefined) -> [{binary(), float(), float(), float()}].
+axes(Axes) when is_binary(Axes) ->
+    [
+        {Tag, binary_to_float(A), binary_to_float(B), binary_to_float(C)}
+     || Line <- binary:split(Axes, <<"\n">>, [global, trim_all]),
+        [Tag, A, B, C] <- [binary:split(Line, <<" ">>, [global])],
+        float_text(A),
+        float_text(B),
+        float_text(C)
+    ];
+axes(undefined) ->
+    [].
+
+-spec float_text(binary()) -> boolean().
+float_text(Bin) ->
+    try binary_to_float(Bin) of
+        _ -> true
+    catch
+        _:_ -> false
+    end.
+
+%% a font's commentary as the writer kept it: kind, tab, escaped text
+-spec commentary(binary() | undefined) -> [{binary(), binary()}].
+commentary(Said) when is_binary(Said) ->
+    [
+        {Kind, ike_strip:unescaped(Text)}
+     || Line <- binary:split(Said, <<"\n">>, [global, trim_all]),
+        [Kind, Text] <- [binary:split(Line, <<"\t">>)]
+    ];
+commentary(undefined) ->
+    [].
+
 -spec who(viewer()) -> {integer(), 0 | 1}.
 who(#{actor := Actor, moderator := Moderator}) ->
     {
@@ -269,22 +309,45 @@ who(#{actor := Actor, moderator := Moderator}) ->
     }.
 
 -spec metas_of([term()]) -> [meta()].
-metas_of([[Id, Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, State, Entry] | Rows]) when
+metas_of([
+    [
+        Id,
+        Hash,
+        Type,
+        W,
+        H,
+        Traits,
+        Time,
+        Private,
+        Mine,
+        Upload,
+        Name,
+        State,
+        Entry,
+        Family,
+        Axes,
+        Said
+    ]
+    | Rows
+]) when
     is_integer(Id),
     Id > 0,
     is_binary(Hash),
     is_binary(Type),
     is_integer(W),
-    W > 0,
+    W >= 0,
     is_integer(H),
-    H > 0,
+    H >= 0,
     is_binary(Traits),
     is_integer(Time),
     is_integer(Upload),
     Upload > 0,
     (is_binary(Name) orelse Name =:= undefined),
     (State =:= 0 orelse State =:= 1 orelse State =:= 2),
-    (is_integer(Entry) orelse Entry =:= undefined)
+    (is_integer(Entry) orelse Entry =:= undefined),
+    (is_binary(Family) orelse Family =:= undefined),
+    (is_binary(Axes) orelse Axes =:= undefined),
+    (is_binary(Said) orelse Said =:= undefined)
 ->
     [
         #{
@@ -313,7 +376,14 @@ metas_of([[Id, Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, Stat
                 case Entry of
                     E when is_integer(E), E > 0 -> E;
                     _ -> none
-                end
+                end,
+            family =>
+                case Family of
+                    _ when is_binary(Family) -> Family;
+                    undefined -> none
+                end,
+            axes => axes(Axes),
+            commentary => commentary(Said)
         }
         | metas_of(Rows)
     ];
@@ -471,9 +541,9 @@ staged(Actor) ->
                 Id > 0,
                 is_binary(Type),
                 is_integer(W),
-                W > 0,
+                W >= 0,
                 is_integer(H),
-                H > 0,
+                H >= 0,
                 is_integer(Time)
             ];
         _ ->
@@ -522,7 +592,7 @@ handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
     {reply, Reply, Conn};
 handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
     Sql = <<
-        "SELECT u.id, a.format, a.width, a.height, u.time FROM upload u"
+        "SELECT u.id, a.filetype, coalesce(a.width, 0), coalesce(a.height, 0), u.time FROM upload u"
         " JOIN asset a ON a.hash = u.asset"
         " WHERE u.actor = ?1 AND u.posted IS NULL ORDER BY u.id DESC"
     >>,
@@ -544,7 +614,7 @@ handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
     >>,
     Sql = iolist_to_binary([
         <<
-            "SELECT e.id, x.hash, x.format, x.width, x.height FROM shown_entry e"
+            "SELECT e.id, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0) FROM shown_entry e"
             " LEFT JOIN asset x ON x.hash = e.asset WHERE 1"
         >>,
         [Has || _ <- Must],
@@ -633,11 +703,13 @@ handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
     is_integer(Actor), is_integer(Moderator)
 ->
     Sql = <<
-        "SELECT m.id, m.asset, x.format, x.width, x.height, x.traits, m.time, m.private,"
+        "SELECT m.id, m.asset, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0), x.traits, m.time, m.private,"
         " m.owner = ?1, coalesce((SELECT max(u.id) FROM upload u WHERE u.asset = m.asset"
         " AND u.actor = m.owner), (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset)),"
         " CASE WHEN m.signed = 1 THEN a.name END, m.state,"
-        " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset)"
+        " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset),"
+        " x.family, x.axes, (SELECT u.commentary FROM upload u WHERE u.asset = m.asset"
+        " AND u.actor = m.owner ORDER BY u.id DESC LIMIT 1)"
         " FROM meta m JOIN asset x ON x.hash = m.asset JOIN actor a ON a.id = m.owner"
         " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1))"
         " OR (m.state = 2 AND m.owner = ?1) OR ?2 = 1)"
@@ -660,7 +732,7 @@ handle_call({tacks, Hash}, _From, Conn) when is_binary(Hash) ->
 handle_call({staged_file, Upload}, _From, Conn) when is_integer(Upload) ->
     %% any upload: a link names one only on a page that may show it
     Sql = <<
-        "SELECT a.hash, a.format FROM upload u JOIN asset a ON a.hash = u.asset"
+        "SELECT a.hash, a.filetype FROM upload u JOIN asset a ON a.hash = u.asset"
         " WHERE u.id = ?1"
     >>,
     {reply, ike_db:q(Conn, Sql, [Upload]), Conn};

@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+# ike-font ORIGINAL SANE FLAVOR OUT INFO
+#
+# A font OTS has sanitised (SANE), made into what ike stores: its name
+# table cut to the names that identify it (family, subfamily, full and
+# PostScript names, the typographic family and subfamily, the variations'
+# PostScript prefix) and those its own tables point at (256 and up: axis
+# and instance names, which fvar and STAT name by number); every
+# other record, the vendor's id and a WOFF's own metadata block written
+# to INFO instead, as the font's commentary (lux, 2026-11-17: credits,
+# license and the like are kept, but not in the file, so that the same
+# font credited to someone else is the same asset). Saved as FLAVOR
+# (sfnt, woff, woff2), the format it came in, with no timestamp touched,
+# so that one input makes one output. INFO also says the family and each
+# variable axis. Nothing here renders a glyph; ORIGINAL is read only for
+# a WOFF's metadata block, which sanitising drops.
+import sys
+
+from fontTools.ttLib import TTFont
+
+KEEP = {1, 2, 4, 6, 16, 17, 25}
+
+
+def kept(record):
+    return record.nameID in KEEP or record.nameID >= 256
+
+
+def esc(text):
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+def main(original, sane, flavor, out, info):
+    lines = []
+    if flavor in ("woff", "woff2"):
+        try:
+            data = TTFont(original, lazy=True).flavorData
+            if data is not None and data.metaData:
+                lines.append("meta\t" + esc(data.metaData.decode("utf-8", "replace")))
+        except Exception:
+            pass
+    font = TTFont(sane)
+    font.recalcTimestamp = False
+    table = font["name"]
+    said = set()
+    for record in table.names:
+        if kept(record):
+            continue
+        try:
+            text = record.toUnicode()
+        except Exception:
+            continue
+        if text and (record.nameID, text) not in said:
+            said.add((record.nameID, text))
+            lines.append("name\t%d\t%s" % (record.nameID, esc(text)))
+    table.names = [r for r in table.names if kept(r)]
+    if "OS/2" in font:
+        vendor = font["OS/2"].achVendID
+        if vendor.strip():
+            lines.append("vendor\t" + esc(vendor.strip()))
+        font["OS/2"].achVendID = "    "
+    for tag in ("DSIG", "meta"):
+        if tag in font:
+            del font[tag]
+    if "fvar" in font:
+        for axis in font["fvar"].axes:
+            lines.append(
+                "axis\t%s\t%g\t%g\t%g"
+                % (axis.axisTag, axis.minValue, axis.defaultValue, axis.maxValue)
+            )
+    lines.append("family\t" + esc(table.getBestFamilyName() or ""))
+    font.flavor = None if flavor == "sfnt" else flavor
+    font.save(out, reorderTables=True)
+    with open(info, "w", encoding="utf-8") as f:
+        f.write("".join(line + "\n" for line in lines))
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:6])

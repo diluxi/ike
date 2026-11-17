@@ -11,7 +11,7 @@
 	media = "/var/cache/ike/media";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
-	csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+	csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; font-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 	# the stripper's socket; a unit behind it runs once per upload
 	stripSocket = "/run/ike-strip/strip.sock";
@@ -366,7 +366,19 @@ in {
 					handle /staged/* {
 						reverse_proxy 127.0.0.1:${toString cfg.port}
 					}
-					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|webm|mp4|thumb\.webp)$
+					# a font is fetched by ike's pages with cors, as fonts are,
+					# and typed here, since caddy knows no font's type
+					@font path_regexp ^/[0-9a-f]{64}\.(ttf|otf|woff|woff2)$
+					header @font Access-Control-Allow-Origin *
+					@ttf path_regexp ^/[0-9a-f]{64}\.ttf$
+					header @ttf Content-Type font/ttf
+					@otf path_regexp ^/[0-9a-f]{64}\.otf$
+					header @otf Content-Type font/otf
+					@woff path_regexp ^/[0-9a-f]{64}\.woff$
+					header @woff Content-Type font/woff
+					@woff2 path_regexp ^/[0-9a-f]{64}\.woff2$
+					header @woff2 Content-Type font/woff2
+					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|webm|mp4|ttf|otf|woff|woff2|thumb\.webp)$
 					handle @file {
 						root * ${media}
 						file_server

@@ -2,16 +2,21 @@
 # ike-strip MAX_BYTES MAX_SIDE MAX_PIXELS THUMB [MAX_SECONDS]
 #
 # One upload on stdin, one answer on stdout. Either
-#	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH TRAITS
-# (TRAITS: "audio" for a video with sound, else "-") followed by the
-# stored bytes and then the thumbnail's, or
+#	ok TYPE WIDTH HEIGHT STORED_LENGTH THUMB_LENGTH TRAITS [INFO_LENGTH]
+# (TRAITS: "audio" for a video with sound, "font" or "font,variable" for
+# a font, else "-") followed by the stored bytes, the thumbnail's, and
+# for a font what ike-font says of it (its family, axes and commentary;
+# a font has no width or height, "-"), or
 #	no REASON
 # and nothing more. The stored bytes are the upload with its metadata
 # stripped losslessly (hazards P4, P7), the colour profile and an animated
 # PNG's frames kept; the thumbnail is made from them. A video (WebM, MP4)
 # is remuxed without metadata, one video and one audio stream, chapters
 # and data tracks dropped, never re-encoded; its thumbnail is its first
-# frame.
+# frame. A font (TTF, OTF, WOFF, WOFF2) is sanitised by OTS, its name
+# table cut by ike-font, and sanitised again; its thumbnail is a black F
+# drawn in it on nothing (transparent), with no font but it to fall back
+# on.
 # Run in its own unit, never in ike's VM (invariant 6, hazard P1).
 set -euo pipefail
 
@@ -43,6 +48,10 @@ ffd8ff*) type=jpeg ;;
 89504e470d0a1a0a*) type=png ;;
 52494646????????57454250) type=webp ;;
 1a45dfa3*) type=webm ;;
+00010000* | 74727565*) type=ttf ;;
+4f54544f*) type=otf ;;
+774f4646*) type=woff ;;
+774f4632*) type=woff2 ;;
 ????????66747970*) type=mp4 ;;
 *) no not-an-image ;;
 esac
@@ -70,6 +79,43 @@ video() {
 	[ $((w * h)) -le "$max_pixels" ] || no too-large
 	[ "${seconds%%.*}" -lt "$max_seconds" ] 2>/dev/null || no too-long
 }
+
+# a font: OTS first, which reads it as a browser would and refuses or
+# repairs what it does not trust; what ike-font makes of that is checked
+# again. the F is drawn by libvips with a fontconfig that knows no font
+# but this one
+if [ "$type" = ttf ] || [ "$type" = otf ] || [ "$type" = woff ] || [ "$type" = woff2 ]; then
+	ots-sanitize "$work/in" "$work/sane" >/dev/null 2>&1 || no unreadable
+	flavor=$type
+	[ "$type" = ttf ] || [ "$type" = otf ] && flavor=sfnt
+	ike-font "$work/in" "$work/sane" "$flavor" "$work/out" "$work/info" 2>/dev/null ||
+		no unreadable
+	ots-sanitize "$work/out" "$work/check" >/dev/null 2>&1 || no unreadable
+	mkdir "$work/fc"
+	printf '<?xml version="1.0"?>\n<fontconfig><cachedir>%s</cachedir></fontconfig>\n' \
+		"$work/fc" >"$work/fonts.conf"
+	FONTCONFIG_FILE="$work/fonts.conf" XDG_CACHE_HOME="$work/fc" HOME="$work" \
+		vips text "$work/f.png" F --fontfile "$work/sane" --font "ike 160" --dpi 72 \
+		2>/dev/null || no unreadable
+	# the text's coverage is the alpha of a black image its size
+	fw=$(vipsheader -f width "$work/f.png" 2>/dev/null) || no unreadable
+	fh=$(vipsheader -f height "$work/f.png" 2>/dev/null) || no unreadable
+	vips black "$work/k.png" "$fw" "$fh" 2>/dev/null || no unreadable
+	vips bandjoin "$work/k.png $work/f.png" "$work/a.png" 2>/dev/null || no unreadable
+	side=$((fw > fh ? fw : fh))
+	side=$((side + side / 4))
+	vips gravity "$work/a.png" "$work/s.png" centre "$side" "$side" \
+		--extend background --background "0 0" 2>/dev/null || no unreadable
+	vipsthumbnail "$work/s.png" --size "${thumb}x${thumb}" \
+		-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
+	traits=font
+	grep -q '^axis' "$work/info" && traits=font,variable
+	printf 'ok %s - - %s %s %s %s\n' "$type" \
+		"$(stat -c %s "$work/out")" "$(stat -c %s "$work/thumb.webp")" "$traits" \
+		"$(stat -c %s "$work/info")"
+	cat "$work/out" "$work/thumb.webp" "$work/info"
+	exit 0
+fi
 
 if [ "$type" = webm ] || [ "$type" = mp4 ]; then
 	video "$work/in"

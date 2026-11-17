@@ -1204,3 +1204,56 @@ lux's model, in lux's words where they are given:
   "trashed posts"; built for metas only. A hidden meta stays out of its
   owner's sight, and board posts are unchanged: their pages are the same
   for everyone, and an unsigned post has no owner to show it to (Q43).
+
+## Fonts (lux, 2026-11-17)
+
+- **TTF, OTF, WOFF and WOFF2, uploaded by accounts only** (fonts carry an
+  RCE risk): from `/upload` and the post form. Nobody's files are still
+  images, so nobody posts a font. Font collections (TTC) are refused.
+- **New dependencies, approved by lux:** OpenType Sanitizer (OTS 9.2,
+  Google's; what Chrome and Firefox run every web font through) and
+  fontTools (Python, with brotli for WOFF2). Both run in ike-strip,
+  outside the BEAM (invariant 6), and neither renders a glyph.
+- **The stripper's way:** OTS sanitises the upload; ike-font cuts its
+  name table to the names that say which font it is (IDs 1, 2, 4, 6, 16,
+  17, 25) and those its own tables point at (256 and up: axis and
+  instance names), blanks the OS/2 vendor id, drops DSIG and meta, and
+  saves it in the format it came in with no timestamp touched; OTS
+  checks the result. *As uploaded, as near as can be:* OTS rewrites
+  every font it passes (tables it does not know go), so the stored bytes
+  are never the upload's; the format is kept, and WOFF and WOFF2 are
+  compressed again by fontTools. Converting to one format (WOFF2) and a
+  download in any format are left for the transcoding VM (lux).
+- **Credits are commentary, not the file** (lux): every other name
+  record (copyright, designer, manufacturer, URLs, license, version,
+  description...), the vendor id and a WOFF's metadata block are kept
+  with the upload (`upload.commentary`), and the meta shows its owner's
+  upload's as "commentary", as Danbooru shows an artist's. So the same
+  font credited to someone else is the same asset, and Q41's rules lead
+  the second uploader to the meta there is; their own commentary is kept
+  with their upload all the same. *Not kept:* a WOFF's private data
+  block, which is no text.
+- **Thumbnail:** a black F drawn by libvips' text in the font, on a
+  transparent background (lux), with a fontconfig that knows no font but
+  this one, so nothing falls back unseen. Drawn in the stripper, which
+  is to move to its own VM with transcoding (lux).
+- **Trying a font out,** on its meta's page and its entry's: the
+  thumbnail, a line of text to type, and sliders for size, weight (the
+  font's own `wght` axis if it has one, else 100 to 900 for the browser
+  to make) and every other axis. ike.js loads the font from the media
+  origin with `FontFace` and moves the sample with the sliders.
+  *Simplification:* without scripts the sample stands in the page's own
+  font; the thumbnail still shows the font.
+- **Serving:** `font-src` the media origin in the CSP; the media origin
+  sends font/* types and `Access-Control-Allow-Origin: *` for fonts,
+  which load with CORS. *Any* origin, since ike has no configured origin
+  of its own to name, and a font's bytes are public or behind a link
+  that is its own credential; it lets other sites load public fonts too.
+- **Tags:** a font is tagged `font`. *Not added:* a tag for variable
+  fonts (the trait is kept as `variable` on the asset).
+- **Schema** (0024): `asset.filetype` replaces `format` for reading, its
+  check only a name's shape, so that the next kinds (SVG, meshes) need
+  no migration; `asset.family`, `asset.axes`; `upload.commentary`. A
+  font has no width or height (null, shown as none).
+- **Found on the way:** purge_image unlinked only a still image's files,
+  never a video's; it now unlinks every kind (invariant 8).
