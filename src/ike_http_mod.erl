@@ -7,7 +7,7 @@
 
 -export([init/2]).
 
--type what() :: front | post | board | account | report | booru.
+-type what() :: front | post | board | account | report | booru | meta.
 -type who() :: {ike_id:actor(), Csrf :: binary(), ike_role:role()}.
 
 -spec init(cowboy_req:req(), what()) -> {ok, cowboy_req:req(), what()}.
@@ -24,6 +24,7 @@ init(Req, What) ->
                     {front, _} -> ike_http:reply(405, Req);
                     {report, <<"POST">>} -> dismiss(Who, Req);
                     {booru, <<"GET">>} -> look_entry(Who, Req);
+                    {meta, <<"GET">>} -> look_meta(Who, Req);
                     {_, <<"POST">>} -> submit(What, Who, Req);
                     _ -> ike_http:reply(405, Req)
                 end;
@@ -221,8 +222,52 @@ look_entry({_, Csrf, Role}, Req) ->
             ike_http:not_found(Req)
     end.
 
+%% a meta, as a moderator sees it: its page, whatever its state, and the
+%% rungs this role may take
+-spec look_meta(who(), cowboy_req:req()) -> cowboy_req:req().
+look_meta({Actor, Csrf, Role}, Req) ->
+    case meta_hash(Req) of
+        {ok, Hash} ->
+            Viewer = #{actor => ike_id:to_integer(Actor), moderator => true},
+            case ike_reader:meta(Hash, Viewer) of
+                {ok, #{state := State}, _} ->
+                    Ladder =
+                        case State of
+                            shown -> [hide, trash];
+                            hidden -> [unhide, trash];
+                            trashed -> [restore]
+                        end,
+                    Facts = #{board => <<"trunk">>, self => false, account => 0, undo => 0},
+                    Kinds = [K || K <- Ladder, ike_role:permits(Role, K, Facts)],
+                    Html = ike_view:moderated_meta(Csrf, Hash, State, Kinds),
+                    ike_http:page(200, Html, Req);
+                none ->
+                    ike_http:not_found(Req)
+            end;
+        error ->
+            ike_http:not_found(Req)
+    end.
+
+-spec meta_hash(cowboy_req:req()) -> {ok, binary()} | error.
+meta_hash(Req) ->
+    case cowboy_req:binding(hex, Req) of
+        Hex when is_binary(Hex), byte_size(Hex) =:= 64 ->
+            case re:run(Hex, "^[0-9a-f]{64}$", [{capture, none}]) of
+                match -> {ok, binary:decode_hex(Hex)};
+                nomatch -> error
+            end;
+        _ ->
+            error
+    end.
+
 -spec target(what(), cowboy_req:req()) ->
-    {ok, ike_id:post() | {entry, ike_id:booru()} | ike_id:actor() | binary(), Back :: binary()}
+    {ok,
+        ike_id:post()
+        | {entry, ike_id:booru()}
+        | {meta, binary()}
+        | ike_id:actor()
+        | binary(),
+        Back :: binary()}
     | none.
 target(post, Req) ->
     case cowboy_req:binding(post, Req) of
@@ -248,6 +293,13 @@ target(booru, Req) ->
         _ ->
             none
     end;
+target(meta, Req) ->
+    case meta_hash(Req) of
+        {ok, Hash} ->
+            {ok, {meta, Hash}, <<"/mod/meta/", (binary:encode_hex(Hash, lowercase))/binary>>};
+        error ->
+            none
+    end;
 target(_, _Req) ->
     none.
 
@@ -266,6 +318,8 @@ fits(board, Kind) ->
 fits(account, Kind) ->
     Kind =:= unban;
 fits(booru, Kind) ->
+    lists:member(Kind, [hide, unhide, trash, restore]);
+fits(meta, Kind) ->
     lists:member(Kind, [hide, unhide, trash, restore]);
 fits(front, _) ->
     false.
@@ -292,7 +346,10 @@ done({error, not_now}, _Kind, _Back, Req) ->
     Html = ike_view:message(<<"not done">>, <<"it is not in a state for that; look again.">>),
     ike_http:page(409, Html, Req);
 done({error, Missing}, _Kind, _Back, Req) when
-    Missing =:= no_such_post; Missing =:= no_such_account; Missing =:= no_such_board
+    Missing =:= no_such_post;
+    Missing =:= no_such_account;
+    Missing =:= no_such_board;
+    Missing =:= no_such_meta
 ->
     ike_http:not_found(Req);
 done({error, _}, _Kind, _Back, Req) ->

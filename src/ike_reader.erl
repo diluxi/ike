@@ -14,8 +14,9 @@
 %% (or above), who sees every meta (invariant 10)
 -type viewer() :: #{actor := integer() | none, moderator := boolean()}.
 %% a meta as the trunk shows it. upload: the newest upload of its asset,
-%% which a link to a private one's files names. owner is never said but
-%% to the owner (mine): an upload may be in a post nobody signed
+%% which a link to a private one's files names. name: its owner's, if
+%% the upload was signed, else none (anonymous; lux, Q42). state: as a
+%% moderator left it; only moderators see one that is not shown
 -type meta() :: #{
     hash := binary(),
     type := binary(),
@@ -25,7 +26,11 @@
     time := integer(),
     private := boolean(),
     mine := boolean(),
-    upload := pos_integer()
+    upload := pos_integer(),
+    name := binary() | none,
+    state := shown | hidden | trashed,
+    %% the shown booru entry with this asset, if there is one
+    entry := pos_integer() | none
 }.
 
 %% a staged upload as its uploader is shown it
@@ -236,7 +241,7 @@ who(#{actor := Actor, moderator := Moderator}) ->
     }.
 
 -spec metas_of([term()]) -> [meta()].
-metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload] | Rows]) when
+metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload, Name, State, Entry] | Rows]) when
     is_binary(Hash),
     is_binary(Type),
     is_integer(W),
@@ -246,7 +251,10 @@ metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload] | Rows]) when
     is_binary(Traits),
     is_integer(Time),
     is_integer(Upload),
-    Upload > 0
+    Upload > 0,
+    (is_binary(Name) orelse Name =:= undefined),
+    (State =:= 0 orelse State =:= 1 orelse State =:= 2),
+    (is_integer(Entry) orelse Entry =:= undefined)
 ->
     [
         #{
@@ -258,7 +266,23 @@ metas_of([[Hash, Type, W, H, Traits, Time, Private, Mine, Upload] | Rows]) when
             time => Time,
             private => Private =:= 1,
             mine => Mine =:= 1,
-            upload => Upload
+            upload => Upload,
+            name =>
+                case Name of
+                    _ when is_binary(Name) -> Name;
+                    undefined -> none
+                end,
+            state =>
+                case State of
+                    0 -> shown;
+                    1 -> hidden;
+                    2 -> trashed
+                end,
+            entry =>
+                case Entry of
+                    E when is_integer(E), E > 0 -> E;
+                    _ -> none
+                end
         }
         | metas_of(Rows)
     ];
@@ -579,9 +603,12 @@ handle_call({metas, {Actor, Moderator}, Hash}, _From, Conn) when
 ->
     Sql = <<
         "SELECT m.asset, x.format, x.width, x.height, x.traits, m.time, m.private,"
-        " m.owner = ?1, (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset)"
-        " FROM meta m JOIN asset x ON x.hash = m.asset"
-        " WHERE (m.private = 0 OR m.owner = ?1 OR ?2 = 1) AND (?3 IS NULL OR m.asset = ?3)"
+        " m.owner = ?1, (SELECT max(u.id) FROM upload u WHERE u.asset = m.asset),"
+        " CASE WHEN m.signed = 1 THEN a.name END, m.state,"
+        " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset)"
+        " FROM meta m JOIN asset x ON x.hash = m.asset JOIN actor a ON a.id = m.owner"
+        " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1)) OR ?2 = 1)"
+        " AND (?3 IS NULL OR m.asset = ?3)"
         " ORDER BY m.time DESC, m.asset DESC LIMIT 200"
     >>,
     Which =

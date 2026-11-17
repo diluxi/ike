@@ -1099,18 +1099,17 @@ lux's model, in lux's words where they are given:
   type, size, upload time, who sees it, what it is (traits), the shown
   posts that tack it, and to its owner "owner: you" and the switch. A
   meta the asker may not see is the same 404 as one that is not there.
-- **Nobody is told whose a meta is,** moderators included: an upload may
-  be in a post nobody signed, and a name on the meta would sign it. Q42.
+- **Nobody was told whose a meta is** in this first slice; lux has since
+  decided otherwise (below, "Metas: names, moderation, known bytes").
 - **Migration:** existing assets get a meta owned by their first
   upload's actor, private if never posted (they were staged under the
   old invariant 10, so seen by their uploader alone), else public.
 - *Simplification:* one meta per asset, its first uploader's. A second
-  account uploading the same bytes owns nothing of it, and cannot make
-  it private or public (Q41).
-- *Gap:* a public meta keeps its files public whatever moderators do to
-  the posts and entries that show it, and only an admin's purge_image
-  takes it out of the trunk (Q40). The asset suite's "media follow what
-  is shown" case now uploads privately, to keep testing what it did.
+  account uploading the same bytes owns nothing of it (Q41: it is sent
+  to the meta instead).
+- The asset suite's "media follow what is shown" case uploads
+  privately, since a public meta keeps its files public whatever is done
+  to the posts and entries showing them.
 - *Not yet:* paging, curations in the list (marked), comments on a meta.
 
 ## Curation (lux, 2026-11-17; to build next)
@@ -1131,3 +1130,32 @@ lux's model, in lux's words where they are given:
 - **`/trunk`** lists metas and curations both, curations marked.
 - A private meta can be curated privately (a comic tagged in full before
   release).
+
+## Metas: names, moderation, known bytes (lux, 2026-11-17)
+
+- **A meta bears its owner's name, or reads as anonymous** (Q42),
+  linked to `/user/NAME`. Whether it is named is the upload's own
+  choice, as a post's is: `/upload` has a "sign as NAME" box, and a file
+  sent with a post is signed when the post is. The owner stays the
+  account either way (the private switch and moderation need one); only
+  the name shown follows the box. Existing metas were never signed.
+  Its owner is also told "(you)".
+- **Moderators hide and trash metas** (Q40), at `/mod/meta/HEX`, linked
+  from the meta's page for them: the same rungs, roles and log as a
+  booru entry's, on the trunk as a board. A meta not shown is gone from
+  `/trunk` and its page for everyone but moderators (its owner too, as
+  with posts), and its files leave the media origin unless a post or an
+  entry shows them. The public log names a public meta by its first 12
+  hex digits, and a private one only as "a private meta": its hash
+  would tell everyone that someone holds those bytes. `action.meta`
+  keeps the hash for moderators, and purge_image clears it (invariant 8,
+  test extended).
+- **Known bytes lead to what is known of them** (Q41): one file uploaded
+  at `/upload` whose meta the uploader may already see sends them there,
+  to its booru entry if it has a shown one, else to its meta. Bytes
+  under someone else's private meta go to `/upload` as any upload does,
+  so that nothing says they exist. *Simplification:* with several files
+  at once, nobody is sent anywhere; nor from the post form, where the
+  post is what was asked for.
+- *Owed with curation:* curations bear their owner or anon, and tag and
+  commentary revisions are signed or not as wiki revisions are.

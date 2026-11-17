@@ -979,6 +979,20 @@ inv08_purge_leaves_nothing(Config) ->
     ),
     ImageHex = binary_to_list(binary:encode_hex(ImageHash, lowercase)),
     #{csrf := ImageCsrf} = Admin,
+    %% its meta hidden and shown again, so that the log names it
+    [
+        {303, _, _} = ike_browser:request(
+            Config,
+            post,
+            "/mod/meta/" ++ ImageHex,
+            ike_browser:cookies(Admin),
+            {form, uri_string:compose_query([{"csrf", ImageCsrf}, {"kind", K}, {"reason", "x"}])}
+        )
+     || K <- ["hide", "unhide"]
+    ],
+    [[2]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [
+        {blob, ImageHash}
+    ]),
     {303, _, _} = ike_browser:request(
         Config,
         post,
@@ -1003,6 +1017,10 @@ inv08_purge_leaves_nothing(Config) ->
     ]),
     %% and its meta, with the trunk's page of it
     [[0]] = ike_browser:query(Config, "SELECT count(*) FROM meta WHERE asset = ?", [
+        {blob, ImageHash}
+    ]),
+    %% the log keeps its entries, but not the hash (G5)
+    [[0]] = ike_browser:query(Config, "SELECT count(*) FROM action WHERE meta = ?", [
         {blob, ImageHash}
     ]),
     {404, _, _} = ike_browser:request(
@@ -1727,6 +1745,7 @@ known_routes() ->
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],
         [<<"mod">>, <<"booru">>, booru],
+        [<<"mod">>, <<"meta">>, hex],
         [<<"mod">>, <<"report">>, report],
         [<<"login">>],
         [<<"login">>, <<"callback">>],

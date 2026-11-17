@@ -138,7 +138,7 @@ nobody({Board, _} = Place, Req0) ->
                         {true, true, [_ | _], true} ->
                             %% nobody's files are still images only (lux), and
                             %% posted at once: nothing of nobody's is staged
-                            case kept(ike_id:anonymous(), Files, still) of
+                            case kept({ike_id:anonymous(), false}, Files, still) of
                                 {ok, Ids} ->
                                     unhurried(
                                         Place, Form, #{upload => {ike_id:anonymous(), Ids}}, Req
@@ -186,7 +186,12 @@ submit(Place, Req0) ->
                 {ok, Pairs, Files, Req} ->
                     %% the files first, as uploads of the account's; the
                     %% post then shows them after any ticked
-                    case kept(Account, Files, any) of
+                    %% signed as the post is: the uploads' metas bear the
+                    %% name only if the post does
+                    Signed =
+                        is_binary(Name) andalso
+                            lists:member({<<"signed">>, <<"1">>}, Pairs),
+                    case kept({Account, Signed}, Files, any) of
                         {ok, Ids} ->
                             signed_in(
                                 Place,
@@ -263,7 +268,7 @@ signed_in(Place, {Account, Csrf, Name}, Pairs, Req) ->
 
 %% files sent with a post, each stripped and kept as an upload of Actor's;
 %% all of them, or none and why. still: images that do not move only
--spec kept(ike_id:actor(), [binary()], any | still) ->
+-spec kept({ike_id:actor(), Signed :: boolean()}, [binary()], any | still) ->
     {ok, [pos_integer()]} | {refused, [binary()]}.
 kept(Actor, Files, Which) ->
     Results = numbered(Actor, Files, Which, 1),
@@ -272,9 +277,9 @@ kept(Actor, Files, Which) ->
         Lines -> {refused, Lines}
     end.
 
--spec one(ike_id:actor(), pos_integer(), binary(), any | still) ->
+-spec one({ike_id:actor(), boolean()}, pos_integer(), binary(), any | still) ->
     {ok, pos_integer()} | {refused, binary()}.
-one(Actor, N, Bytes, Which) ->
+one({Actor, Signed}, N, Bytes, Which) ->
     Which0 = <<"file ", (integer_to_binary(N))/binary, ": ">>,
     case ike_strip:run(Bytes) of
         {ok, #{type := Type, stored := Stored} = Stripped} ->
@@ -284,7 +289,12 @@ one(Actor, N, Bytes, Which) ->
             case Which =:= any orelse Still of
                 true ->
                     case
-                        ike_writer:upload(#{actor => Actor, original => Bytes, stripped => Stripped})
+                        ike_writer:upload(#{
+                            actor => Actor,
+                            original => Bytes,
+                            stripped => Stripped,
+                            signed => Signed
+                        })
                     of
                         {ok, Id} -> {ok, Id};
                         {error, refused} -> {refused, <<Which0/binary, "not taken">>};
@@ -304,7 +314,7 @@ refused(Lines, Req) ->
     Html = ike_view:message(<<"not posted">>, joined(Lines)),
     ike_http:page(422, Html, Req).
 
--spec numbered(ike_id:actor(), [binary()], any | still, pos_integer()) ->
+-spec numbered({ike_id:actor(), boolean()}, [binary()], any | still, pos_integer()) ->
     [{ok, pos_integer()} | {refused, binary()}].
 numbered(Actor, [Bytes | Rest], Which, N) ->
     [one(Actor, N, Bytes, Which) | numbered(Actor, Rest, Which, N + 1)];

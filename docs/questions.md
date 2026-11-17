@@ -100,16 +100,8 @@ here.
   curated, then lead to the curation. Built but for the curation.
 - **Q39 Retracting a page's first revision.** Answered (decisions.md, "A
   page outlives its first revision").
-- **Q40 Moderating a meta.** A public meta's files stay public whatever
-  is done to the posts and entries showing it; a moderator cannot take
-  one out of the trunk, only an admin's purge_image can (and that blocks
-  the bytes for good). Should moderators hide and trash metas, as posts
-  (logged, restorable)? Before launch, this is the hole G7 was about.
-- **Q41 Two uploaders of one asset.** A meta is its asset's first
-  uploader's. Should a second uploader get a meta of their own (and so a
-  second private/public switch over the same bytes), or share it?
-- **Q42 Owners and moderators.** Nobody is told whose a meta is. Should
-  moderators be (Q16 asks the same of unsigned posts)?
+- **Q40, Q41, Q42.** Answered and built (decisions.md, "Metas: names,
+  moderation, known bytes").
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

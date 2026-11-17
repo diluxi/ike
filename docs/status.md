@@ -66,7 +66,8 @@ links to where it would be), `phi/stack` (edits stack over the newest,
 an account's next edit amends its own, unsigned edits retract by
 password), `phi/tombstone` (a wiki page outlives its first revision;
 revisions named and coloured), `phi/trunk` (metas, `/trunk`, private
-uploads, invariant 10 as lux reworded it).
+uploads, invariant 10 as lux reworded it), `phi/metamod` (metas named
+or anonymous, moderated as posts; known bytes lead to their meta).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -82,7 +83,6 @@ uploads, invariant 10 as lux reworded it).
 
 ## Blocked on lux
 
-- **Moderating metas (Q40)** before launch; Q41, Q42.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with
   the rest of hazards.md; G7's control still has the old words.
 - **Merging** the M0 stack, then `phi/board`.

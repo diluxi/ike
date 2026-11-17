@@ -6,7 +6,7 @@
 -module(ike_http_trunk).
 -behaviour(cowboy_handler).
 
--export([init/2]).
+-export([init/2, viewer/1, hash/1]).
 
 -spec init(cowboy_req:req(), State) -> {ok, cowboy_req:req(), State}.
 init(Req, index = State) ->
@@ -84,7 +84,7 @@ links(#{upload := Upload, type := Type, width := W, height := H, private := true
 %% to see (hazard G5)
 -spec shown(binary(), cowboy_req:req()) -> cowboy_req:req().
 shown(Hash, Req) ->
-    {Viewer, Session} = viewer(Req),
+    {#{moderator := Moderator} = Viewer, Session} = viewer(Req),
     case ike_reader:meta(Hash, Viewer) of
         {ok, #{mine := Mine} = Meta, Posts} ->
             Csrf =
@@ -92,7 +92,8 @@ shown(Hash, Req) ->
                     {true, {_, C}} -> C;
                     _ -> none
                 end,
-            ike_http:page(200, ike_view:meta(Meta, links(Meta), Posts, Csrf), Req);
+            Who = #{csrf => Csrf, moderator => Moderator},
+            ike_http:page(200, ike_view:meta(Meta, links(Meta), Posts, Who), Req);
         none ->
             ike_http:not_found(Req)
     end.

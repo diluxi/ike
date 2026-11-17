@@ -6,7 +6,7 @@
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
--export([style/0, script/0, user/2, trunk/1, meta/4]).
+-export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
@@ -822,12 +822,35 @@ act(Action, Csrf, Kinds, Fields) ->
 
 %% the uploads page: the form, what was refused just now, and what waits
 -spec upload(
-    Csrf :: binary(),
+    {Csrf :: binary(), Name :: binary() | none},
     Refused :: [binary()],
     [#{atom() => term()}],
     [{pos_integer(), pos_integer()}]
 ) -> ike_html:html().
-upload(Csrf, Refused, Staged, Posted) ->
+upload({Csrf, Name}, Refused, Staged, Posted) ->
+    Sign =
+        case Name of
+            none ->
+                [];
+            _ ->
+                [
+                    ike_html:text(<<" ">>),
+                    ike_html:el(
+                        input,
+                        [
+                            {type, <<"checkbox">>},
+                            {id, <<"signed">>},
+                            {name, <<"signed">>},
+                            {value, <<"1">>}
+                        ],
+                        []
+                    ),
+                    ike_html:text(<<" ">>),
+                    ike_html:el(label, [{for, <<"signed">>}], [
+                        ike_html:text(<<"sign as ", Name/binary>>)
+                    ])
+                ]
+        end,
     layout(<<"uploads">>, [
         ike_html:el(h1, [ike_html:text(<<"uploads">>)]),
         ike_html:el(p, [
@@ -859,6 +882,7 @@ upload(Csrf, Refused, Staged, Posted) ->
                     ),
                     ike_html:text(<<" ">>),
                     ike_html:el(label, [{for, <<"private">>}], [ike_html:text(<<"private">>)])
+                    | Sign
                 ]),
                 ike_html:el(p, [
                     ike_html:el(
@@ -921,9 +945,11 @@ trunk(Metas) ->
                         img, [{src, Thumb}, {alt, <<Type/binary, " ", (short(Hash))/binary>>}], []
                     )
                 ])
-                | [ike_html:text(<<" private">>) || Private]
+                | [ike_html:text(<<" private">>) || Private] ++
+                    [ike_html:text(<<" ", (atom_to_binary(State))/binary>>) || State =/= shown]
             ])
-         || {#{hash := Hash, type := Type, private := Private}, #{thumb := Thumb}} <- Metas
+         || {#{hash := Hash, type := Type, private := Private, state := State}, #{thumb := Thumb}} <-
+                Metas
         ])
     ]).
 
@@ -938,9 +964,11 @@ short(Hash) ->
 %% a meta's page: the asset, what is known of it, the posts that show it,
 %% and to its owner the switch between private and public. whose it is
 %% is said to nobody else (an upload may be in a post nobody signed)
--spec meta(ike_reader:meta(), image(), [pos_integer()], Csrf :: binary() | none) ->
+-spec meta(
+    ike_reader:meta(), image(), [pos_integer()], #{csrf := binary() | none, moderator := boolean()}
+) ->
     ike_html:html().
-meta(Meta, Image, Posts, Csrf) ->
+meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator}) ->
     #{
         hash := Hash,
         type := Type,
@@ -949,7 +977,9 @@ meta(Meta, Image, Posts, Csrf) ->
         traits := Traits,
         time := Time,
         private := Private,
-        mine := Mine
+        mine := Mine,
+        name := Owner,
+        state := State
     } = Meta,
     Short = short(Hash),
     Row = fun(Name, Value) ->
@@ -962,6 +992,16 @@ meta(Meta, Image, Posts, Csrf) ->
         [
             Row(<<"type">>, Type),
             Row(<<"size">>, <<(integer_to_binary(W))/binary, "x", (integer_to_binary(H))/binary>>),
+            ike_html:el(tr, [
+                ike_html:el(th, [ike_html:text(<<"owner">>)]),
+                ike_html:el(td, [
+                    case Owner of
+                        none -> ike_html:text(<<"anonymous">>);
+                        _ -> anchor(<<"/user/", Owner/binary>>, Owner)
+                    end
+                    | [ike_html:text(<<" (you)">>) || Mine]
+                ])
+            ]),
             Row(<<"uploaded">>, stamp(Time)),
             Row(
                 <<"seen by">>,
@@ -972,7 +1012,7 @@ meta(Meta, Image, Posts, Csrf) ->
             )
         ] ++
             [Row(<<"what it is">>, Traits) || Traits =/= <<>>] ++
-            [Row(<<"owner">>, <<"you">>) || Mine],
+            [Row(<<"state">>, atom_to_binary(State)) || State =/= shown],
     Switch =
         case Csrf of
             none ->
@@ -1012,7 +1052,33 @@ meta(Meta, Image, Posts, Csrf) ->
     layout(<<"meta ", Short/binary>>, [
         ike_html:el(h1, [ike_html:text(<<"meta ", Short/binary>>)]),
         ike_html:el(p, [anchor(<<"/trunk">>, <<"trunk">>)])
-        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Switch
+        | figure(Image) ++ [ike_html:el(table, Rows)] ++ Shown ++ Switch ++
+            [
+                ike_html:el(p, [
+                    anchor(
+                        <<"/mod/meta/", (binary:encode_hex(Hash, lowercase))/binary>>,
+                        <<"moderate">>
+                    )
+                ])
+             || Moderator
+            ]
+    ]).
+
+%% a meta on its moderation page
+-spec moderated_meta(binary(), binary(), shown | hidden | trashed, [ike_role:kind()]) ->
+    ike_html:html().
+moderated_meta(Csrf, Hash, State, Kinds) ->
+    Hex = binary:encode_hex(Hash, lowercase),
+    Short = short(Hash),
+    layout(<<"moderating meta ", Short/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<"meta ", Short/binary>>)]),
+        ike_html:el(p, [
+            anchor(<<"/mod">>, <<"moderation">>),
+            ike_html:text(<<" ">>),
+            anchor(meta_path(Hash), <<"its page">>)
+        ]),
+        ike_html:el(p, [ike_html:text(atom_to_binary(State))])
+        | act(<<"/mod/meta/", Hex/binary>>, Csrf, Kinds, [])
     ]).
 
 -spec upload_locked() -> ike_html:html().

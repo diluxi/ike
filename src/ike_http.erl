@@ -72,6 +72,7 @@ dispatch() ->
             {"/mod/account/:account", [{account, int}], ike_http_mod, account},
             {"/mod/report/:report", [{report, int}], ike_http_mod, report},
             {"/mod/booru/:booru", [{booru, int}], ike_http_mod, booru},
+            {"/mod/meta/:hex", ike_http_mod, meta},
             %% everything else, so that a miss is answered by ike and not
             %% by cowboy's bare 404
             {'_', ike_http_page, missing}

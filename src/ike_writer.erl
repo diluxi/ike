@@ -36,6 +36,7 @@
         ike_id:post()
         | {image, ike_id:post(), non_neg_integer()}
         | {entry, ike_id:booru()}
+        | {meta, Asset :: binary()}
         | ike_id:actor()
         | binary(),
     reason := binary()
@@ -127,7 +128,8 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
     actor := ike_id:actor(),
     original := binary(),
     stripped := ike_strip:stripped(),
-    private => boolean()
+    private => boolean(),
+    signed => boolean()
 }) ->
     {ok, Upload :: pos_integer()} | error().
 upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
@@ -136,11 +138,16 @@ upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
             #{private := true} -> 1;
             _ -> 0
         end,
+    Signed =
+        case Given of
+            #{signed := true} -> 1;
+            _ -> 0
+        end,
     #{type := Type, width := W, height := H, stored := Stored, thumb := Thumb} = Stripped,
     Traits = spaced([atom_to_binary(T) || T <- maps:get(traits, Stripped, [])]),
     Request =
         {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
-            H, Stored, Thumb, Traits, Private},
+            H, Stored, Thumb, Traits, Private, Signed},
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
@@ -236,7 +243,14 @@ dismiss(Report) ->
 %% one rung of the ladder, and its entry in the log, or neither
 -spec moderate(action()) ->
     ok
-    | {error, not_allowed | bad_text | no_such_post | no_such_account | no_such_board | not_now}
+    | {error,
+        not_allowed
+        | bad_text
+        | no_such_post
+        | no_such_account
+        | no_such_board
+        | no_such_meta
+        | not_now}
     | error().
 moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Reason}) ->
     Subject =
@@ -244,6 +258,7 @@ moderate(#{by := By, role := Role, kind := Kind, target := Target, reason := Rea
             _ when is_binary(Target) -> Target;
             {image, Post, Image} -> {ike_id:to_integer(Post), Image};
             {entry, Entry} -> {entry, ike_id:to_integer(Entry)};
+            {meta, Asset} -> {meta, Asset};
             _ -> ike_id:to_integer(Target)
         end,
     done(call({moderate, ike_id:to_integer(By), Role, ike_role:to_binary(Kind), Subject, Reason})).
@@ -557,14 +572,15 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
         end,
     {reply, Reply, Conn};
 handle_call(
-    {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0}, _From, Conn
+    {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0, Signed}, _From, Conn
 ) when
     is_integer(Actor),
     is_binary(Original),
     is_binary(Stored),
     is_binary(Thumb),
     is_binary(Traits),
-    (Private0 =:= 0 orelse Private0 =:= 1)
+    (Private0 =:= 0 orelse Private0 =:= 1),
+    (Signed =:= 0 orelse Signed =:= 1)
 ->
     %% nobody's uploads are everyone's: never private
     Private =
@@ -598,8 +614,8 @@ handle_call(
                             " RETURNING id"
                         >>,
                         Meta = <<
-                            "INSERT INTO meta (asset, owner, time, private) VALUES (?1, ?2, ?3, ?4)"
-                            " ON CONFLICT (asset) DO NOTHING"
+                            "INSERT INTO meta (asset, owner, time, private, signed)"
+                            " VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (asset) DO NOTHING"
                         >>,
                         Time = erlang:system_time(second),
                         Done = committed(
@@ -612,7 +628,7 @@ handle_call(
                                                     {blob, Hash}, {blob, Original}, Actor, Time
                                                 ]),
                                                 ike_db:q(Conn, Meta, [
-                                                    {blob, Hash}, Actor, Time, Private
+                                                    {blob, Hash}, Actor, Time, Private, Signed
                                                 ])
                                             }
                                         of
@@ -1014,6 +1030,73 @@ act(Conn, Who, unban, Account, Reason, Time) when is_integer(Account) ->
     end;
 act(Conn, Who, Kind, Post, Reason, Time) when is_integer(Post) ->
     act(Conn, Who, Kind, {Post, -1}, Reason, Time);
+act(Conn, Who, Kind, {meta, Asset}, Reason, Time) when
+    is_binary(Asset),
+    byte_size(Asset) =:= 32,
+    (Kind =:= hide orelse Kind =:= unhide orelse Kind =:= trash orelse Kind =:= restore)
+->
+    %% a meta is moderated as a post is, on the trunk as a board would be
+    Sql = <<
+        "SELECT m.state, m.private, (SELECT role FROM action WHERE meta = m.asset"
+        " AND kind IN ('hide', 'trash') ORDER BY entry DESC LIMIT 1)"
+        " FROM meta m WHERE m.asset = ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [{blob, Asset}]) of
+        {ok, [[State, Private, Undo]]} when is_integer(State) ->
+            Facts = #{board => <<"trunk">>, account => 0, undo => ike_role:rank_of(Undo)},
+            To =
+                case {Kind, State} of
+                    {hide, 0} -> {ok, 1};
+                    {unhide, 1} -> {ok, 0};
+                    {trash, S} when S < 2 -> {ok, 2};
+                    {restore, 2} -> {ok, 0};
+                    _ -> not_now
+                end,
+            case {permits(Who, Kind, Facts, 0), To} of
+                {false, _} ->
+                    {error, not_allowed};
+                {true, not_now} ->
+                    {error, not_now};
+                {true, {ok, New}} ->
+                    %% the public log names a public meta; a private one's
+                    %% hash would tell the world that someone holds it
+                    Named =
+                        case Private of
+                            0 ->
+                                <<" meta ",
+                                    (binary:part(binary:encode_hex(Asset, lowercase), 0, 12))/binary>>;
+                            _ ->
+                                <<" a private meta">>
+                        end,
+                    Text = <<(ike_role:to_binary(Kind))/binary, Named/binary>>,
+                    %% the log's row just made is the newest
+                    Logged =
+                        <<"UPDATE action SET meta = ?1 WHERE entry = (SELECT max(entry) FROM action)">>,
+                    case
+                        log(Conn, Who, Kind, Text, Reason, Time, {undefined, undefined, undefined})
+                    of
+                        {ok, Threads} ->
+                            Steps = [
+                                {Logged, [{blob, Asset}]},
+                                {<<"UPDATE meta SET state = ?2 WHERE asset = ?1">>, [
+                                    {blob, Asset}, New
+                                ]}
+                            ],
+                            case steps(Conn, Steps) of
+                                ok -> {ok, (effects())#{threads := Threads, assets := [Asset]}};
+                                {error, _} = Error -> Error
+                            end;
+                        {error, _} = Error ->
+                            Error
+                    end
+            end;
+        {ok, []} ->
+            {error, no_such_meta};
+        {ok, Other} ->
+            {error, {unexpected, Other}};
+        {error, _} = Error ->
+            Error
+    end;
 act(Conn, Who, Kind, {entry, Entry}, Reason, Time) when
     is_integer(Entry),
     (Kind =:= hide orelse Kind =:= unhide orelse Kind =:= trash orelse Kind =:= restore)
@@ -1311,6 +1394,7 @@ imaged(Conn, purge_image, Hash, Hashes, Time) ->
                 <<"UPDATE booru_version SET asset = NULL WHERE asset = ?1">>,
                 <<"DELETE FROM upload WHERE asset = ?1">>,
                 <<"DELETE FROM meta WHERE asset = ?1">>,
+                <<"UPDATE action SET meta = NULL WHERE meta = ?1">>,
                 <<"DELETE FROM asset WHERE hash = ?1">>
             ],
             case each(Conn, [{blob, Hash}], Steps) of
@@ -1875,7 +1959,7 @@ published(Conn, [Hash | Hashes]) ->
     Sql = <<
         "SELECT x.format, EXISTS (SELECT 1 FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset = x.hash) OR EXISTS (SELECT 1 FROM shown_entry e WHERE e.asset = x.hash)"
-        " OR EXISTS (SELECT 1 FROM meta m WHERE m.asset = x.hash AND m.private = 0)"
+        " OR EXISTS (SELECT 1 FROM meta m WHERE m.asset = x.hash AND m.private = 0 AND m.state = 0)"
         " FROM asset x WHERE x.hash = ?1"
     >>,
     case ike_db:q(Conn, Sql, [{blob, Hash}]) of
@@ -1969,7 +2053,7 @@ republished(Conn) ->
     Sql = <<
         "SELECT DISTINCT pa.asset FROM post_image pa JOIN shown s ON s.id = pa.post"
         " WHERE pa.asset IS NOT NULL UNION SELECT asset FROM shown_entry WHERE asset IS NOT NULL"
-        " UNION SELECT asset FROM meta WHERE private = 0"
+        " UNION SELECT asset FROM meta WHERE private = 0 AND state = 0"
     >>,
     case ike_db:q(Conn, Sql, []) of
         {ok, Rows} ->
