@@ -16,6 +16,7 @@
     comments_go_with_it/1,
     revised_and_amended/1,
     commentary_is_ikext/1,
+    the_front_page/1,
     only_public_metas/1
 ]).
 
@@ -28,6 +29,7 @@ all() ->
         comments_go_with_it,
         revised_and_amended,
         commentary_is_ikext,
+        the_front_page,
         only_public_metas
     ].
 
@@ -369,3 +371,26 @@ commentary_is_ikext(Config) ->
     %% nothing was posted by it
     {200, _, Board} = request(Config, get, "/board/b", [], none),
     nomatch = binary:match(Board, <<"soon">>).
+
+%% the front page: the newest curations as thumbnails, the newest board
+%% posts as their board and first words (lux, after rain.meth.cat's)
+the_front_page(Config) ->
+    Session = login(Config, <<"fronter">>),
+    {303, H, _} = ike_browser:post(Config, "/board/b/new", Session, <<"the newest words here">>),
+    "#p" ++ P = string:find(proplists:get_value("location", H), "#"),
+    uploaded(Config, Session, png(7, 5, 67), []),
+    Meta = meta(Config, <<"fronter">>),
+    "/booru/" ++ N = curate(Config, Session, Meta, "image raster front", []),
+    {200, _, Front} = request(Config, get, "/", [], none),
+    {_, _} = binary:match(
+        Front,
+        list_to_binary(
+            "<li><a href=\"/board/b\">random</a>: <a href=\"/p/" ++ P ++
+                "\">the newest words here</a></li>"
+        )
+    ),
+    {_, _} = binary:match(
+        Front, list_to_binary("<a href=\"/booru/" ++ N ++ "\"><img src=\"http://media.test/")
+    ),
+    %% not the trunk's posts, which are read on their metas
+    nomatch = binary:match(Front, <<"/board/trunk">>).

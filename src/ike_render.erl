@@ -22,6 +22,8 @@
 
 %% threads on a board's page; there is no paging yet
 -define(INDEX, 100).
+%% what the front page lists of each: curations, posts
+-define(FRONT, 15).
 -define(SYNC_TIMEOUT, 15000).
 
 -spec start_link() -> gen_server:start_ret().
@@ -164,11 +166,13 @@ step(#state{threads = [], boorus = [Entry | Entries]} = State) ->
 step(#state{threads = [], boards = [Board | Boards]} = State) ->
     ok = render_board(State, Board),
     self() ! render,
-    State#state{boards = Boards};
+    %% the front page lists the newest posts too
+    State#state{boards = Boards, lists = true};
 step(#state{threads = [], boards = [], booru = true} = State) ->
     ok = render_entries(State),
     self() ! render,
-    State#state{booru = false};
+    %% and the newest curations
+    State#state{booru = false, lists = true};
 step(#state{threads = [], boards = [], lists = true} = State) ->
     ok = render_lists(State),
     State#state{lists = false};
@@ -695,6 +699,52 @@ render_entries(#state{conn = Conn, dir = Dir}) ->
             error({render, booru, Reason})
     end.
 
+%% the newest curations, for the front page, as the booru's page has them
+-spec curations(ike_db:reader()) -> [{pos_integer(), ike_view:image() | gone}].
+curations(Conn) ->
+    Sql = <<
+        "SELECT e.id, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0) FROM shown_entry e"
+        " LEFT JOIN asset x ON x.hash = e.asset ORDER BY e.id DESC LIMIT ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [?FRONT]) of
+        {ok, Rows} ->
+            [
+                {Id,
+                    case image(Hash, Type, W, H) of
+                        #{} = Image -> Image;
+                        none -> gone
+                    end}
+             || [Id, Hash, Type, W, H] <- Rows, is_integer(Id), Id > 0
+            ];
+        {error, Reason} ->
+            error({render, front, Reason})
+    end.
+
+%% the newest posts on the boards, for the front page: not the log's, the
+%% wiki's or the trunk's, whose posts are read elsewhere
+-spec latest(ike_db:reader()) -> [{pos_integer(), binary(), binary(), binary()}].
+latest(Conn) ->
+    Sql = <<
+        "SELECT p.id, b.name, b.title, coalesce(q.title, p.body) FROM shown p"
+        " JOIN post q ON q.id = p.id JOIN thread t ON t.root = p.thread"
+        " JOIN board b ON b.id = t.board"
+        " WHERE b.log = 0 AND b.wiki = 0 AND b.attached = 0 ORDER BY p.id DESC LIMIT ?1"
+    >>,
+    case ike_db:q(Conn, Sql, [?FRONT]) of
+        {ok, Rows} ->
+            [
+                {Id, Name, Title, Text}
+             || [Id, Name, Title, Text] <- Rows,
+                is_integer(Id),
+                Id > 0,
+                is_binary(Name),
+                is_binary(Title),
+                is_binary(Text)
+            ];
+        {error, Reason} ->
+            error({render, front, Reason})
+    end.
+
 %% the list of boards, and the page in front of everything
 -spec render_lists(#state{}) -> ok.
 render_lists(#state{conn = Conn, dir = Dir}) ->
@@ -703,7 +753,7 @@ render_lists(#state{conn = Conn, dir = Dir}) ->
             ok = write(Dir, <<"board.html">>, ike_view:boards(Boards)),
             ok = written(Dir, <<"style.css">>, ike_view:style()),
             ok = written(Dir, <<"ike.js">>, ike_view:script()),
-            write(Dir, <<"index.html">>, ike_view:index());
+            write(Dir, <<"index.html">>, ike_view:index(curations(Conn), latest(Conn)));
         {error, Reason} ->
             error({render, lists, Reason})
     end.

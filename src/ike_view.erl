@@ -2,11 +2,11 @@
 %% handlers decide where it goes.
 -module(ike_view).
 
--export([thread/3, board/2, boards/1, index/0, post_form/2, message/2, layout/2]).
+-export([thread/3, board/2, boards/1, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
--export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4]).
+-export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4, index/2]).
 -export([preview/3, preview_button/0]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
@@ -509,14 +509,55 @@ board_link(#{name := Name, title := Title}) ->
     anchor(<<"/board/", Name/binary>>, <<"/", Name/binary, "/ ", Title/binary>>).
 
 %% the page in front of everything: the views there are
--spec index() -> ike_html:html().
-index() ->
+%% the page in front of everything: where to go, the newest curations
+%% as thumbnails, and the newest posts as their board and their first
+%% words (lux, after rain.meth.cat's front page; no styles yet)
+-spec index([{pos_integer(), image() | gone}], [{pos_integer(), binary(), binary(), binary()}]) ->
+    ike_html:html().
+index(Curations, Posts) ->
     layout(<<"ike">>, [
         ike_html:el(h1, [ike_html:text(<<"ike">>)]),
         ike_html:el(ul, [
             ike_html:el(li, [anchor(<<"/board">>, <<"board">>)]),
             ike_html:el(li, [anchor(<<"/booru">>, <<"booru">>)]),
+            ike_html:el(li, [anchor(<<"/trunk">>, <<"trunk">>)]),
             ike_html:el(li, [anchor(<<"/wiki">>, <<"wiki">>)])
+        ]),
+        ike_html:el(h2, [ike_html:text(<<"recent curations">>)]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                case Image of
+                    #{thumb := Thumb} ->
+                        ike_html:el(a, [{href, <<"/booru/", (integer_to_binary(Id))/binary>>}], [
+                            ike_html:el(
+                                img,
+                                [{src, Thumb}, {alt, <<"##", (integer_to_binary(Id))/binary>>}],
+                                []
+                            )
+                        ]);
+                    gone ->
+                        anchor(
+                            <<"/booru/", (integer_to_binary(Id))/binary>>,
+                            <<"##", (integer_to_binary(Id))/binary>>
+                        )
+                end
+            ])
+         || {Id, Image} <- Curations
+        ]),
+        ike_html:el(h2, [ike_html:text(<<"latest posts">>)]),
+        ike_html:el(ul, [
+            ike_html:el(li, [
+                anchor(<<"/board/", Name/binary>>, Title),
+                ike_html:text(<<": ">>),
+                anchor(
+                    <<"/p/", (integer_to_binary(Id))/binary>>,
+                    case excerpt(Text) of
+                        <<>> -> <<"(no text)">>;
+                        E -> E
+                    end
+                )
+            ])
+         || {Id, Name, Title, Text} <- Posts
         ])
     ]).
 

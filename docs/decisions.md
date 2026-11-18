@@ -1357,3 +1357,13 @@ lux's model, in lux's words where they are given:
   it is the plain-text, many-lined field a form already has, and
   `contenteditable` takes in pasted styles (`plaintext-only` would not,
   but is newer). The trunk and the booru still show the F.
+
+## The front page (lux, 2026-11-18)
+
+- After rain.meth.cat's front page, in layout only (no styles yet):
+  where to go (board, booru, trunk, wiki), the 15 newest curations as
+  thumbnails, and the 15 newest board posts, each its board and its
+  first words (its title, if it has one) linking to it. Not the log's,
+  the wiki's or the trunk's posts, which are read where they belong.
+- Made again whenever a board's page or the booru's is, with the list
+  of boards.
