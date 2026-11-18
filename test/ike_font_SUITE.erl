@@ -66,12 +66,17 @@ a_font_and_its_meta(Config) ->
     {Meta, Hex} = newest(Config, <<"typographer">>),
     {200, _, Page} = request(Config, get, Meta, [], none),
     File = list_to_binary("http://media.test/" ++ Hex ++ ".ttf"),
-    %% its thumbnail, and the line to try it on, loaded by ike.js
+    %% no thumbnail on its page (lux): its text in its place, drawn in it
+    %% by ike.js, and the reader's to type over
+    nomatch = binary:match(Page, list_to_binary("<img src=\"http://media.test/" ++ Hex)),
     {_, _} = binary:match(
-        Page, list_to_binary("<img src=\"http://media.test/" ++ Hex ++ ".thumb.webp\"")
+        Page,
+        <<"<div class=\"specimen\" data-font=\"", File/binary,
+            "\"><textarea class=\"sample\" rows=\"3\" spellcheck=\"false\">The quick brown fox">>
     ),
-    {_, _} = binary:match(Page, <<"<div class=\"specimen\" data-font=\"", File/binary, "\">">>),
-    {_, _} = binary:match(Page, <<"class=\"specimen-text\"">>),
+    %% (the trunk shows its thumbnail, an F drawn in it)
+    {200, _, Trunk} = request(Config, get, "/trunk", [], none),
+    {_, _} = binary:match(Trunk, list_to_binary("http://media.test/" ++ Hex ++ ".thumb.webp")),
     {_, _} = binary:match(Page, <<"data-axis=\"size\"">>),
     %% a font without a weight axis gets the weights a browser makes
     {_, _} = binary:match(Page, <<"data-axis=\"weight\" min=\"100\" max=\"900\" value=\"400\"">>),
@@ -151,7 +156,7 @@ posted_it_is_an_entry(Config) ->
         post,
         Meta ++ "/curate",
         cookies(Session),
-        {form, uri_string:compose_query([{"csrf", Csrf}, {"tags", "sans"}])}
+        {form, uri_string:compose_query([{"csrf", Csrf}, {"tags", "font\nsans"}])}
     ),
     "/booru/" ++ _ = Entry = proplists:get_value("location", Curated),
     {200, _, Page} = request(Config, get, Entry, [], none),

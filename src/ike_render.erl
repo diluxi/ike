@@ -547,10 +547,28 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
     case ike_db:q(Conn, Owned, [Entry]) of
         {ok, [[Time, Thread, Owner, HasOwner]]} when is_integer(Time) ->
             %% its thread: comments, and its revisions as what each changed
+            %% what ike tagged it with by what it is: no curator's, so the
+            %% first revision counts only what its curator gave (lux)
+            Inherent =
+                case
+                    ike_db:q(
+                        Conn,
+                        <<
+                            "SELECT x.filetype, x.traits FROM booru_version v JOIN asset x"
+                            " ON x.hash = v.asset WHERE v.booru = ?1 ORDER BY v.position LIMIT 1"
+                        >>,
+                        [Entry]
+                    )
+                of
+                    {ok, [[F, Tr]]} when is_binary(F), is_binary(Tr) -> ike_tag:inherent(F, Tr);
+                    _ -> []
+                end,
             Posts =
                 case Thread of
-                    _ when is_integer(Thread) -> curated(thread_posts(Conn, Thread), Entry);
-                    _ -> []
+                    _ when is_integer(Thread) ->
+                        curated(thread_posts(Conn, Thread), Entry, {Inherent, <<>>}, 1);
+                    _ ->
+                        []
                 end,
             case
                 {
@@ -572,6 +590,7 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                             end,
                         posts => Posts,
                         commentary => commentary(Posts),
+                        box => box(Posts),
                         owner =>
                             case {HasOwner, Owner} of
                                 {1, _} when is_binary(Owner) -> {account, Owner};
@@ -614,14 +633,10 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
 %% a curation's thread: each revision named for the entry and its count,
 %% with the tags it put on and took off and what it changed of the
 %% commentary, against the revision in view before it
--spec curated([ike_view:post()], integer()) -> [ike_view:post()].
-curated(Posts, Entry) ->
-    curated(Posts, Entry, {[], <<>>}, 1).
-
 -spec curated([ike_view:post()], integer(), {[binary()], binary()}, pos_integer()) ->
     [ike_view:post()].
 curated([#{revision := true, body := Body} = P | Rest], Entry, {Tags0, Said0}, N) ->
-    {Tags, Said} = revision_state(Body),
+    {_, Tags, Said} = ike_tag:revised(Body),
     Title = <<"##", (integer_to_binary(Entry))/binary, " ", (integer_to_binary(N))/binary>>,
     Changed = P#{
         title => Title,
@@ -637,27 +652,26 @@ curated([P | Rest], Entry, State, N) ->
 curated([], _Entry, _State, _N) ->
     [].
 
-%% a curation's revision: its tags on the first line, its commentary after
--spec revision_state(binary()) -> {[binary()], binary()}.
-revision_state(Body) ->
-    case binary:split(Body, <<"\n">>) of
-        [Line, Said] -> {binary:split(Line, <<" ">>, [global, trim_all]), Said};
-        [Line] -> {binary:split(Line, <<" ">>, [global, trim_all]), <<>>}
-    end.
-
 %% the commentary of the newest revision
 -spec commentary([ike_view:post()]) -> binary().
 commentary(Posts) ->
-    last_said([B || #{revision := true, body := B} <- Posts]).
+    {_, Said} = newest_revision([B || #{revision := true, body := B} <- Posts]),
+    Said.
 
--spec last_said([binary()]) -> binary().
-last_said([Body]) ->
-    {_, Said} = revision_state(Body),
-    Said;
-last_said([_ | Rest]) ->
-    last_said(Rest);
-last_said([]) ->
-    <<>>.
+%% the tag box as the newest revision laid it out, or none
+-spec box([ike_view:post()]) -> binary() | none.
+box(Posts) ->
+    {Box, _} = newest_revision([B || #{revision := true, body := B} <- Posts]),
+    Box.
+
+-spec newest_revision([binary()]) -> {binary() | none, binary()}.
+newest_revision([Body]) ->
+    {Box, _, Said} = ike_tag:revised(Body),
+    {Box, Said};
+newest_revision([_ | Rest]) ->
+    newest_revision(Rest);
+newest_revision([]) ->
+    {none, <<>>}.
 
 %% the booru's page: the newest entries, as thumbnails
 -spec render_entries(#state{}) -> ok.

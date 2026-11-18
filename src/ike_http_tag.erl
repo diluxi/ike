@@ -28,7 +28,13 @@ tag(N, {Actor, Name}, Req0) ->
     Back = <<"/booru/", (integer_to_binary(N))/binary>>,
     case ike_http:form(Req0) of
         {ok, Form, Req} ->
-            Edit = ike_tag:edit(maps:get(<<"tags">>, Form, <<>>)),
+            %% the box is the whole of the entry's tags (lux); a form
+            %% without one keeps them
+            Box =
+                case Form of
+                    #{<<"tags">> := Text} -> element(1, ike_tag:layout(Text));
+                    _ -> keep
+                end,
             %% the box's text as it was sent; a form without one keeps it
             Commentary =
                 case Form of
@@ -36,7 +42,7 @@ tag(N, {Actor, Name}, Req0) ->
                     _ -> keep
                 end,
             Signed = is_binary(Name) andalso maps:get(<<"signed">>, Form, <<>>) =:= <<"1">>,
-            case ike_writer:revise(N, Actor, Signed, Edit, Commentary) of
+            case ike_writer:revise(N, Actor, Signed, Box, Commentary) of
                 ok ->
                     _ = ike_render:sync(),
                     ike_http:see_other(Back, Req);

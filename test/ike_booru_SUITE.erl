@@ -220,10 +220,13 @@ tagged_and_found(Config) ->
     P2 = posted(Config, Session, <<"tagger">>, "base.png", <<"two">>),
     E1 = integer_to_list(entry_of(Config, P1)),
     E2 = integer_to_list(entry_of(Config, P2)),
-    %% an account, from this site: names are lowercased, what is no name
-    %% is dropped
-    303 = tag(Config, cookies(Session) ++ Here, E1, "Blue_Hair long_hair rating:s <b> x\"y"),
-    303 = tag(Config, cookies(Session) ++ Here, E2, "blue_eyes long_hair"),
+    %% an account, from this site, sends the whole box (lux): what it names
+    %% is what the entry has. names are lowercased, what is no name is
+    %% dropped
+    303 = tag(
+        Config, cookies(Session) ++ Here, E1, "image raster\nBlue_Hair long_hair rating:s <b> x\"y"
+    ),
+    303 = tag(Config, cookies(Session) ++ Here, E2, "image raster\nblue_eyes long_hair"),
     %% (beside what it is: image, raster)
     [[<<"blue_hair">>], [<<"image">>], [<<"long_hair">>], [<<"raster">>], [<<"rating:s">>]] = query(
         Config,
@@ -261,7 +264,12 @@ tagged_and_found(Config) ->
     S5 = search(Config, "rating:s long_hair"),
     {true, false} = {Has(S5, E1), Has(S5, E2)},
     %% taken off
-    303 = tag(Config, cookies(Session) ++ Here, E1, "-long_hair"),
+    303 = tag(
+        Config,
+        cookies(Session) ++ Here,
+        E1,
+        "image raster\nblue_hair long_hair rating:s -long_hair"
+    ),
     S6 = search(Config, "long_hair"),
     {false, true} = {Has(S6, E1), Has(S6, E2)}.
 

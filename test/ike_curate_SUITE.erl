@@ -125,7 +125,10 @@ curated_from_its_meta(Config) ->
     uploaded(Config, Owner, png(3, 3, 37), ["signed"]),
     Meta = meta(Config, <<"meta-owner">>),
     %% any account curates a public meta, signed if it asks
-    "/booru/" ++ N = Entry = curate(Config, Curator, Meta, "blue_sky -x cloud", [{"signed", "1"}]),
+    "/booru/" ++ N =
+        Entry = curate(
+            Config, Curator, Meta, "image\nraster\nblue_sky -x cloud", [{"signed", "1"}]
+        ),
     %% the meta leads there now, and the trunk says it is curated
     {303, Led, _} = request(Config, get, Meta, [], none),
     Entry = proplists:get_value("location", Led),
@@ -133,7 +136,8 @@ curated_from_its_meta(Config) ->
     {_, _} = binary:match(Trunk, list_to_binary("<a href=\"" ++ Entry ++ "\">")),
     {_, _} = binary:match(Trunk, list_to_binary("curated as ##" ++ N)),
     %% the curation: its owner is the meta's, its tags those given and
-    %% what it is, and its first revision in its thread, by the curator
+    %% what it is, and its first revision in its thread, by the curator,
+    %% counting only what the curator gave
     {200, _, Page} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(Page, <<"owner <a href=\"/user/meta-owner\">meta-owner</a>">>),
     [[<<"blue_sky">>], [<<"cloud">>], [<<"image">>], [<<"raster">>]] = query(
@@ -144,7 +148,7 @@ curated_from_its_meta(Config) ->
     {_, _} = binary:match(Page, list_to_binary("<span class=\"title\">##" ++ N ++ " 1</span>")),
     {_, _} = binary:match(
         Page,
-        <<"<summary>tags <span class=\"added\">+4</span>, commentary =</summary>">>
+        <<"<summary>tags <span class=\"added\">+2</span>, commentary =</summary>">>
     ),
     {_, _} = binary:match(Page, <<"<a href=\"/user/curator\">curator</a>">>),
     %% the same bytes are curated once
@@ -197,7 +201,7 @@ revised_and_amended(Config) ->
     Other = login(Config, <<"other-reviser">>),
     uploaded(Config, Session, png(4, 4, 43), []),
     Meta = meta(Config, <<"reviser">>),
-    "/booru/" ++ N = Entry = curate(Config, Session, Meta, "sun", []),
+    "/booru/" ++ N = Entry = curate(Config, Session, Meta, "image raster\nsun", []),
     Revisions = fun() ->
         [[Count]] = query(
             Config,
@@ -207,12 +211,28 @@ revised_and_amended(Config) ->
         ),
         Count
     end,
+    Tags = fun() ->
+        [
+            T
+         || [T] <- query(
+                Config,
+                "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?"
+                " ORDER BY 1",
+                [list_to_integer(N)]
+            )
+        ]
+    end,
     1 = Revisions(),
+    %% the box is laid out as given, and is the whole of the tags
+    {200, _, First} = request(Config, get, Entry, [], none),
+    {_, _} = binary:match(First, <<"class=\"tags\"">>),
+    {_, _} = binary:match(First, <<">image raster\nsun</textarea>">>),
     Signed = [{"signed", "1"}],
     {303, _, _} = revise(
-        Config, Session, Entry, [{"tags", "moon -sun"}, {"commentary", "a line"}] ++ Signed
+        Config, Session, Entry, [{"tags", "image raster\nmoon"}, {"commentary", "a line"}] ++ Signed
     ),
     2 = Revisions(),
+    [<<"image">>, <<"moon">>, <<"raster">>] = Tags(),
     {200, _, Page} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(
         Page,
@@ -223,7 +243,10 @@ revised_and_amended(Config) ->
     {_, _} = binary:match(Page, <<"<h2>commentary</h2><p>a line</p>">>),
     %% the same account again, signed, right after: folded into its own
     {303, _, _} = revise(
-        Config, Session, Entry, [{"tags", "star"}, {"commentary", "a line\nand another"}] ++ Signed
+        Config,
+        Session,
+        Entry,
+        [{"tags", "image raster\nmoon star"}, {"commentary", "a line\nand another"}] ++ Signed
     ),
     2 = Revisions(),
     {200, _, Folded} = request(Config, get, Entry, [], none),
@@ -232,15 +255,42 @@ revised_and_amended(Config) ->
         <<"<summary>tags <span class=\"added\">+2</span> <span class=\"removed\">-1</span>,",
             " commentary <span class=\"added\">+2</span></summary>">>
     ),
-    %% another account's change is a revision of its own, as is an
-    %% unsigned one
-    {303, _, _} = revise(Config, Other, Entry, [{"tags", "cloud"}] ++ Signed),
+    %% lux's box: names twice, a name taken off where it was given, a line
+    %% with nothing left; kept as laid out, tidied
+    Box =
+        "copyright:ガールズバンドクライ\ncharacter:海老塚智\nsolo\nsimple_background\n"
+        "brown_hair short_hair full_body\nraster\nsimple_background -full_body feet_out_of_frame",
+    {303, _, _} = revise(Config, Other, Entry, [{"tags", Box}] ++ Signed),
     3 = Revisions(),
-    {303, _, _} = revise(Config, Other, Entry, [{"tags", "-cloud"}]),
+    [
+        <<"brown_hair">>,
+        <<"character:海老塚智"/utf8>>,
+        <<"copyright:ガールズバンドクライ"/utf8>>,
+        <<"feet_out_of_frame">>,
+        <<"raster">>,
+        <<"short_hair">>,
+        <<"simple_background">>,
+        <<"solo">>
+    ] = Tags(),
+    {200, _, Laid} = request(Config, get, Entry, [], none),
+    {_, _} = binary:match(
+        Laid,
+        <<
+            "copyright:ガールズバンドクライ\ncharacter:海老塚智\nsolo\nsimple_background\n"
+            "brown_hair short_hair\nraster\nfeet_out_of_frame</textarea>"/utf8
+        >>
+    ),
+    {_, _} = binary:match(
+        Laid,
+        <<"href=\"/booru/search?tags=copyright:%E3%82%AC%E3%83%BC%E3%83%AB%E3%82%BA%E3%83%90%E3%83%B3%E3%83%89%E3%82%AF%E3%83%A9%E3%82%A4\"">>
+    ),
+    %% the same box again, tidied the same, is no change; an unsigned
+    %% change is a revision of its own
+    {303, _, _} = revise(Config, Other, Entry, [{"tags", Box ++ " solo"}]),
+    3 = Revisions(),
+    {303, _, _} = revise(Config, Other, Entry, [{"tags", "raster solo"}]),
     4 = Revisions(),
-    %% no change is no revision; a form without the box keeps the text
-    {303, _, _} = revise(Config, Other, Entry, [{"tags", "moon"}]),
-    4 = Revisions(),
+    %% a form without the commentary box keeps the text
     {200, _, Last} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(Last, <<"<h2>commentary</h2><p>a line<br>and another</p>">>),
     %% nobody, or from elsewhere, revises nothing
@@ -287,7 +337,9 @@ commentary_is_ikext(Config) ->
         "see meta #" ++ M ++ " and booru #" ++ N ++ ", not meta #" ++ Hidden ++
             " nor submeta #" ++ M
     ),
-    {303, _, _} = revise(Config, Session, Entry, [{"tags", "night"}, {"commentary", Said}]),
+    {303, _, _} = revise(Config, Session, Entry, [
+        {"tags", "image raster night"}, {"commentary", Said}
+    ]),
     {200, _, Page} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(
         Page, <<"<b>new</b> art #fanart <a href=\"https://x.com/hashtag/fanart\"">>

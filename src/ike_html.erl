@@ -94,7 +94,8 @@
         | formaction
         | formmethod
         | formenctype
-        | formtarget,
+        | formtarget
+        | spellcheck,
         binary()
     }
     | required
@@ -273,4 +274,5 @@ name(data_axis) -> <<"data-axis">>;
 name(formaction) -> <<"formaction">>;
 name(formmethod) -> <<"formmethod">>;
 name(formenctype) -> <<"formenctype">>;
-name(formtarget) -> <<"formtarget">>.
+name(formtarget) -> <<"formtarget">>;
+name(spellcheck) -> <<"spellcheck">>.

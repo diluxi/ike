@@ -1328,3 +1328,32 @@ lux's model, in lux's words where they are given:
   goes with it, and no script is needed. Nothing is written; anyone may
   ask, and the limiter counts it as any POST. Invariant 4's test covers
   it as a per-request page.
+
+## The tag box (lux, 2026-11-18)
+
+- **One box, the whole of an entry's tags:** a monospace, many-lined box
+  on the curate form and the curation's form, holding every tag the
+  entry has, laid out as its curator likes (one name or several a line).
+  What it names is what the entry has; `-name` takes one off, wherever
+  it stands. Kept as laid out, tidied: a name twice stays where it was
+  first, a name taken off goes from every line, a line left empty goes.
+  lux's example comes out as lux wrote it but for one place: the last
+  line's new name, feet_out_of_frame, stays on its own line rather than
+  joining the line full_body left (ike does not guess where a name was
+  meant to go). A revision keeps the box as laid out, so the next one
+  opens on it.
+- **The first revision counts only the curator's tags** (Q45): what ike
+  tagged the asset with by what it is (image, raster, font...) is where
+  the count starts.
+- **Tag names beyond ascii** (lux's example: copyright:ガールズバンドクライ):
+  ascii is the closed set it was; any other character too, but the
+  spaces unicode has; 64 characters at most. Migration 0026 makes the
+  tag table again for its check (rows and ids kept, booru_tag's keys
+  checked at the end). Links percent-encode what is beyond ascii, in
+  tag searches and in wiki paths alike (a page's name is a tag's).
+- **A font's page** has no thumbnail (lux): in its place, its text, which
+  the reader types over, in a many-lined box drawn in the font, with
+  the sliders below. A `textarea` and not `contenteditable` (lux asked):
+  it is the plain-text, many-lined field a form already has, and
+  `contenteditable` takes in pasted styles (`plaintext-only` would not,
+  but is newer). The trunk and the booru still show the F.

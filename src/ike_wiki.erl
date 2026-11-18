@@ -29,6 +29,8 @@ path(Name) ->
 -spec path_byte(byte()) -> binary().
 path_byte($?) -> <<"%3F">>;
 path_byte($') -> <<"%27">>;
+%% beyond ascii, as %XX: a page's name may be a tag's of any script
+path_byte(B) when B >= 128 -> list_to_binary(io_lib:format("%~2.16.0B", [B]));
 path_byte(B) -> <<B>>.
 
 -spec diff(Before :: binary(), After :: binary()) -> [change()].

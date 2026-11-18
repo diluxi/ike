@@ -432,15 +432,21 @@ piece({post, N}, Links) ->
 piece({page, Name}, Links) ->
     Text = <<"[[", Name/binary, "]]">>,
     case Links of
-        #{{page, Name} := <<"page">>} -> anchor(ike_wiki:path(Name), Text);
-        #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Text);
-        _ -> missing(Name, Text)
+        #{{page, Name} := <<"page">>} ->
+            anchor(ike_wiki:path(Name), Text);
+        #{{page, Name} := <<"tag">>} ->
+            anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Text);
+        _ ->
+            missing(Name, Text)
     end;
 piece({page, Name, Label}, Links) ->
     case Links of
-        #{{page, Name} := <<"page">>} -> anchor(ike_wiki:path(Name), Label);
-        #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Label);
-        _ -> missing(Name, Label)
+        #{{page, Name} := <<"page">>} ->
+            anchor(ike_wiki:path(Name), Label);
+        #{{page, Name} := <<"tag">>} ->
+            anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Label);
+        _ ->
+            missing(Name, Label)
     end;
 piece({entry, N}, Links) ->
     Text = <<"booru #", (integer_to_binary(N))/binary>>,
@@ -1121,16 +1127,8 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                                 [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Token}],
                                 []
                             ),
-                            ike_html:el(p, [
-                                ike_html:el(label, [{for, <<"tags">>}], [
-                                    ike_html:text(<<"tags, space-separated ">>)
-                                ]),
-                                ike_html:el(
-                                    input,
-                                    [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}],
-                                    []
-                                )
-                            ]),
+                            %% what ike knows it is, to begin with
+                            tag_box(joined_lines(ike_tag:inherent(Type, Traits))),
                             ike_html:el(
                                 p,
                                 Sign(Name0) ++
@@ -1297,14 +1295,16 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
             ]
     ]).
 
-%% a font tried out: a line of text to type, its size, its weight, and
-%% each other axis it has, the sample drawn in it. ike.js loads the font
-%% from the media origin and moves the sample with the sliders; without
-%% scripts the sample stands in the page's own font, and the thumbnail
-%% (an F the stripper drew in it) shows the font
+%% a font tried out, in the thumbnail's place (lux): its text, which the
+%% reader may type over, in a box of its own lines, drawn in the font,
+%% and sliders for its size, its weight and each other axis it has.
+%% ike.js loads the font from the media origin and moves the text with
+%% the sliders; without scripts the text stands in the page's own font
+%% (a textarea is the plain-text, many-lined edit field a form already
+%% has; contenteditable would take in pasted styles)
 -spec specimen(image(), [{binary(), float(), float(), float()}]) -> [ike_html:html()].
-specimen(#{file := File, thumb := Thumb, type := Type}, Axes) ->
-    Sample = <<"The quick brown fox jumps over the lazy dog">>,
+specimen(#{file := File}, Axes) ->
+    Sample = <<"The quick brown fox\njumps over the lazy dog">>,
     Slider = fun(Label, Axis, Min, Default, Max) ->
         ike_html:el(p, [
             ike_html:el(label, [
@@ -1330,25 +1330,18 @@ specimen(#{file := File, thumb := Thumb, type := Type}, Axes) ->
             {_, A, B, C} -> Slider(<<"weight">>, <<"wght">>, A, B, C);
             false -> Slider(<<"weight">>, <<"weight">>, 100.0, 400.0, 900.0)
         end,
-    still(File, Thumb, Type, <<>>) ++
-        [
-            ike_html:el('div', [{class, <<"specimen">>}, {data_font, File}], [
-                ike_html:el(p, [
-                    ike_html:el(label, [
-                        ike_html:text(<<"text ">>),
-                        ike_html:el(
-                            input,
-                            [{type, <<"text">>}, {class, <<"specimen-text">>}, {value, Sample}],
-                            []
-                        )
-                    ])
-                ]),
-                Slider(<<"size">>, <<"size">>, 8.0, 48.0, 200.0),
-                Weight
-                | [Slider(Tag, Tag, A, B, C) || {Tag, A, B, C} <- Axes, Tag =/= <<"wght">>] ++
-                    [ike_html:el(p, [{class, <<"sample">>}], [ike_html:text(Sample)])]
-            ])
-        ].
+    [
+        ike_html:el('div', [{class, <<"specimen">>}, {data_font, File}], [
+            ike_html:el(
+                textarea,
+                [{class, <<"sample">>}, {rows, <<"3">>}, {spellcheck, <<"false">>}],
+                [ike_html:text(Sample)]
+            ),
+            Slider(<<"size">>, <<"size">>, 8.0, 48.0, 200.0),
+            Weight
+            | [Slider(Tag, Tag, A, B, C) || {Tag, A, B, C} <- Axes, Tag =/= <<"wght">>]
+        ])
+    ].
 
 -spec axis_number(float()) -> binary().
 axis_number(F) when F == trunc(F) -> integer_to_binary(trunc(F));
@@ -1516,6 +1509,8 @@ account({Csrf, Name, Role}) ->
     thread := pos_integer() | none,
     posts := [post()],
     commentary := binary(),
+    %% the tag box as the newest revision laid it out
+    box := binary() | none,
     owner := {account, binary()} | anonymous | none
 }) -> ike_html:html().
 entry(
@@ -1528,8 +1523,15 @@ entry(
         thread := Thread,
         posts := Posts,
         commentary := Said,
+        box := Box0,
         owner := Owner
     } = Entry,
+    %% a curation with no revision yet has its tags one to a line
+    Box =
+        case Box0 of
+            none -> joined_lines(Tags);
+            _ -> Box0
+        end,
     N = integer_to_binary(Id),
     Stamp = stamp(Time),
     Newest =
@@ -1569,14 +1571,7 @@ entry(
         end,
     Edit = ike_html:el(
         form, [{method, <<"post">>}, {action, <<"/booru/", N/binary, "/tags">>}], [
-            ike_html:el(p, [
-                ike_html:el(label, [{for, <<"tags">>}], [
-                    ike_html:text(<<"tags (accounts; -name takes one off) ">>)
-                ]),
-                ike_html:el(
-                    input, [{id, <<"tags">>}, {name, <<"tags">>}, {maxlength, <<"2000">>}], []
-                )
-            ]),
+            tag_box(Box),
             ike_html:el(p, [
                 ike_html:el(label, [{for, <<"commentary">>}], [ike_html:text(<<"commentary">>)]),
                 ike_html:el(br, []),
@@ -1667,6 +1662,35 @@ entry(
             ] ++ Talk
     ).
 
+%% the tag box (lux): every tag the entry has, as laid out, one name or
+%% several a line, in a monospace box; what it names is what the entry
+%% has, and -name takes one off
+-spec tag_box(binary()) -> ike_html:html().
+tag_box(Box) ->
+    Lines = length(binary:split(Box, <<"\n">>, [global])),
+    ike_html:el(p, [
+        ike_html:el(label, [{for, <<"tags">>}], [
+            ike_html:text(<<"tags (accounts; what is here is what it has; -name takes one off)">>)
+        ]),
+        ike_html:el(br, []),
+        ike_html:el(
+            textarea,
+            [
+                {id, <<"tags">>},
+                {name, <<"tags">>},
+                {class, <<"tags">>},
+                {rows, integer_to_binary(min(24, Lines + 2))},
+                {maxlength, <<"8000">>}
+            ],
+            [ike_html:text(Box)]
+        )
+    ]).
+
+-spec joined_lines([binary()]) -> binary().
+joined_lines([L]) -> L;
+joined_lines([L | Ls]) -> <<L/binary, "\n", (joined_lines(Ls))/binary>>;
+joined_lines([]) -> <<>>.
+
 %% one change to an entry's tags: when, and what; not who
 -spec changed({integer(), binary(), binary()}) -> ike_html:html().
 changed({When, Added, Removed}) ->
@@ -1687,7 +1711,7 @@ changed({When, Added, Removed}) ->
 
 -spec tag_link(binary()) -> ike_html:html().
 tag_link(Name) ->
-    anchor(<<"/booru/search?tags=", Name/binary>>, Name).
+    anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Name).
 
 %% entries by their tags: the form, what it was asked, and what it found
 -spec search(
@@ -1986,8 +2010,9 @@ style() ->
         ".removed { color: #82071e; }\n"
         "a.missing { color: #cf222e; }\n"
         ".title { font-weight: bold; }\n"
-        ".specimen .sample { font-size: 48px; overflow-wrap: anywhere; }\n"
-        ".specimen input[type=text] { width: 100%; max-width: 40em; }\n"
+        ".specimen .sample { font-size: 48px; width: 100%; min-height: 3em;"
+        " box-sizing: border-box; border: 1px dashed #8c959f; background: transparent; }\n"
+        "textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }\n"
         "h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }\n"
     >>.
 
@@ -2021,7 +2046,7 @@ script() ->
         "  t.selectionEnd = t.selectionStart + inside.length;\n"
         "});\n"
         "document.querySelectorAll('.specimen[data-font]').forEach(function (s) {\n"
-        "  var sample = s.querySelector('.sample'), text = s.querySelector('.specimen-text');\n"
+        "  var sample = s.querySelector('.sample');\n"
         "  var wght = s.querySelector('input[data-axis=wght]');\n"
         "  var family = 'ike-specimen-' + Math.random().toString(36).slice(2);\n"
         "  if (window.FontFace && sample) {\n"
@@ -2040,7 +2065,6 @@ script() ->
         "      else settings.push('\"' + a + '\" ' + i.value);\n"
         "    });\n"
         "    sample.style.fontVariationSettings = settings.length ? settings.join(', ') : 'normal';\n"
-        "    if (text) sample.textContent = text.value;\n"
         "  }\n"
         "  if (sample) { s.addEventListener('input', apply); apply(); }\n"
         "});\n"

@@ -157,8 +157,8 @@ acted(What, Id, Req0) ->
                             ike_http:reply(500, Req)
                     end;
                 {true, {ok, _, _}} ->
-                    Tags = ike_tag:edit(maps:get(<<"tags">>, Form, <<>>)),
-                    case ike_writer:curate(Id, Actor, Signed, Tags) of
+                    {Box, _} = ike_tag:layout(maps:get(<<"tags">>, Form, <<>>)),
+                    case ike_writer:curate(Id, Actor, Signed, Box) of
                         {ok, Entry} ->
                             _ = ike_render:sync(),
                             ike_http:see_other(

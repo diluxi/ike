@@ -279,10 +279,11 @@ sign_meta(Meta, Owner) when is_integer(Meta), Meta > 0 ->
 %% a public meta tagged and posted to the booru (lux): its curation, an
 %% entry, whose thread is the meta's, with the curation's first revision
 %% in it. bytes with an entry already are not curated again
--spec curate(Meta :: pos_integer(), ike_id:actor(), Signed :: boolean(), {[binary()], [binary()]}) ->
+%% Box: the tag box's lines (ike_tag:layout/1), the whole of its tags
+-spec curate(Meta :: pos_integer(), ike_id:actor(), Signed :: boolean(), Box :: [[binary()]]) ->
     {ok, pos_integer()} | {error, not_public | no_such_meta | {curated, pos_integer()}} | error().
-curate(Meta, Account, Signed, {Add, _Remove}) when is_integer(Meta), Meta > 0 ->
-    case call({curate, Meta, ike_id:to_integer(Account), Signed, Add}) of
+curate(Meta, Account, Signed, Box) when is_integer(Meta), Meta > 0 ->
+    case call({curate, Meta, ike_id:to_integer(Account), Signed, Box}) of
         {ok, Entry} when is_integer(Entry), Entry > 0 -> {ok, Entry};
         {error, {curated, Entry}} when is_integer(Entry), Entry > 0 -> {error, {curated, Entry}};
         Other -> failed(Other)
@@ -290,14 +291,15 @@ curate(Meta, Account, Signed, {Add, _Remove}) when is_integer(Meta), Meta > 0 ->
 
 %% a curation's tags and commentary changed: a revision in its thread,
 %% signed or not as the account asks, folded into the account's own if
-%% that is the thread's newest post (lux: amend, Q37). commentary keep
-%% leaves it as it is. the history keeps who, as for tags before
+%% that is the thread's newest post (lux: amend, Q37). the box is the
+%% whole of its tags (lux): what it names is on, nothing else; keep, for
+%% either, leaves it as it is. the history keeps who, as for tags before
 -spec revise(
-    pos_integer(), ike_id:actor(), Signed :: boolean(), {[binary()], [binary()]}, binary() | keep
+    pos_integer(), ike_id:actor(), Signed :: boolean(), [[binary()]] | keep, binary() | keep
 ) ->
     ok | {error, nothing | no_such_entry | bad_text} | error().
-revise(Entry, Account, Signed, {Add, Remove}, Commentary) ->
-    done(call({revise, Entry, ike_id:to_integer(Account), Signed, Add, Remove, Commentary})).
+revise(Entry, Account, Signed, Box, Commentary) ->
+    done(call({revise, Entry, ike_id:to_integer(Account), Signed, Box, Commentary})).
 
 %% a comment on a meta: in its thread, started by it if it has none. who
 %% may see the meta is the asker's to have checked
@@ -592,22 +594,21 @@ handle_call({sign_meta, Meta, Owner}, _From, Conn) when
             {error, _} = Error -> Error
         end,
     {reply, Reply, Conn};
-handle_call({curate, Meta, Account, Signed, Add}, _From, Conn) when
-    is_integer(Meta), is_integer(Account), is_boolean(Signed), is_list(Add)
+handle_call({curate, Meta, Account, Signed, Box}, _From, Conn) when
+    is_integer(Meta), is_integer(Account), is_boolean(Signed), is_list(Box)
 ->
     Time = erlang:system_time(second),
     Reply = committed(
         ike_db:transaction(Conn, fun() ->
-            curated(Conn, Meta, Account, shown_as(Account, Signed), Add, Time)
+            curated(Conn, Meta, Account, shown_as(Account, Signed), boxed(Box), Time)
         end)
     ),
     {reply, Reply, Conn};
-handle_call({revise, Entry, Account, Signed, Add, Remove, Commentary}, _From, Conn) when
+handle_call({revise, Entry, Account, Signed, Box, Commentary}, _From, Conn) when
     is_integer(Entry),
     is_integer(Account),
     is_boolean(Signed),
-    is_list(Add),
-    is_list(Remove),
+    (is_list(Box) orelse Box =:= keep),
     (is_binary(Commentary) orelse Commentary =:= keep)
 ->
     Time = erlang:system_time(second),
@@ -622,8 +623,10 @@ handle_call({revise, Entry, Account, Signed, Add, Remove, Commentary}, _From, Co
                         Entry,
                         Account,
                         shown_as(Account, Signed),
-                        Add,
-                        Remove,
+                        case Box of
+                            keep -> keep;
+                            _ -> boxed(Box)
+                        end,
                         Commentary,
                         Time
                     )
@@ -1876,9 +1879,14 @@ maybe_integer(_) -> undefined.
 shown_as(Account, true) -> Account;
 shown_as(_Account, false) -> ?NOBODY.
 
--spec curated(ike_db:writer(), integer(), integer(), integer(), [term()], integer()) ->
+%% a box as the writer takes it: lines of names, each a binary
+-spec boxed([term()]) -> [[binary()]].
+boxed(Box) ->
+    [[W || W <- Line, is_binary(W)] || Line <- Box, is_list(Line)].
+
+-spec curated(ike_db:writer(), integer(), integer(), integer(), [[binary()]], integer()) ->
     {ok, {integer(), [term()]}} | error().
-curated(Conn, Meta, Account, Shown, Add, Time) ->
+curated(Conn, Meta, Account, Shown, Box, Time) ->
     Sql = <<"SELECT asset, private, state, thread, owner, signed FROM meta WHERE id = ?1">>,
     case ike_db:q(Conn, Sql, [Meta]) of
         {ok, [[Asset, 0, 0, Thread1, Owner, Signed]]} when is_binary(Asset) ->
@@ -1890,14 +1898,9 @@ curated(Conn, Meta, Account, Shown, Add, Time) ->
                 {ok, []} ->
                     case entered(Conn, [Asset], Time, []) of
                         {ok, [Entry]} ->
-                            Added = [N || N <- Add, is_binary(N), put_tag(Conn, Entry, N)],
-                            case
-                                {
-                                    history(Conn, Entry, Account, Added, [], Time),
-                                    state_body(Conn, Entry, <<>>)
-                                }
-                            of
-                                {ok, {ok, Body}} ->
+                            case boxed_tags(Conn, Entry, Account, Box, Time) of
+                                ok ->
+                                    Body = ike_tag:revision(Box, <<>>),
                                     case revision(Conn, Thread0, Shown, Body, Time) of
                                         {ok, {Thread, Threads}} ->
                                             Steps = [
@@ -1919,9 +1922,7 @@ curated(Conn, Meta, Account, Shown, Add, Time) ->
                                         {error, _} = Error ->
                                             Error
                                     end;
-                                {{error, _} = Error, _} ->
-                                    Error;
-                                {_, {error, _} = Error} ->
+                                {error, _} = Error ->
                                     Error
                             end;
                         {ok, Other} ->
@@ -1944,42 +1945,75 @@ curated(Conn, Meta, Account, Shown, Add, Time) ->
             Error
     end.
 
+%% an entry's tags made what the box names, and the history told
+-spec boxed_tags(ike_db:writer(), integer(), integer(), [[binary()]], integer()) -> ok | error().
+boxed_tags(Conn, Entry, Account, Box, Time) ->
+    Wanted = [N || L <- Box, N <- L],
+    case current_tags(Conn, Entry) of
+        {ok, Current} ->
+            Added = [N || N <- Wanted, not lists:member(N, Current), put_tag(Conn, Entry, N)],
+            Removed = [N || N <- Current, not lists:member(N, Wanted), take_tag(Conn, Entry, N)],
+            history(Conn, Entry, Account, Added, Removed, Time);
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec current_tags(ike_db:writer(), integer()) -> {ok, [binary()]} | error().
+current_tags(Conn, Entry) ->
+    Sql = <<
+        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
+        " ORDER BY t.name"
+    >>,
+    case ike_db:q(Conn, Sql, [Entry]) of
+        {ok, Rows} -> {ok, [N || [N] <- Rows, is_binary(N)]};
+        {error, _} = Error -> Error
+    end.
+
 -spec revised_entry(
-    ike_db:writer(), integer(), integer(), integer(), [term()], [term()], binary() | keep, integer()
+    ike_db:writer(),
+    integer(),
+    integer(),
+    integer(),
+    [[binary()]] | keep,
+    binary() | keep,
+    integer()
 ) ->
     {ok, {integer(), [term()]}} | error().
-revised_entry(Conn, Entry, Account, Shown, Add, Remove, Commentary0, Time) ->
-    case
-        ike_db:q(
-            Conn,
-            <<"SELECT b.thread FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.id = ?1">>,
-            [Entry]
-        )
-    of
-        {ok, [[Thread1]]} ->
+revised_entry(Conn, Entry, Account, Shown, Box0, Commentary0, Time) ->
+    Sql = <<"SELECT b.thread FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.id = ?1">>,
+    case {ike_db:q(Conn, Sql, [Entry]), current_tags(Conn, Entry)} of
+        {{ok, [[Thread1]]}, {ok, Current}} ->
             Thread0 = maybe_integer(Thread1),
-            Before = said(Conn, Thread0),
+            %% the newest revision's box and commentary; an entry with none
+            %% has its tags on one line
+            {BeforeBox, BeforeSaid} =
+                case said(Conn, Thread0) of
+                    {ok, BoxText, Said} -> {BoxText, Said};
+                    none -> {spaced(Current), <<>>}
+                end,
+            Box =
+                case Box0 of
+                    keep -> lines(BeforeBox);
+                    _ -> Box0
+                end,
             Commentary =
                 case Commentary0 of
-                    keep -> Before;
+                    keep -> BeforeSaid;
                     _ -> Commentary0
                 end,
-            Added = [
-                N
-             || N <- Add, is_binary(N), not lists:member(N, Remove), put_tag(Conn, Entry, N)
-            ],
-            Removed = [N || N <- Remove, is_binary(N), take_tag(Conn, Entry, N)],
-            case {Added, Removed, Commentary =:= Before} of
-                {[], [], true} ->
+            Body = ike_tag:revision(Box, Commentary),
+            {After, _, _} = ike_tag:revised(Body),
+            Wanted = lists:usort([N || L <- Box, N <- L]),
+            %% the same tags, laid out the same, and the same commentary
+            case
+                Wanted =:= lists:usort(Current) andalso After =:= BeforeBox andalso
+                    Commentary =:= BeforeSaid
+            of
+                true ->
                     {error, nothing};
-                _ ->
-                    case
-                        {
-                            history(Conn, Entry, Account, Added, Removed, Time),
-                            state_body(Conn, Entry, Commentary)
-                        }
-                    of
-                        {ok, {ok, Body}} ->
+                false ->
+                    case boxed_tags(Conn, Entry, Account, Box, Time) of
+                        ok ->
                             case revision(Conn, Thread0, Shown, Body, Time) of
                                 {ok, {Thread, Threads}} ->
                                     Set = <<"UPDATE booru SET thread = ?2 WHERE id = ?1">>,
@@ -1990,19 +2024,27 @@ revised_entry(Conn, Entry, Account, Shown, Add, Remove, Commentary0, Time) ->
                                 {error, _} = Error ->
                                     Error
                             end;
-                        {{error, _} = Error, _} ->
-                            Error;
-                        {_, {error, _} = Error} ->
+                        {error, _} = Error ->
                             Error
                     end
             end;
-        {ok, []} ->
+        {{ok, []}, _} ->
             {error, no_such_entry};
-        {ok, Other} ->
+        {{ok, Other}, _} ->
             {error, {unexpected, Other}};
-        {error, _} = Error ->
+        {{error, _} = Error, _} ->
+            Error;
+        {_, {error, _} = Error} ->
             Error
     end.
+
+%% a box's text back into its lines of names
+-spec lines(binary()) -> [[binary()]].
+lines(Box) ->
+    [
+        [W || W <- binary:split(L, <<" ">>, [global]), W =/= <<>>]
+     || L <- binary:split(Box, <<"\n">>, [global]), L =/= <<>>
+    ].
 
 -spec commented(ike_db:writer(), integer(), integer(), binary(), integer()) ->
     {ok, {integer(), [term()]}} | error().
@@ -2044,25 +2086,10 @@ history(Conn, Entry, Account, Added, Removed, Time) ->
         {error, _} = Error -> Error
     end.
 
-%% a curation as a revision keeps it: its tags, by name, on the first
-%% line, and its commentary after
--spec state_body(ike_db:writer(), integer(), binary()) -> {ok, binary()} | error().
-state_body(Conn, Entry, Commentary) ->
-    Sql = <<
-        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
-        " ORDER BY t.name"
-    >>,
-    case ike_db:q(Conn, Sql, [Entry]) of
-        {ok, Rows} ->
-            {ok, <<(spaced([N || [N] <- Rows, is_binary(N)]))/binary, "\n", Commentary/binary>>};
-        {error, _} = Error ->
-            Error
-    end.
-
-%% the commentary of a curation's newest revision in view
--spec said(ike_db:writer(), integer() | undefined) -> binary().
+%% a curation's newest revision in view: its box and its commentary
+-spec said(ike_db:writer(), integer() | undefined) -> {ok, binary(), binary()} | none.
 said(_Conn, undefined) ->
-    <<>>;
+    none;
 said(Conn, Thread) ->
     Sql = <<
         "SELECT body FROM post WHERE thread = ?1 AND state = 0 AND revision = 1"
@@ -2070,12 +2097,10 @@ said(Conn, Thread) ->
     >>,
     case ike_db:q(Conn, Sql, [Thread]) of
         {ok, [[Body]]} when is_binary(Body) ->
-            case binary:split(Body, <<"\n">>) of
-                [_, Commentary] -> Commentary;
-                _ -> <<>>
-            end;
+            {Box, _, Commentary} = ike_tag:revised(Body),
+            {ok, Box, Commentary};
         _ ->
-            <<>>
+            none
     end.
 
 %% a revision in an attached thread, which it starts if there is none;
@@ -2316,23 +2341,7 @@ entered(_Conn, [], _Time, Acc) ->
 inherent(Conn, Entry, Hash) ->
     case ike_db:q(Conn, <<"SELECT filetype, traits FROM asset WHERE hash = ?1">>, [{blob, Hash}]) of
         {ok, [[Format, Traits]]} when is_binary(Format), is_binary(Traits) ->
-            Words = binary:split(Traits, <<" ">>, [global, trim_all]),
-            Names =
-                case Format of
-                    _ when Format =:= <<"webm">>; Format =:= <<"mp4">> ->
-                        [<<"video">>] ++ [<<"audio">> || lists:member(<<"audio">>, Words)];
-                    _ when
-                        Format =:= <<"ttf">>;
-                        Format =:= <<"otf">>;
-                        Format =:= <<"woff">>;
-                        Format =:= <<"woff2">>
-                    ->
-                        [<<"font">>];
-                    _ ->
-                        [<<"image">>, <<"raster">>] ++
-                            [<<"animation">> || lists:member(<<"animated">>, Words)]
-                end,
-            _ = [put_tag(Conn, Entry, N) || N <- Names],
+            _ = [put_tag(Conn, Entry, N) || N <- ike_tag:inherent(Format, Traits)],
             ok;
         _ ->
             ok

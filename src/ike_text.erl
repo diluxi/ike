@@ -105,7 +105,7 @@ line(<<"[[", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
                     [T, L] when byte_size(L) > 0 -> {T, L};
                     _ -> {Inside, none}
                 end,
-            case {byte_size(Target) =< 64 andalso ike_wiki:name(Target), Label} of
+            case {byte_size(Target) =< 256 andalso ike_wiki:name(Target), Label} of
                 {{ok, Name}, none} ->
                     line(Rest1, <<>>, [{page, Name} | text(Text, Pieces)], Left - 1);
                 {{ok, Name}, _} ->
