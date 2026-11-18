@@ -63,6 +63,7 @@ dispatch() ->
             {"/board/:board/:thread/reply", [Board, Thread], ike_http_post, []},
             {"/p/:post", [{post, int}], ike_http_permalink, []},
             {"/act", ike_http_act, []},
+            {"/preview", ike_http_preview, []},
             {"/login", ike_http_login, login},
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},

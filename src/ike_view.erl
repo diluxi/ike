@@ -7,6 +7,7 @@
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
 -export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
 -export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4]).
+-export([preview/3, preview_button/0]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
 
@@ -18,7 +19,7 @@
     time := integer(),
     body := binary(),
     name := {account | nobody | role, binary()},
-    links := #{integer() | {booru, integer()} | {page, binary()} => binary()},
+    links := #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()},
     replies := [integer()],
     images => [image() | gone],
     title => binary() | none,
@@ -417,7 +418,9 @@ gone(Text) ->
 missing(Name, Text) ->
     ike_html:el(a, [{class, <<"missing">>}, {href, ike_wiki:path(Name)}], [ike_html:text(Text)]).
 
--spec piece(ike_text:piece(), #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+-spec piece(ike_text:piece(), #{
+    integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()
+}) ->
     ike_html:html().
 piece({text, Text}, _Links) ->
     ike_html:text(Text);
@@ -438,6 +441,18 @@ piece({page, Name, Label}, Links) ->
         #{{page, Name} := <<"page">>} -> anchor(ike_wiki:path(Name), Label);
         #{{page, Name} := <<"tag">>} -> anchor(<<"/booru/search?tags=", Name/binary>>, Label);
         _ -> missing(Name, Label)
+    end;
+piece({entry, N}, Links) ->
+    Text = <<"booru #", (integer_to_binary(N))/binary>>,
+    case Links of
+        #{{booru, N} := _} -> anchor(<<"/booru/", (integer_to_binary(N))/binary>>, Text);
+        _ -> gone(Text)
+    end;
+piece({meta, N}, Links) ->
+    Text = <<"meta #", (integer_to_binary(N))/binary>>,
+    case Links of
+        #{{meta, N} := _} -> anchor(<<"/trunk/", (integer_to_binary(N))/binary>>, Text);
+        _ -> gone(Text)
     end;
 piece({booru, N}, Links) ->
     Text = <<"##", (integer_to_binary(N))/binary>>,
@@ -534,7 +549,9 @@ post_form(Action, {nobody, Token, Password, Files}) ->
                     [
                         password_field(Password),
                         ike_html:el(p, [
-                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)]),
+                            ike_html:text(<<" ">>),
+                            preview_button()
                         ])
                     ]
             ]
@@ -648,7 +665,9 @@ post_form(Action, {csrf, Csrf, Name, Staged, Password}) ->
                     [
                         password_field(Password),
                         ike_html:el(p, [
-                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)])
+                            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"post">>)]),
+                            ike_html:text(<<" ">>),
+                            preview_button()
                         ])
                     ]
             ]
@@ -1166,7 +1185,9 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                                         [
                                             ike_html:el(button, [{type, <<"submit">>}], [
                                                 ike_html:text(<<"comment">>)
-                                            ])
+                                            ]),
+                                            ike_html:text(<<" ">>),
+                                            preview_button()
                                         ]
                                 )
                             ]
@@ -1368,6 +1389,47 @@ said(<<"vendor">>) -> <<"vendor id">>;
 said(<<"meta">>) -> <<"woff metadata">>;
 said(Other) -> <<"name ", Other/binary>>.
 
+%% what a form's text will look like: its title, its body as a post's,
+%% its commentary as a curation's
+-type text() :: {binary(), #{
+    integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()
+}}.
+-spec preview(binary(), text(), text()) -> ike_html:html().
+preview(Title, {Body, BodyLinks}, {Said, SaidLinks}) ->
+    layout(<<"preview">>, [
+        ike_html:el(h1, [ike_html:text(<<"preview">>)]),
+        ike_html:el(p, [ike_html:text(<<"as it will look; close this tab to go on editing.">>)])
+        | [
+            ike_html:el(p, [ike_html:el(span, [{class, <<"title">>}], [ike_html:text(Title)])])
+         || Title =/= <<>>
+        ] ++
+            [ike_html:el(article, blocks(ike_markup:parse(Body), BodyLinks)) || Body =/= <<>>] ++
+            [
+                ike_html:el(article, [
+                    ike_html:el(h2, [ike_html:text(<<"commentary">>)])
+                    | blocks(ike_markup:parse(Said), SaidLinks)
+                ])
+             || Said =/= <<>>
+            ]
+    ]).
+
+%% a form's way to its preview, in a tab of its own, urlencoded so that
+%% no file goes with it
+-spec preview_button() -> ike_html:html().
+preview_button() ->
+    ike_html:el(
+        button,
+        [
+            {type, <<"submit">>},
+            {formaction, <<"/preview">>},
+            {formmethod, <<"post">>},
+            {formenctype, <<"application/x-www-form-urlencoded">>},
+            {formtarget, <<"_blank">>},
+            formnovalidate
+        ],
+        [ike_html:text(<<"preview">>)]
+    ).
+
 %% a meta on its moderation page
 -spec moderated_meta(binary(), pos_integer(), shown | hidden | trashed, [ike_role:kind()]) ->
     ike_html:html().
@@ -1494,9 +1556,15 @@ entry(
             <<>> ->
                 [];
             _ ->
+                %% ikext (lux), with the thread's links
+                SaidLinks =
+                    case Posts of
+                        [#{links := L} | _] -> L;
+                        [] -> #{}
+                    end,
                 [
-                    ike_html:el(h2, [ike_html:text(<<"commentary">>)]),
-                    ike_html:el(p, plain(binary:split(Said, <<"\n">>, [global])))
+                    ike_html:el(h2, [ike_html:text(<<"commentary">>)])
+                    | blocks(ike_markup:parse(Said), SaidLinks)
                 ]
         end,
     Edit = ike_html:el(
@@ -1532,7 +1600,9 @@ entry(
                 ike_html:text(<<" ">>),
                 ike_html:el(label, [{for, <<"signed">>}], [ike_html:text(<<"sign with your name">>)]),
                 ike_html:text(<<" ">>),
-                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"save">>)])
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"save">>)]),
+                ike_html:text(<<" ">>),
+                preview_button()
             ])
         ]
     ),
@@ -1723,7 +1793,7 @@ wiki_index(Names) ->
 -spec wiki_page(
     binary(),
     #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()},
-    #{integer() | {booru, integer()} | {page, binary()} => binary()}
+    #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()}
 ) -> ike_html:html().
 %% the page, its title with the way to edit it beside it (a word for now,
 %% a pen later; the key e too, where scripts run), and the revision it
@@ -1827,7 +1897,9 @@ wiki_edit(Name, Csrf, Signer, Text, Password) ->
                             ike_html:el(p, [
                                 ike_html:el(button, [{type, <<"submit">>}], [
                                     ike_html:text(<<"save">>)
-                                ])
+                                ]),
+                                ike_html:text(<<" ">>),
+                                preview_button()
                             ])
                         ]
                 ]
@@ -2016,7 +2088,9 @@ anchor(Href, Text) ->
 
 %% each line's pieces, with a br between lines
 %% a text's blocks, from its markup; every leaf is text (invariant 4)
--spec blocks([ike_markup:block()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+-spec blocks([ike_markup:block()], #{
+    integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()
+}) ->
     [ike_html:html()].
 blocks([{para, Lines} | Rest], Links) ->
     [ike_html:el(p, broken([inline(L, Links) || L <- Lines])) | blocks(Rest, Links)];
@@ -2040,7 +2114,9 @@ blocks([{code, Code} | Rest], Links) ->
 blocks([], _Links) ->
     [].
 
--spec listed([ike_markup:item()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+-spec listed([ike_markup:item()], #{
+    integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()
+}) ->
     ike_html:html().
 listed(Items, Links) ->
     ike_html:el(ul, [
@@ -2060,7 +2136,9 @@ broken([Line]) -> Line;
 broken([Line | Rest]) -> Line ++ [ike_html:el(br, []) | broken(Rest)];
 broken([]) -> [].
 
--spec inline([ike_markup:inline()], #{integer() | {booru, integer()} | {page, binary()} => binary()}) ->
+-spec inline([ike_markup:inline()], #{
+    integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()
+}) ->
     [ike_html:html()].
 inline([{bold, C} | Rest], Links) ->
     [ike_html:el(b, inline(C, Links)) | inline(Rest, Links)];
@@ -2094,6 +2172,10 @@ inline([{post, _} = Piece | Rest], Links) ->
 inline([{post, _, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];
 inline([{booru, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{entry, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{meta, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];
 inline([{page, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];

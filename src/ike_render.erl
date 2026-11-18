@@ -330,7 +330,7 @@ revised([], _Before, _Page, _N) ->
 %% the posts this thread's posts point at, those that are there to be
 %% shown, and the board each is on
 -spec links(ike_db:reader(), integer()) ->
-    #{integer() | {booru, integer()} | {page, binary()} => binary()}.
+    #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()}.
 links(Conn, Thread) ->
     Sql = <<
         "SELECT DISTINCT l.post, b.name FROM post s"
@@ -372,11 +372,35 @@ links(Conn, Thread) ->
                     #{Post => Board || [Post, Board] <- Rows, is_integer(Post), is_binary(Board)},
                     #{{booru, E} => <<>> || [E] <- Shown, is_integer(E)}
                 ),
-                Named
+                maps:merge(Named, metas(Conn, Thread))
             );
         {{error, Reason}, _} ->
             error({render, Thread, Reason});
         {_, {error, Reason}} ->
+            error({render, Thread, Reason})
+    end.
+
+%% the metas the thread's posts name (meta #N) that everyone may see:
+%% public and shown. no row keeps them, so a page is not made again when
+%% one becomes public; the next change to the thread shows it
+-spec metas(ike_db:reader(), integer()) -> #{{meta, integer()} => binary()}.
+metas(Conn, Thread) ->
+    case ike_db:q(Conn, <<"SELECT body FROM shown WHERE thread = ?1">>, [Thread]) of
+        {ok, Rows} ->
+            Named = lists:usort([N || [Body] <- Rows, is_binary(Body), N <- ike_text:metas(Body)]),
+            #{
+                {meta, N} => <<"meta">>
+             || N <- Named,
+                is_integer(N),
+                {ok, [_]} <- [
+                    ike_db:q(
+                        Conn,
+                        <<"SELECT 1 FROM meta WHERE id = ?1 AND private = 0 AND state = 0">>,
+                        [N]
+                    )
+                ]
+            };
+        {error, Reason} ->
             error({render, Thread, Reason})
     end.
 

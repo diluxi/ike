@@ -3,7 +3,7 @@
 %% shows, so the two cannot disagree about what is a link (hazard d1).
 -module(ike_text).
 
--export([parse/1, targets/1, entries/1, pages/1]).
+-export([parse/1, targets/1, entries/1, pages/1, metas/1]).
 -export_type([piece/0]).
 
 %% a post may point at this many others; what comes after is only text.
@@ -20,6 +20,10 @@
     | {post, Board :: binary(), pos_integer()}
     %% ##N, a booru entry
     | {booru, pos_integer()}
+    %% booru #N, the same entry, as a curation is called (lux)
+    | {entry, pos_integer()}
+    %% meta #N, a meta in the trunk
+    | {meta, pos_integer()}
     %% [[name]], a wiki page, or a tag; [[name|label]] with its own words
     | {page, binary()}
     | {page, binary(), Label :: binary()}.
@@ -48,6 +52,8 @@ targets([[{post, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N =
 targets([[{post, _, N} | Line] | Lines], Seen) -> targets([Line | Lines], Seen#{N => []});
 targets([[{text, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
 targets([[{booru, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
+targets([[{entry, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
+targets([[{meta, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
 targets([[{page, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen);
 targets([[{page, _, _} | Line] | Lines], Seen) -> targets([Line | Lines], Seen).
 
@@ -70,7 +76,13 @@ entries(Body) ->
 entries([], Seen) -> Seen;
 entries([[] | Lines], Seen) -> entries(Lines, Seen);
 entries([[{booru, N} | Line] | Lines], Seen) -> entries([Line | Lines], Seen#{N => []});
+entries([[{entry, N} | Line] | Lines], Seen) -> entries([Line | Lines], Seen#{N => []});
 entries([[_ | Line] | Lines], Seen) -> entries([Line | Lines], Seen).
+
+%% every meta the text points at, once each
+-spec metas(binary()) -> [pos_integer()].
+metas(Body) ->
+    maps:keys(#{N => [] || Line <- parse(Body), {meta, N} <- Line, is_integer(N)}).
 
 -spec line(binary(), binary(), [piece()], non_neg_integer()) -> {[piece()], non_neg_integer()}.
 line(<<>>, Text, Pieces, Left) ->
@@ -104,6 +116,10 @@ line(<<"[[", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
         _ ->
             skip(All, Text, Pieces, Left)
     end;
+line(<<"meta #", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
+    named(meta, Rest, All, Text, Pieces, Left);
+line(<<"booru #", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
+    named(entry, Rest, All, Text, Pieces, Left);
 line(<<"##", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
     case number(Rest) of
         {N, Rest1} -> line(Rest1, <<>>, [{booru, N} | text(Text, Pieces)], Left - 1);
@@ -116,6 +132,24 @@ line(<<">>", Rest/binary>> = All, Text, Pieces, Left) when Left > 0 ->
     end;
 line(All, Text, Pieces, Left) ->
     skip(All, Text, Pieces, Left).
+
+%% "meta #N", "booru #N": a word of its own, so not the end of a longer
+%% one ("submeta #1" is text)
+-spec named(meta | entry, binary(), binary(), binary(), [piece()], non_neg_integer()) ->
+    {[piece()], non_neg_integer()}.
+named(Kind, Rest, All, Text, Pieces, Left) ->
+    case {word_end(Text), number(Rest)} of
+        {true, {N, Rest1}} -> line(Rest1, <<>>, [{Kind, N} | text(Text, Pieces)], Left - 1);
+        _ -> skip(All, Text, Pieces, Left)
+    end.
+
+-spec word_end(binary()) -> boolean().
+word_end(<<>>) ->
+    true;
+word_end(Text) ->
+    C = binary:last(Text),
+    not ((C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse
+        (C >= $0 andalso C =< $9) orelse C =:= $_ orelse C >= 128).
 
 %% one byte on, as text. a byte and not a character: the bytes looked for
 %% above are ascii, which is never part of a longer utf-8 sequence

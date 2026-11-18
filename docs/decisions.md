@@ -1304,5 +1304,27 @@ lux's model, in lux's words where they are given:
   meta privately (lux: a comic tagged before release) needs a curation
   page for its owner and moderators alone, beside the static, public
   one: Q45.
-- *Simplification:* commentary is plain text (lines kept), not markup;
-  the font's own commentary stays on its meta's page.
+- *Simplification:* the font's own commentary stays on its meta's page.
+  (Commentary was plain text at first; it is ikext now, below.)
+
+## ikext: commentary, meta #N, booru #N, preview (lux, 2026-11-18)
+
+- **ikext** is ike's text: the DText subset posts, wiki pages and now a
+  curation's commentary are written in (Q45: commentary is markup).
+- **A hashtag is text** (lux): a curator who brings commentary from
+  twitter makes its hashtags links by hand, `"#tag":[https://...]`;
+  ike links nothing of `#word` by itself.
+- **`meta #N` links to the meta, `booru #N` to the curation** (the same
+  entry as `##N`, written as a curation is called), each a word of its
+  own ("submeta #1" is text). A meta is a link only while everyone may
+  see it (public and shown), so a private meta's number links nowhere
+  and says nothing. *Simplification:* no row keeps `meta #N` the way
+  `link` keeps the others, so a page naming a meta is not made again
+  when that meta becomes public; the thread's next change shows it.
+- **Preview:** every form that takes ikext (the post forms, a wiki edit,
+  a comment, a curation's commentary) has a "preview" button that sends
+  the form to `/preview` in a tab of its own, urlencoded (`formaction`,
+  `formtarget`, `formenctype`), so the form keeps what was typed, no file
+  goes with it, and no script is needed. Nothing is written; anyone may
+  ask, and the limiter counts it as any POST. Invariant 4's test covers
+  it as a per-request page.

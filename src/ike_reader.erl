@@ -521,12 +521,14 @@ pages() ->
 
 %% for a text shown per request: which of its links lead somewhere, as
 %% the renderer's map has them
--spec links(binary()) -> #{integer() | {booru, integer()} | {page, binary()} => binary()}.
+-spec links(binary()) ->
+    #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()}.
 links(Body) ->
     Posts = ike_text:targets(Body),
     Entries = ike_text:entries(Body),
     Names = ike_text:pages(Body),
-    case gen_server:call(?MODULE, {links, Posts, Entries, Names}) of
+    Metas = ike_text:metas(Body),
+    case gen_server:call(?MODULE, {links, Posts, Entries, Names, Metas}) of
         {ok, Map} when is_map(Map) -> maps:from_list(narrow(maps:to_list(Map)));
         _ -> #{}
     end.
@@ -722,8 +724,8 @@ handle_call(pages, _From, Conn) ->
         " WHERE s.thread = pg.thread AND p.revision = 1) ORDER BY pg.name"
     >>,
     {reply, ike_db:q(Conn, Sql, []), Conn};
-handle_call({links, Posts, Entries, Names}, _From, Conn) when
-    is_list(Posts), is_list(Entries), is_list(Names)
+handle_call({links, Posts, Entries, Names, Metas}, _From, Conn) when
+    is_list(Posts), is_list(Entries), is_list(Names), is_list(Metas)
 ->
     Where = <<
         "SELECT b.name FROM shown p JOIN thread t ON t.root = p.thread"
@@ -739,7 +741,19 @@ handle_call({links, Posts, Entries, Names}, _From, Conn) when
              || E <- Entries,
                 {ok, [_]} <- [ike_db:q(Conn, <<"SELECT 1 FROM shown_entry WHERE id = ?1">>, [E])]
             ] ++
-            [{{page, N}, kind_of_name(Conn, N)} || N <- Names]
+            [{{page, N}, kind_of_name(Conn, N)} || N <- Names] ++
+            %% a meta, if everyone may see it
+            [
+                {{meta, M}, <<"meta">>}
+             || M <- Metas,
+                {ok, [_]} <- [
+                    ike_db:q(
+                        Conn,
+                        <<"SELECT 1 FROM meta WHERE id = ?1 AND private = 0 AND state = 0">>,
+                        [M]
+                    )
+                ]
+            ]
     ),
     {reply, {ok, Map}, Conn};
 handle_call({entry_state, Entry}, _From, Conn) when is_integer(Entry) ->
@@ -843,11 +857,12 @@ handle_call(_Request, _From, Conn) ->
     {reply, {error, bad_request}, Conn}.
 
 -spec narrow([{term(), term()}]) ->
-    [{integer() | {booru, integer()} | {page, binary()}, binary()}].
+    [{integer() | {booru, integer()} | {page, binary()} | {meta, integer()}, binary()}].
 narrow([{K, V} | Rest]) when is_integer(K), is_binary(V) -> [{K, V} | narrow(Rest)];
 narrow([{{booru, E}, V} | Rest]) when is_integer(E), is_binary(V) ->
     [{{booru, E}, V} | narrow(Rest)];
 narrow([{{page, N}, V} | Rest]) when is_binary(N), is_binary(V) -> [{{page, N}, V} | narrow(Rest)];
+narrow([{{meta, M}, V} | Rest]) when is_integer(M), is_binary(V) -> [{{meta, M}, V} | narrow(Rest)];
 narrow([_ | Rest]) ->
     narrow(Rest);
 narrow([]) ->

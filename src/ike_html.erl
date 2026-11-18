@@ -89,7 +89,12 @@
         | step
         %% a font's file, and an axis a slider moves, for ike.js
         | data_font
-        | data_axis,
+        | data_axis
+        %% a preview button's own way of sending its form
+        | formaction
+        | formmethod
+        | formenctype
+        | formtarget,
         binary()
     }
     | required
@@ -97,7 +102,8 @@
     | controls
     | reversed
     | defer
-    | open.
+    | open
+    | formnovalidate.
 
 -opaque html() :: {text, binary()} | {el, tag(), [attr()], [html()]}.
 
@@ -158,6 +164,7 @@ attr(controls) -> <<" controls">>;
 attr(reversed) -> <<" reversed">>;
 attr(defer) -> <<" defer">>;
 attr(open) -> <<" open">>;
+attr(formnovalidate) -> <<" formnovalidate">>;
 attr({Name, Value}) -> [$\s, name(Name), <<"=\"">>, escape(Value), $"].
 
 %% void elements have no content and no end tag; children given to one
@@ -262,4 +269,8 @@ name(min) -> <<"min">>;
 name(max) -> <<"max">>;
 name(step) -> <<"step">>;
 name(data_font) -> <<"data-font">>;
-name(data_axis) -> <<"data-axis">>.
+name(data_axis) -> <<"data-axis">>;
+name(formaction) -> <<"formaction">>;
+name(formmethod) -> <<"formmethod">>;
+name(formenctype) -> <<"formenctype">>;
+name(formtarget) -> <<"formtarget">>.

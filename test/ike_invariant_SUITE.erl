@@ -603,6 +603,41 @@ inv04_text_is_escaped(Config) ->
             <<"</textarea></form><form action=\"//evil\"><input name=csrf>">>
         ]
     ),
+    %% a preview is a per-request page of text and its markup, a title's
+    %% and a commentary's: escaped all the same, and only
+    %% ike's tags, its links only ike's or http(s) with nothing that ends
+    %% an attribute
+    lists:foreach(
+        fun(Text) ->
+            Form = uri_string:compose_query([
+                {"title", Text}, {"body", Text}, {"commentary", Text}
+            ]),
+            %% (as an account: the limiter counts nobody's every post)
+            {200, _, Previewed} = ike_browser:request(
+                Config, post, "/preview", ike_browser:cookies(Session), {form, Form}
+            ),
+            scriptless(Previewed),
+            true = lists:all(fun known_tag/1, tags(Previewed)),
+            {match, Hrefs} = re:run(Previewed, "href=\"([^\"]*)\"", [
+                global, {capture, all_but_first, binary}
+            ]),
+            [] = [
+                H
+             || [H] <- Hrefs,
+                H =/= <<"/style.css">>,
+                re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match,
+                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~-]*$", [{capture, none}]) =/=
+                    match,
+                re:run(H, "^/wiki/([a-z0-9_()!:.-]|%27|%3F)*$", [{capture, none}]) =/= match,
+                re:run(H, "^https?://[^\"<>\\s`]+$", [{capture, none}]) =/= match
+            ]
+        end,
+        [
+            <<"\"><script>alert(1)</script> #\"onmouseover=x #<b>tag</b> #x\"><script>">>,
+            <<"[b]<img src=x onerror=alert(1)>[/b] #a'b \"x\":[https://x.org/\"<script>]">>,
+            <<"> > #<script>\n** [[x'y|<b>]] {{\"><b>}} >>1\"<b> meta #1\"<b> booru #1'x">>
+        ]
+    ),
     %% per-request pages: what a request says of itself is never echoed
     Attack = uri_string:quote("\"><script>alert(1)</script>"),
     lists:foreach(
@@ -1917,6 +1952,7 @@ known_routes() ->
         [<<"board">>, board, thread, <<"reply">>],
         [<<"p">>, post],
         [<<"act">>],
+        [<<"preview">>],
         [<<"booru">>],
         [<<"booru">>, booru],
         [<<"booru">>, <<"search">>],

@@ -15,6 +15,7 @@
     curated_from_its_meta/1,
     comments_go_with_it/1,
     revised_and_amended/1,
+    commentary_is_ikext/1,
     only_public_metas/1
 ]).
 
@@ -26,6 +27,7 @@ all() ->
         curated_from_its_meta,
         comments_go_with_it,
         revised_and_amended,
+        commentary_is_ikext,
         only_public_metas
     ].
 
@@ -267,3 +269,51 @@ only_public_metas(Config) ->
     {303, _, _} = form(Config, Moderator, Meta ++ "/comment", [{"body", "a moderator's note"}]),
     {200, _, Seen} = request(Config, get, Meta, cookies(Owner), none),
     {_, _} = binary:match(Seen, <<"a moderator&#39;s note">>).
+
+%% commentary is ikext, as a post is: a hashtag is text (a curator makes
+%% it a link by hand), and meta #N and booru #N lead to a meta and a
+%% curation; every ikext form previews in a tab of its own
+commentary_is_ikext(Config) ->
+    Session = login(Config, <<"commentator">>),
+    uploaded(Config, Session, png(5, 5, 53), []),
+    Meta = meta(Config, <<"commentator">>),
+    "/booru/" ++ N = Entry = curate(Config, Session, Meta, "night", []),
+    uploaded(Config, Session, png(5, 6, 59), []),
+    "/trunk/" ++ M = meta(Config, <<"commentator">>),
+    uploaded(Config, Session, png(6, 6, 61), ["private"]),
+    "/trunk/" ++ Hidden = meta(Config, <<"commentator">>),
+    Said = list_to_binary(
+        "[b]new[/b] art #fanart \"#fanart\":[https://x.com/hashtag/fanart]\n"
+        "see meta #" ++ M ++ " and booru #" ++ N ++ ", not meta #" ++ Hidden ++
+            " nor submeta #" ++ M
+    ),
+    {303, _, _} = revise(Config, Session, Entry, [{"tags", "night"}, {"commentary", Said}]),
+    {200, _, Page} = request(Config, get, Entry, [], none),
+    {_, _} = binary:match(
+        Page, <<"<b>new</b> art #fanart <a href=\"https://x.com/hashtag/fanart\"">>
+    ),
+    {_, _} = binary:match(
+        Page, list_to_binary("<a href=\"/trunk/" ++ M ++ "\">meta #" ++ M ++ "</a>")
+    ),
+    {_, _} = binary:match(
+        Page, list_to_binary("<a href=\"/booru/" ++ N ++ "\">booru #" ++ N ++ "</a>")
+    ),
+    %% a private meta is no link for everyone, nor is a word's end
+    {_, _} = binary:match(
+        Page, list_to_binary("<span class=\"gone\">meta #" ++ Hidden ++ "</span>")
+    ),
+    {_, _} = binary:match(Page, list_to_binary("submeta #" ++ M)),
+    %% the forms carry the way to the preview, which sends no file
+    {_, _} = binary:match(Page, <<"formaction=\"/preview\"">>),
+    {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
+    {_, _} = binary:match(
+        Form,
+        <<"formaction=\"/preview\" formmethod=\"post\" formenctype=\"application/x-www-form-urlencoded\" formtarget=\"_blank\" formnovalidate">>
+    ),
+    Previewed = uri_string:compose_query([{"body", "[i]soon[/i] #notatag"}, {"commentary", "said"}]),
+    {200, _, Look} = request(Config, post, "/preview", [], {form, Previewed}),
+    {_, _} = binary:match(Look, <<"<i>soon</i> #notatag">>),
+    {_, _} = binary:match(Look, <<"<h2>commentary</h2><p>said</p>">>),
+    %% nothing was posted by it
+    {200, _, Board} = request(Config, get, "/board/b", [], none),
+    nomatch = binary:match(Board, <<"soon">>).
