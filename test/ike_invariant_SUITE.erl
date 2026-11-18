@@ -1589,6 +1589,37 @@ inv11_stripping_is_complete_and_deterministic(Config) ->
     exiftool(["-q", "-overwrite_original", "-Orientation#=6", Turned]),
     {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, Turned),
     {ok, <<"jpeg">>, 61, 47, Unturned, _} = strip(Work, filename:join(Data, "base.jpg")),
+    %% an svg (lux, 2026-11-18): what an allowlist keeps, so the same
+    %% drawing laden with an editor's and an author's words, comments,
+    %% metadata, scripts and links out is the same bytes as without them
+    Svg = filename:join(Data, "base.svg"),
+    {ok, <<"svg">>, 64, 48, Drawn, SvgThumb} = strip(Work, Svg),
+    {ok, <<"svg">>, 64, 48, Drawn, SvgThumb} = strip(Work, Svg),
+    SvgGolden = maps:get("base.svg", golden()),
+    SvgGolden = binary:encode_hex(crypto:hash(sha256, Drawn), lowercase),
+    {_, _} = binary:match(read(Data, "laden.svg"), <<"SECRET-RDF">>),
+    {ok, <<"svg">>, 64, 48, Drawn, _} = strip(Work, filename:join(Data, "laden.svg")),
+    [] = secrets(Drawn),
+    %% (the one address left is svg's own namespace)
+    Unnamed = binary:replace(Drawn, <<"http://www.w3.org/2000/svg">>, <<>>),
+    [
+        nomatch = binary:match(Unnamed, Bad)
+     || Bad <- [
+            <<"script">>, <<"onload">>, <<"onclick">>, <<"metadata">>, <<"inkscape">>, <<"://">>
+        ]
+    ],
+    bare(Work, SvgThumb),
+    %% an svg with a doctype (its entities) is not taken
+    {no, "not-an-image"} = strip_bytes(
+        Work,
+        <<"<!DOCTYPE svg [<!ENTITY x \"y\">]><svg xmlns=\"http://www.w3.org/2000/svg\"/>">>,
+        caps()
+    ),
+    {no, "unreadable"} = strip_bytes(
+        Work,
+        <<"<?xml version=\"1.0\"?><!DOCTYPE svg [<!ENTITY a \"aaaa\">]><svg xmlns=\"http://www.w3.org/2000/svg\">&a;</svg>">>,
+        caps()
+    ),
     %% a font (lux, 2026-11-17): the names that say which font it is stay,
     %% and nothing else it says of itself (credits, license, vendor, a
     %% woff's metadata), which is the upload's commentary instead; so the
@@ -1666,6 +1697,8 @@ golden() ->
             <<"efb8883bfa667674c911168e7af19ca38e01a127a243e3e9dab90e064a618f37">>,
         "lossless.webp" =>
             <<"12860a83c965555f000702cd5d7c7098662cd8c868a787448e7757f322e0e1d1">>,
+        "base.svg" =>
+            <<"5368552d03b6d424cec42ec169c5faaf19ddb9251a0e937d1af3b9a598f4ef64">>,
         "font.ttf" =>
             <<"c0c5831b481be88752538ebed3c7b1804da2d031cb7137e0ee05111361dfc01e">>,
         "font.woff2" =>

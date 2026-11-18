@@ -13,7 +13,9 @@
 # PNG's frames kept; the thumbnail is made from them. A video (WebM, MP4)
 # is remuxed without metadata, one video and one audio stream, chapters
 # and data tracks dropped, never re-encoded; its thumbnail is its first
-# frame. A font (TTF, OTF, WOFF, WOFF2) is sanitised by OTS, its name
+# frame. An SVG is what ike-svg's allowlist keeps of it, its thumbnail
+# drawn from that by libvips (its SVG loader let for that file alone).
+# A font (TTF, OTF, WOFF, WOFF2) is sanitised by OTS, its name
 # table cut by ike-font, and sanitised again; its thumbnail is a black F
 # drawn in it on nothing (transparent), with no font but it to fall back
 # on.
@@ -53,8 +55,35 @@ ffd8ff*) type=jpeg ;;
 774f4646*) type=woff ;;
 774f4632*) type=woff2 ;;
 ????????66747970*) type=mp4 ;;
-*) no not-an-image ;;
+*)
+	# an svg: xml whose first element is svg, in the first 4 KiB
+	bom=$'\xef\xbb\xbf'
+	if head -c 4096 "$work/in" | tr -d '\0' | LC_ALL=C grep -aqE "^[[:space:]]*($bom)?<(\\?xml|svg|!--)" &&
+		head -c 4096 "$work/in" | grep -aq '<svg'; then
+		type=svg
+	else
+		no not-an-image
+	fi
+	;;
 esac
+
+# an svg: only what ike-svg's allowlist keeps (no script, no link out, no
+# editor's or author's words), then drawn by libvips, whose svg loader
+# it does not trust with hostile input and so is let for that file only,
+# which is no longer hostile
+if [ "$type" = svg ]; then
+	ike-svg "$work/in" "$work/out.svg" 2>/dev/null || no unreadable
+	w=$(env -u VIPS_BLOCK_UNTRUSTED vipsheader -f width "$work/out.svg" 2>/dev/null) || no unreadable
+	h=$(env -u VIPS_BLOCK_UNTRUSTED vipsheader -f height "$work/out.svg" 2>/dev/null) || no unreadable
+	[ "$w" -le "$max_side" ] && [ "$h" -le "$max_side" ] || no too-large
+	[ $((w * h)) -le "$max_pixels" ] || no too-large
+	env -u VIPS_BLOCK_UNTRUSTED vipsthumbnail "$work/out.svg" --size "${thumb}x${thumb}" \
+		-o "$work/thumb.webp[Q=80,strip]" 2>/dev/null || no unreadable
+	printf 'ok svg %s %s %s %s -\n' "$w" "$h" \
+		"$(stat -c %s "$work/out.svg")" "$(stat -c %s "$work/thumb.webp")"
+	cat "$work/out.svg" "$work/thumb.webp"
+	exit 0
+fi
 
 # a video: what ffprobe reads of it, then the streams copied as they are
 video() {

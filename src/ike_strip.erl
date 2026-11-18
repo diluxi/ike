@@ -21,7 +21,7 @@
     %% what a font says of itself, beyond the names its file keeps
     font => font()
 }.
--type type() :: jpeg | png | webp | webm | mp4 | ttf | otf | woff | woff2.
+-type type() :: jpeg | png | webp | svg | webm | mp4 | ttf | otf | woff | woff2.
 %% axes: tag, least, default, most. commentary: each a name record's
 %% number (or vendor, or meta for a woff's block) and its text
 -type font() :: #{
@@ -237,6 +237,7 @@ type(<<"mp4">>) -> {ok, mp4};
 type(<<"jpeg">>) -> {ok, jpeg};
 type(<<"png">>) -> {ok, png};
 type(<<"webp">>) -> {ok, webp};
+type(<<"svg">>) -> {ok, svg};
 type(<<"ttf">>) -> {ok, ttf};
 type(<<"otf">>) -> {ok, otf};
 type(<<"woff">>) -> {ok, woff};

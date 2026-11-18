@@ -378,7 +378,7 @@ in {
 					header @woff Content-Type font/woff
 					@woff2 path_regexp ^/[0-9a-f]{64}\.woff2$
 					header @woff2 Content-Type font/woff2
-					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|webm|mp4|ttf|otf|woff|woff2|thumb\.webp)$
+					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|svg|webm|mp4|ttf|otf|woff|woff2|thumb\.webp)$
 					handle @file {
 						root * ${media}
 						file_server

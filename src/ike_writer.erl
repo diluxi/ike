@@ -2515,6 +2515,7 @@ unlinked([Hex | Rest]) ->
                     <<"jpeg">>,
                     <<"png">>,
                     <<"webp">>,
+                    <<"svg">>,
                     <<"webm">>,
                     <<"mp4">>,
                     <<"ttf">>,

@@ -8,6 +8,7 @@
 %% what a type is served as
 -spec mime(binary()) -> binary().
 mime(<<"webm">>) -> <<"video/webm">>;
+mime(<<"svg">>) -> <<"image/svg+xml">>;
 mime(<<"mp4">>) -> <<"video/mp4">>;
 mime(<<"ttf">>) -> <<"font/ttf">>;
 mime(<<"otf">>) -> <<"font/otf">>;
@@ -39,6 +40,7 @@ thumb_url(Hex) ->
 ext(<<"jpeg">>) -> <<"jpg">>;
 ext(<<"png">>) -> <<"png">>;
 ext(<<"webp">>) -> <<"webp">>;
+ext(<<"svg">>) -> <<"svg">>;
 ext(<<"webm">>) -> <<"webm">>;
 ext(<<"mp4">>) -> <<"mp4">>;
 ext(<<"ttf">>) -> <<"ttf">>;
@@ -54,6 +56,7 @@ parse(<<Hex:64/binary, ".thumb.webp">>) -> hex(Hex, <<"image/webp">>);
 parse(<<Hex:64/binary, ".jpg">>) -> hex(Hex, <<"image/jpeg">>);
 parse(<<Hex:64/binary, ".png">>) -> hex(Hex, <<"image/png">>);
 parse(<<Hex:64/binary, ".webp">>) -> hex(Hex, <<"image/webp">>);
+parse(<<Hex:64/binary, ".svg">>) -> hex(Hex, <<"image/svg+xml">>);
 parse(<<Hex:64/binary, ".webm">>) -> hex(Hex, <<"video/webm">>);
 parse(<<Hex:64/binary, ".mp4">>) -> hex(Hex, <<"video/mp4">>);
 parse(<<Hex:64/binary, ".ttf">>) -> hex(Hex, <<"font/ttf">>);

@@ -18,6 +18,7 @@
     the_uploader_can_be_suspended/1,
     a_post_shows_several/1,
     a_video_plays/1,
+    an_svg_is_drawn/1,
     files_on_the_post_form/1,
     nobody_posts_still_images_when_let/1
 ]).
@@ -35,6 +36,7 @@ all() ->
         the_uploader_can_be_suspended,
         a_post_shows_several,
         a_video_plays,
+        an_svg_is_drawn,
         files_on_the_post_form,
         %% last: it starts ike again with the switch on
         nobody_posts_still_images_when_let
@@ -426,6 +428,34 @@ a_video_plays(Config) ->
     Mkv = <<16#1A, 16#45, 16#DF, 16#A3, "not really a video">>,
     {422, _, Refused} = upload(Config, Session, [{<<"x.mkv">>, Mkv}]),
     {_, _} = binary:match(Refused, <<"file 1: not taken<">>).
+
+%% an svg (lux): kept as its allowlist has it, shown by its thumbnail and
+%% served as svg from the media origin, tagged what it is when entered
+an_svg_is_drawn(Config) ->
+    Session = login(Config, <<"drawer">>),
+    {303, _, _} = upload(Config, Session, [{<<"d.svg">>, read(Config, "laden.svg")}]),
+    {303, H, _} = with(
+        Config, Session, "/board/b/new", <<"a drawing">>, latest(Config, <<"drawer">>)
+    ),
+    {File, Thumb} = image(Config, page(H)),
+    ".svg" = filename:extension(File),
+    {200, Headers, Drawn} = media(Config, File),
+    "image/svg+xml" = proplists:get_value("content-type", Headers),
+    "default-src 'none'; sandbox" = proplists:get_value("content-security-policy", Headers),
+    nomatch = binary:match(Drawn, <<"SECRET">>),
+    nomatch = binary:match(Drawn, <<"<script">>),
+    {200, _, _} = media(Config, Thumb),
+    "http://media.test/" ++ Name = File,
+    [[Entry]] = query(
+        Config,
+        "SELECT booru FROM booru_version WHERE asset = ?",
+        [{blob, binary:decode_hex(list_to_binary(filename:rootname(Name)))}]
+    ),
+    [[<<"image">>], [<<"vector">>]] = query(
+        Config,
+        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ? ORDER BY 1",
+        [Entry]
+    ).
 
 %% the post form as a browser sends it with files: its token first
 post_with_files(Config, Headers, Path, Token, Text, Files) ->

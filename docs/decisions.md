@@ -1420,3 +1420,27 @@ lux's model, in lux's words where they are given:
   as on the boards, and the comments on a meta's page and a card's page
   are ticked and retracted (or reported) through `/act` as a board's
   posts are, which leads back to the meta or the card.
+
+## SVG (lux, 2026-11-18)
+
+- **Uploaded by accounts** (nobody's files are still raster images), from
+  `/upload` and the post form; tagged `image` and `vector`; served as
+  `image/svg+xml` from the media origin under its sandbox CSP.
+- **An allowlist, not a filter** (`strip/ike-svg`, Python's own XML
+  parser, no new dependency): SVG's drawing elements and the attributes
+  that say how; `href` only to `#id`; style only with no address but
+  `url(#id)`; text in text elements. Everything else goes: scripts,
+  `foreignObject`, event handlers, links out, other namespaces (an
+  editor's, with its file names), comments, `metadata`, `title` and
+  `desc` (an author's words), embedded images (their own metadata). A
+  DOCTYPE or an entity is refused outright (no billion laughs). The same
+  input is the same output; invariant 11's test has a drawing laden
+  with all of it strip to the same bytes as the drawing alone.
+- **Its thumbnail:** libvips' SVG loader is one it does not trust with
+  hostile input (librsvg), and ike-strip blocks such loaders. It is let
+  for the thumbnail of the allowlisted copy only, which is no longer the
+  upload. *A judgment call, lux's to overrule:* the other way is no
+  thumbnail for SVG at all, or rasterising in a unit of its own; it
+  moves with the stripper to its own VM anyway.
+- *Simplification:* an embedded raster image in an SVG is dropped, not
+  kept and stripped.

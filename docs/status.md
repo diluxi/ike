@@ -79,7 +79,9 @@ and booru #N link; a preview button on every ikext form), `phi/tagbox`
 (one many-lined box for all of an entry's tags; names beyond ascii; a
 font's page shows its text in the thumbnail's place), `phi/front`
 (newest curations and posts), `phi/opencomments` (nobody comments when
-an admin opens the trunk).
+an admin opens the trunk). `phi/cards` (curations are cards;
+`prefix:what` links; outlinks marked; meta comments take a password),
+`phi/svg` (SVG uploads through an allowlist).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -94,7 +96,7 @@ an admin opens the trunk).
 
 ## Blocked on lux
 
-- **Q46:** groups, stashed.
+- **Q46:** groups, stashed. **Q47:** favicons and the fetcher.
 - **Q44:** fonts' loose ends.
 - **Q43:** trashed posts and their owners.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with

@@ -135,13 +135,15 @@ joined([W | Ws], Sep) -> <<W/binary, Sep/binary, (joined(Ws, Sep))/binary>>;
 joined([], _) -> <<>>.
 
 %% the tags an entry has by what its asset is (lux): image and raster,
-%% animation, video, audio, font. never one for what it lacks
+%% vector, animation, video, audio, font. never one for what it lacks
 -spec inherent(binary(), binary()) -> [binary()].
 inherent(Format, Traits) ->
     Words = binary:split(Traits, <<" ">>, [global, trim_all]),
     case Format of
         _ when Format =:= <<"webm">>; Format =:= <<"mp4">> ->
             [<<"video">>] ++ [<<"audio">> || lists:member(<<"audio">>, Words)];
+        <<"svg">> ->
+            [<<"image">>, <<"vector">>];
         _ when
             Format =:= <<"ttf">>;
             Format =:= <<"otf">>;

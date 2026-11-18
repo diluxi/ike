@@ -1017,7 +1017,7 @@ upload({Csrf, Name}, Refused, Staged, Posted) ->
                             {type, <<"file">>},
                             {name, <<"file">>},
                             {accept, <<
-                                "image/jpeg,image/png,image/webp,video/webm,video/mp4,",
+                                "image/jpeg,image/png,image/webp,image/svg+xml,.svg,video/webm,video/mp4,",
                                 ".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
                             >>},
                             multiple,
@@ -2055,7 +2055,7 @@ files_field(Which) ->
     Accept =
         case Which of
             any ->
-                <<"image/jpeg,image/png,image/webp,video/webm,video/mp4,.ttf,.otf,.woff,.woff2">>;
+                <<"image/jpeg,image/png,image/webp,image/svg+xml,.svg,video/webm,video/mp4,.ttf,.otf,.woff,.woff2">>;
             still ->
                 <<"image/jpeg,image/png,image/webp">>
         end,
