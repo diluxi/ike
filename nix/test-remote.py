@@ -2,7 +2,11 @@ start_all()
 stripper.wait_for_unit("ike-strip.socket")
 ike.wait_for_unit("ike.service")
 
+# the test network's address, once it is there (it may come after the units)
+stripper.wait_until_succeeds("ip -4 -o addr show eth1 | grep -q inet")
+ike.wait_until_succeeds("ip -4 -o addr show eth1 | grep -q inet")
 addr = stripper.succeed("ip -4 -o addr show eth1 | awk '{print $4}' | cut -d/ -f1").strip()
+assert addr, "the stripper has no address"
 
 # ike's host has no stripper of its own: the remote one is the only one
 ike.fail("systemctl cat ike-strip.socket")
