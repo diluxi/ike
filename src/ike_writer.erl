@@ -1179,6 +1179,12 @@ open(_Conn, _Home) ->
 
 -spec act(ike_db:writer(), who(), ike_role:kind(), term(), binary(), integer()) ->
     {ok, effects()} | error().
+%% the trunk is opened to nobody's comments, or shut, by an admin only
+%% (lux): a moderator may not
+act(_Conn, {_, Role}, Kind, <<"trunk">>, _Reason, _Time) when
+    (Kind =:= lock orelse Kind =:= unlock), Role =/= admin
+->
+    {error, not_allowed};
 act(Conn, Who, Kind, Name, Reason, Time) when
     Kind =:= lock orelse Kind =:= unlock, is_binary(Name)
 ->

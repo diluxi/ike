@@ -124,6 +124,9 @@ here.
   commentary is ikext. (4) inherent tags are not counted as a curator's;
   the tag field is the whole state, multi-line. (5) who curates: the
   groups of (1) will say; any account until then.
+- **Q46 Groups** (lux, Q45.1): metas and curations shared within a group
+  (a translation group's work, private until released). Stashed for
+  later, on lux's word; it would also answer who may curate.
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

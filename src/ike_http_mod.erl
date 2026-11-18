@@ -60,12 +60,18 @@ front({_, Csrf, Role}, Req) ->
                 })
             ],
             Html = ike_view:moderation(
-                {Csrf, Role}, ike_reader:boards(), ike_reader:suspended(), Down, Reports
+                {Csrf, Role}, boards(Role), ike_reader:suspended(), Down, Reports
             ),
             ike_http:page(200, Html, Req);
         Post ->
             ike_http:see_other(<<"/mod/post/", (integer_to_binary(Post))/binary>>, Req)
     end.
+
+%% the boards a role may open and shut: to an admin, the trunk too, whose
+%% opening lets nobody comment on metas and curations (lux)
+-spec boards(ike_role:role()) -> [{binary(), binary(), boolean()}].
+boards(admin) -> ike_reader:boards() ++ ike_reader:trunk();
+boards(_) -> ike_reader:boards().
 
 -spec look(who(), cowboy_req:req()) -> cowboy_req:req().
 look({Actor, Csrf, Role}, Req) ->

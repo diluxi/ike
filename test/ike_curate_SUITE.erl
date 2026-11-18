@@ -17,6 +17,7 @@
     revised_and_amended/1,
     commentary_is_ikext/1,
     the_front_page/1,
+    nobody_comments_when_let/1,
     only_public_metas/1
 ]).
 
@@ -30,6 +31,7 @@ all() ->
         revised_and_amended,
         commentary_is_ikext,
         the_front_page,
+        nobody_comments_when_let,
         only_public_metas
     ].
 
@@ -394,3 +396,75 @@ the_front_page(Config) ->
     ),
     %% not the trunk's posts, which are read on their metas
     nomatch = binary:match(Front, <<"/board/trunk">>).
+
+%% nobody comments on public metas and curations once an admin opens the
+%% trunk (lux), as on an open board; a moderator may not open it
+nobody_comments_when_let(Config) ->
+    Session = login(Config, <<"opener">>),
+    Moderator = login(Config, <<"trunk-moderator">>, #{groups => [<<"ike-moderator">>]}),
+    Admin = login(Config, <<"trunk-admin">>, #{groups => [<<"ike-admin">>]}),
+    Here = [{"origin", ?config(base, Config)}],
+    uploaded(Config, Session, png(7, 7, 71), []),
+    Meta = meta(Config, <<"opener">>),
+    Nobody = fun(Text) ->
+        element(
+            1,
+            request(
+                Config,
+                post,
+                Meta ++ "/comment",
+                Here,
+                {form, uri_string:compose_query([{"body", Text}])}
+            )
+        )
+    end,
+    %% shut, as it begins
+    {200, _, Shut} = request(Config, get, Meta, [], none),
+    {_, _} = binary:match(Shut, <<"log in to comment">>),
+    403 = Nobody("let me in"),
+    Switch = fun(Who, Kind) ->
+        #{csrf := Csrf} = Who,
+        element(
+            1,
+            request(
+                Config,
+                post,
+                "/mod/board/trunk",
+                cookies(Who),
+                {form, uri_string:compose_query([{"csrf", Csrf}, {"kind", Kind}, {"reason", "x"}])}
+            )
+        )
+    end,
+    403 = Switch(Moderator, "unlock"),
+    {200, _, ModPage} = request(Config, get, "/mod", cookies(Moderator), none),
+    nomatch = binary:match(ModPage, <<"/mod/board/trunk">>),
+    {200, _, AdminPage} = request(Config, get, "/mod", cookies(Admin), none),
+    {_, _} = binary:match(AdminPage, <<"/trunk/ comments on metas and curations: accounts only">>),
+    303 = Switch(Admin, "unlock"),
+    %% open: nobody comments on the meta, from this site only
+    {200, _, Open} = request(Config, get, Meta, [], none),
+    {_, _} = binary:match(Open, list_to_binary("action=\"" ++ Meta ++ "/comment\"")),
+    403 = element(
+        1,
+        request(Config, post, Meta ++ "/comment", [], {form, "body=from+elsewhere"})
+    ),
+    303 = Nobody("a word from nobody"),
+    {200, _, Said} = request(Config, get, Meta, [], none),
+    {_, _} = binary:match(Said, <<"a word from nobody">>),
+    %% and on its curation, through the thread's own form
+    Entry = curate(Config, Session, Meta, "image raster open", []),
+    [[Thread]] = query(Config, "SELECT thread FROM booru WHERE id = ?", [
+        list_to_integer(lists:nthtail(length("/booru/"), Entry))
+    ]),
+    {303, _, _} = ike_browser:anonymous(
+        Config,
+        "/board/trunk/" ++ integer_to_list(Thread) ++ "/reply",
+        Here,
+        <<"nobody on the curation">>
+    ),
+    {200, _, Curation} = request(Config, get, Entry, [], none),
+    {_, _} = binary:match(Curation, <<"a word from nobody">>),
+    {_, _} = binary:match(Curation, <<"nobody on the curation">>),
+    %% shut again: nobody is let no more
+    303 = Switch(Admin, "lock"),
+    403 = Nobody("too late").

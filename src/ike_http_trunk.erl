@@ -107,12 +107,16 @@ shown(Id, Req) ->
                     _ when is_integer(Thread) -> ike_reader:comments(Thread);
                     none -> []
                 end,
+            #{private := Private, state := State} = Meta,
             Who = #{
                 csrf => Csrf,
                 moderator => Moderator,
                 name => Name,
                 account => Account,
-                comments => Comments
+                comments => Comments,
+                open =>
+                    not Private andalso State =:= shown andalso
+                    ike_reader:board(<<"trunk">>) =:= open
             },
             ike_http:page(200, ike_view:meta(Meta, links(Meta), Posts, Who), Req);
         none ->
@@ -182,6 +186,52 @@ acted(What, Id, Req0) ->
                         {error, _} ->
                             ike_http:reply(500, Req)
                     end
+            end;
+        %% nobody comments on a public meta, once an admin has opened the
+        %% trunk (lux): from this site, at the trunk's pace, as nobody
+        {{Viewer, none}, {ok, Form, Req}} when What =:= comment ->
+            case
+                {
+                    ike_reader:board(<<"trunk">>),
+                    ike_http:guarded(Req0),
+                    ike_reader:meta(Id, Viewer)
+                }
+            of
+                {open, true, {ok, _, _}} ->
+                    case ike_limit:board(<<"trunk">>) of
+                        ok ->
+                            Body = maps:get(<<"body">>, Form, <<>>),
+                            case ike_writer:comment(Id, ike_id:anonymous(), Body) of
+                                {ok, Post} ->
+                                    _ = ike_render:sync(),
+                                    P = integer_to_binary(ike_id:to_integer(Post)),
+                                    ike_http:see_other(<<Here/binary, "#p", P/binary>>, Req);
+                                {error, bad_text} ->
+                                    ike_http:page(
+                                        400,
+                                        ike_view:message(
+                                            <<"not posted">>,
+                                            <<"a comment is text: not empty, not too long, no control characters.">>
+                                        ),
+                                        Req
+                                    );
+                                {error, _} ->
+                                    ike_http:reply(500, Req)
+                            end;
+                        limited ->
+                            ike_http:page(
+                                429,
+                                ike_view:message(
+                                    <<"slow down">>,
+                                    <<"comments without an account come only so fast. try again in a while.">>
+                                ),
+                                Req
+                            )
+                    end;
+                {_, _, none} ->
+                    ike_http:not_found(Req);
+                _ ->
+                    ike_http:forbidden(Req)
             end;
         {_, {ok, _, Req}} ->
             ike_http:forbidden(Req);

@@ -7,7 +7,7 @@
 -export([start_link/0, whereabouts/1, board/1, boards/0, suspended/0, post/1]).
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
--export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1]).
+-export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1, trunk/0]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -295,6 +295,14 @@ comments(Thread) ->
             ];
         _ ->
             []
+    end.
+
+%% the trunk as a board an admin opens and shuts
+-spec trunk() -> [{binary(), binary(), boolean()}].
+trunk() ->
+    case gen_server:call(?MODULE, trunk) of
+        {ok, [[Title, Locked]]} when is_binary(Title) -> [{<<"trunk">>, Title, Locked =:= 1}];
+        _ -> []
     end.
 
 %% what an attached thread belongs to: a curation, or else a meta
@@ -805,6 +813,8 @@ handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
             {asset, H} when is_binary(H) -> {undefined, {blob, H}}
         end,
     {reply, ike_db:q(Conn, Sql, [Actor, Moderator, Id, Asset]), Conn};
+handle_call(trunk, _From, Conn) ->
+    {reply, ike_db:q(Conn, <<"SELECT title, locked FROM board WHERE name = 'trunk'">>, []), Conn};
 handle_call({attached, Thread}, _From, Conn) when is_integer(Thread) ->
     Sql = <<
         "SELECT (SELECT id FROM booru WHERE thread = ?1), (SELECT id FROM meta WHERE thread = ?1)"

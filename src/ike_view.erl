@@ -1115,12 +1115,14 @@ number(Id) ->
         moderator := boolean(),
         name := binary() | none,
         account := {binary(), binary() | none} | none,
-        comments := [post()]
+        comments := [post()],
+        %% whether nobody may comment: the trunk open, the meta public
+        open := boolean()
     }
 ) ->
     ike_html:html().
 meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer} = Who) ->
-    #{account := Account, comments := Comments} = Who,
+    #{account := Account, comments := Comments, open := Open} = Who,
     #{
         id := Id,
         type := Type,
@@ -1229,6 +1231,30 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                                             preview_button()
                                         ]
                                 )
+                            ]
+                        )
+                    ];
+                none when Open ->
+                    %% from this site, its pace kept, with no account
+                    [
+                        ike_html:el(
+                            form, [{method, <<"post">>}, {action, <<Here/binary, "/comment">>}], [
+                                ike_html:el(p, [
+                                    ike_html:el(
+                                        textarea,
+                                        [{name, <<"body">>}, {rows, <<"4">>}, required],
+                                        []
+                                    )
+                                ]),
+                                ike_html:el(p, [
+                                    ike_html:el(button, [{type, <<"submit">>}], [
+                                        ike_html:text(<<"comment">>)
+                                    ]),
+                                    ike_html:text(<<" ">>),
+                                    preview_button(),
+                                    ike_html:text(<<" or ">>),
+                                    anchor(<<"/login">>, <<"log in">>)
+                                ])
                             ]
                         )
                     ];

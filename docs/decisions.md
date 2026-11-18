@@ -1367,3 +1367,19 @@ lux's model, in lux's words where they are given:
   the wiki's or the trunk's posts, which are read where they belong.
 - Made again whenever a board's page or the booru's is, with the list
   of boards.
+
+## Nobody's comments, when an admin lets them (lux, 2026-11-18)
+
+- **The trunk is opened and shut like a board** (its `locked` flag), but
+  only by an admin (lux: "enabled by an admin"); a moderator may not,
+  and only an admin's moderation page lists it ("comments on metas and
+  curations", migration 0027). It begins shut.
+- **Open:** nobody comments on a public, shown meta from its page (the
+  form sent from this site only, as the thread form is, and at the
+  trunk's pace, as a board's), and on a curation through its thread's
+  own reply form, with everything nobody's posts have there (the form's
+  token, the board's pace, the limiter). A private meta's thread stays
+  its owner's and the moderators'.
+- *Not here:* nobody's password on a meta's comment (the board forms
+  take one); nobody's files on comments, which follow
+  `anonymous_uploads` through the thread form only.
