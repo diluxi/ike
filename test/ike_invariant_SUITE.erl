@@ -534,6 +534,7 @@ inv04_text_is_escaped(Config) ->
                     <<"name role">>,
                     <<"gone">>,
                     <<"missing">>,
+                    <<"out">>,
                     <<"title">>,
                     <<"spoiler">>
                 ])
@@ -556,6 +557,8 @@ inv04_text_is_escaped(Config) ->
             <<"https://x.org/a\"><script>alert(1)</script> http://y.org/<b>">>,
             <<"{{\"><script>alert(1)</script>}} [[x|<b>label</b>]] [code]<script>[/code]">>,
             <<"[[doesn't]] [[a?b]] [[x\"y]] [[x'onclick='y]] [[../login]] [[a/b]] [[a#b]]">>,
+            %% site:what: what ends an attribute or a path is no part of one
+            <<"github:a/\"onmouseover=\"x twitter:\"><script> 4chan:g/../x pixiv:1'x sourcehut:~a<b> card:1\"x meta:1'y">>,
             %% quotes and lists past any depth, and tags across them
             <<"> > > > > > > > > > > > > > <script>x\n> **************** <b>\n> [quote]\n> </blockquote>\n*** [i]\n* [/i]">>,
             <<"h1. <script>alert(1)</script>\n* <img src=x onerror=alert(1)>\n[quote]\n<b>\n[/quote]">>

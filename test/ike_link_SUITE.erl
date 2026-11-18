@@ -216,9 +216,11 @@ marked_up(Config) ->
     Has(
         <<"<ul><li><b>Gajim</b> and <i>Dino</i></li><li><s>Pidgin</s> <u>u</u> <span class=\"spoiler\">end</span> <code>&lt;x&gt;</code></li></ul>">>
     ),
-    Has(<<"<a href=\"https://xmpp.org/about\" rel=\"nofollow noreferrer\">XMPP</a>">>),
     Has(
-        <<"<a href=\"https://example.org/a\" rel=\"nofollow noreferrer\">https://example.org/a</a>.">>
+        <<"<a class=\"out\" href=\"https://xmpp.org/about\" rel=\"nofollow noreferrer\">XMPP</a>">>
+    ),
+    Has(
+        <<"<a class=\"out\" href=\"https://example.org/a\" rel=\"nofollow noreferrer\">https://example.org/a</a>.">>
     ),
     Has(<<"<a href=\"/booru/search?tags=blue_hair%20-x\">{{blue_hair -x}}</a>">>),
     Has(<<"<a class=\"missing\" href=\"/wiki/xmpp\">the page</a>">>),
@@ -228,7 +230,7 @@ marked_up(Config) ->
     %% quotes by "> ", lists by stars, each in each, as deep as given
     Has(
         <<"<blockquote><p>ike [ieh-keh] (noun):</p><ul><li>(at amartia.online) a board, booru, and wiki hybrid</li>",
-            "<li>(Toki Pona from <a href=\"https://nimi.li/ike\" rel=\"nofollow noreferrer\">nimi.li/ike</a>)",
+            "<li>(Toki Pona from <a class=\"out\" href=\"https://nimi.li/ike\" rel=\"nofollow noreferrer\">nimi.li/ike</a>)",
             " negative quality</li></ul>",
             "<blockquote><p>nested</p><ul><li>deep<ul><li>deeper<ul><li>deepest</li></ul></li></ul></li></ul>",
             "</blockquote></blockquote>">>

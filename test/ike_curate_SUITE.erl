@@ -18,6 +18,7 @@
     commentary_is_ikext/1,
     the_front_page/1,
     nobody_comments_when_let/1,
+    comments_retract_by_password/1,
     only_public_metas/1
 ]).
 
@@ -32,6 +33,7 @@ all() ->
         commentary_is_ikext,
         the_front_page,
         nobody_comments_when_let,
+        comments_retract_by_password,
         only_public_metas
     ].
 
@@ -138,7 +140,7 @@ curated_from_its_meta(Config) ->
     Entry = proplists:get_value("location", Led),
     {200, _, Trunk} = request(Config, get, "/trunk", [], none),
     {_, _} = binary:match(Trunk, list_to_binary("<a href=\"" ++ Entry ++ "\">")),
-    {_, _} = binary:match(Trunk, list_to_binary("curated as ##" ++ N)),
+    {_, _} = binary:match(Trunk, list_to_binary(" card:" ++ N)),
     %% the curation: its owner is the meta's, its tags those given and
     %% what it is, and its first revision in its thread, by the curator,
     %% counting only what the curator gave
@@ -149,7 +151,7 @@ curated_from_its_meta(Config) ->
         "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ? ORDER BY 1",
         [list_to_integer(N)]
     ),
-    {_, _} = binary:match(Page, list_to_binary("<span class=\"title\">##" ++ N ++ " 1</span>")),
+    {_, _} = binary:match(Page, list_to_binary("<span class=\"title\">card:" ++ N ++ " 1</span>")),
     {_, _} = binary:match(
         Page,
         <<"<summary>tags <span class=\"added\">+2</span>, commentary =</summary>">>
@@ -325,8 +327,9 @@ only_public_metas(Config) ->
     {_, _} = binary:match(Seen, <<"a moderator&#39;s note">>).
 
 %% commentary is ikext, as a post is: a hashtag is text (a curator makes
-%% it a link by hand), and meta #N and booru #N lead to a meta and a
-%% curation; every ikext form previews in a tab of its own
+%% it a link by hand); meta:N and card:N lead to a meta and a card, and
+%% site:what to somewhere else, an outlink marked as one; every ikext form
+%% previews in a tab of its own
 commentary_is_ikext(Config) ->
     Session = login(Config, <<"commentator">>),
     uploaded(Config, Session, png(5, 5, 53), []),
@@ -338,36 +341,47 @@ commentary_is_ikext(Config) ->
     "/trunk/" ++ Hidden = meta(Config, <<"commentator">>),
     Said = list_to_binary(
         "[b]new[/b] art #fanart \"#fanart\":[https://x.com/hashtag/fanart]\n"
-        "see meta #" ++ M ++ " and booru #" ++ N ++ ", not meta #" ++ Hidden ++
-            " nor submeta #" ++ M
+        "see meta:" ++ M ++ " and card:" ++ N ++ ", not meta:" ++ Hidden ++
+            " nor submeta:" ++ M ++
+            "\n"
+            "from twitter:1234567890 by twitter:some_artist, pixiv:98765, "
+            "github:diluxi/ike. and danbooru:12, 4chan:g/123 and twitter:no-such-name"
     ),
     {303, _, _} = revise(Config, Session, Entry, [
         {"tags", "image raster night"}, {"commentary", Said}
     ]),
     {200, _, Page} = request(Config, get, Entry, [], none),
-    {_, _} = binary:match(
-        Page, <<"<b>new</b> art #fanart <a href=\"https://x.com/hashtag/fanart\"">>
-    ),
-    {_, _} = binary:match(
-        Page, list_to_binary("<a href=\"/trunk/" ++ M ++ "\">meta #" ++ M ++ "</a>")
-    ),
-    {_, _} = binary:match(
-        Page, list_to_binary("<a href=\"/booru/" ++ N ++ "\">booru #" ++ N ++ "</a>")
-    ),
+    Has = fun(Bit) -> {_, _} = binary:match(Page, Bit) end,
+    Has(<<"<b>new</b> art #fanart <a class=\"out\" href=\"https://x.com/hashtag/fanart\"">>),
+    Has(list_to_binary("<a href=\"/trunk/" ++ M ++ "\">meta:" ++ M ++ "</a>")),
+    Has(list_to_binary("<a href=\"/booru/" ++ N ++ "\">card:" ++ N ++ "</a>")),
     %% a private meta is no link for everyone, nor is a word's end
-    {_, _} = binary:match(
-        Page, list_to_binary("<span class=\"gone\">meta #" ++ Hidden ++ "</span>")
-    ),
-    {_, _} = binary:match(Page, list_to_binary("submeta #" ++ M)),
+    Has(list_to_binary("<span class=\"gone\">meta:" ++ Hidden ++ "</span>")),
+    Has(list_to_binary("submeta:" ++ M)),
+    Out = fun(Url, Text) ->
+        Has(
+            <<"<a class=\"out\" href=\"", Url/binary, "\" rel=\"nofollow noreferrer\">",
+                Text/binary, "</a>">>
+        )
+    end,
+    Out(<<"https://x.com/i/status/1234567890">>, <<"twitter:1234567890">>),
+    Out(<<"https://x.com/some_artist">>, <<"twitter:some_artist">>),
+    Out(<<"https://www.pixiv.net/artworks/98765">>, <<"pixiv:98765">>),
+    %% the full stop ends the sentence, not the path
+    Out(<<"https://github.com/diluxi/ike">>, <<"github:diluxi/ike">>),
+    Has(<<"github:diluxi/ike</a>. and">>),
+    Out(<<"https://danbooru.donmai.us/posts/12">>, <<"danbooru:12">>),
+    Out(<<"https://boards.4chan.org/g/thread/123">>, <<"4chan:g/123">>),
+    nomatch = binary:match(Page, <<"x.com/no-such-name">>),
     %% the forms carry the way to the preview, which sends no file
-    {_, _} = binary:match(Page, <<"formaction=\"/preview\"">>),
+    Has(<<"formaction=\"/preview\"">>),
     {200, _, Form} = request(Config, get, "/board/b/new", cookies(Session), none),
     {_, _} = binary:match(
         Form,
         <<"formaction=\"/preview\" formmethod=\"post\" formenctype=\"application/x-www-form-urlencoded\" formtarget=\"_blank\" formnovalidate">>
     ),
     Previewed = uri_string:compose_query([{"body", "[i]soon[/i] #notatag"}, {"commentary", "said"}]),
-    {200, _, Look} = request(Config, post, "/preview", [], {form, Previewed}),
+    {200, _, Look} = request(Config, post, "/preview", cookies(Session), {form, Previewed}),
     {_, _} = binary:match(Look, <<"<i>soon</i> #notatag">>),
     {_, _} = binary:match(Look, <<"<h2>commentary</h2><p>said</p>">>),
     %% nothing was posted by it
@@ -468,3 +482,40 @@ nobody_comments_when_let(Config) ->
     %% shut again: nobody is let no more
     303 = Switch(Admin, "lock"),
     403 = Nobody("too late").
+
+%% a comment on a meta takes a password, as a post does (lux), and is
+%% retracted with it from the meta's page; it leads back there
+comments_retract_by_password(Config) ->
+    Session = login(Config, <<"retracting">>),
+    uploaded(Config, Session, png(8, 3, 73), []),
+    Meta = meta(Config, <<"retracting">>),
+    {200, _, Page} = request(Config, get, Meta, cookies(Session), none),
+    {_, _} = binary:match(Page, <<"name=\"password\"">>),
+    {303, Said, _} = form(Config, Session, Meta ++ "/comment", [
+        {"body", "said too soon"}, {"password", "hunter2"}
+    ]),
+    "#p" ++ P = string:find(proplists:get_value("location", Said), "#"),
+    {200, _, With} = request(Config, get, Meta, [], none),
+    {_, _} = binary:match(With, <<"said too soon">>),
+    {_, _} = binary:match(
+        With, list_to_binary("<input type=\"checkbox\" name=\"post\" value=\"" ++ P ++ "\">")
+    ),
+    Act = fun(Password) ->
+        request(
+            Config,
+            post,
+            "/act",
+            [{"origin", ?config(base, Config)}],
+            {form,
+                uri_string:compose_query([
+                    {"post", P}, {"kind", "retract"}, {"password", Password}, {"back", Meta}
+                ])}
+        )
+    end,
+    {200, _, Wrong} = Act("wrong"),
+    nomatch = binary:match(Wrong, <<": retracted">>),
+    {200, _, Right} = Act("hunter2"),
+    {_, _} = binary:match(Right, <<": retracted">>),
+    {_, _} = binary:match(Right, list_to_binary("href=\"" ++ Meta ++ "\"")),
+    {200, _, Without} = request(Config, get, Meta, [], none),
+    nomatch = binary:match(Without, <<"said too soon">>).

@@ -41,8 +41,16 @@ read(Req0) ->
             Posts = numbers(Pairs, []),
             Back =
                 case Form of
-                    #{<<"back">> := <<"/board/", _/binary>> = B} -> B;
-                    _ -> <<"/board">>
+                    #{<<"back">> := <<"/board/", _/binary>> = B} ->
+                        B;
+                    %% a meta's comments, or a card's
+                    #{<<"back">> := B} ->
+                        case re:run(B, "^/(trunk|booru)/[0-9]+$", [{capture, none}]) of
+                            match -> B;
+                            nomatch -> <<"/board">>
+                        end;
+                    _ ->
+                        <<"/board">>
                 end,
             case {Posts, maps:get(<<"kind">>, Form, <<>>)} of
                 {[], _} ->

@@ -641,7 +641,7 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
     [ike_view:post()].
 curated([#{revision := true, body := Body} = P | Rest], Entry, {Tags0, Said0}, N) ->
     {_, Tags, Said} = ike_tag:revised(Body),
-    Title = <<"##", (integer_to_binary(Entry))/binary, " ", (integer_to_binary(N))/binary>>,
+    Title = <<"card:", (integer_to_binary(Entry))/binary, " ", (integer_to_binary(N))/binary>>,
     Changed = P#{
         title => Title,
         curation => {[T || T <- Tags, not lists:member(T, Tags0)], [

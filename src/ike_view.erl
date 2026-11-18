@@ -449,13 +449,17 @@ piece({page, Name, Label}, Links) ->
             missing(Name, Label)
     end;
 piece({entry, N}, Links) ->
-    Text = <<"booru #", (integer_to_binary(N))/binary>>,
+    Text = <<"card:", (integer_to_binary(N))/binary>>,
     case Links of
         #{{booru, N} := _} -> anchor(<<"/booru/", (integer_to_binary(N))/binary>>, Text);
         _ -> gone(Text)
     end;
+piece({out, Typed, Url}, _Links) ->
+    ike_html:el(a, [{class, <<"out">>}, {href, Url}, {rel, <<"nofollow noreferrer">>}], [
+        ike_html:text(Typed)
+    ]);
 piece({meta, N}, Links) ->
-    Text = <<"meta #", (integer_to_binary(N))/binary>>,
+    Text = <<"meta:", (integer_to_binary(N))/binary>>,
     case Links of
         #{{meta, N} := _} -> anchor(<<"/trunk/", (integer_to_binary(N))/binary>>, Text);
         _ -> gone(Text)
@@ -523,7 +527,7 @@ index(Curations, Posts) ->
             ike_html:el(li, [anchor(<<"/trunk">>, <<"trunk">>)]),
             ike_html:el(li, [anchor(<<"/wiki">>, <<"wiki">>)])
         ]),
-        ike_html:el(h2, [ike_html:text(<<"recent curations">>)]),
+        ike_html:el(h2, [ike_html:text(<<"recent cards">>)]),
         ike_html:el(ul, [
             ike_html:el(li, [
                 case Image of
@@ -531,14 +535,14 @@ index(Curations, Posts) ->
                         ike_html:el(a, [{href, <<"/booru/", (integer_to_binary(Id))/binary>>}], [
                             ike_html:el(
                                 img,
-                                [{src, Thumb}, {alt, <<"##", (integer_to_binary(Id))/binary>>}],
+                                [{src, Thumb}, {alt, <<"card:", (integer_to_binary(Id))/binary>>}],
                                 []
                             )
                         ]);
                     gone ->
                         anchor(
                             <<"/booru/", (integer_to_binary(Id))/binary>>,
-                            <<"##", (integer_to_binary(Id))/binary>>
+                            <<"card:", (integer_to_binary(Id))/binary>>
                         )
                 end
             ])
@@ -1058,7 +1062,7 @@ trunk(Metas) ->
     layout(<<"trunk">>, [
         ike_html:el(h1, [ike_html:text(<<"trunk">>)]),
         ike_html:el(p, [
-            ike_html:text(<<"every upload, as it came in, curated or not. ">>),
+            ike_html:text(<<"every upload, as it came in, a card or not. ">>),
             anchor(<<"/upload">>, <<"upload">>)
         ]),
         ike_html:el(ul, [
@@ -1081,7 +1085,7 @@ trunk(Metas) ->
                     ]
                 )
                 | [
-                    ike_html:text(<<" curated as ##", (integer_to_binary(C1))/binary>>)
+                    ike_html:text(<<" card:", (integer_to_binary(C1))/binary>>)
                  || C1 <- [Curation], is_integer(C1)
                 ] ++
                     [ike_html:text(<<" private">>) || Private] ++
@@ -1116,13 +1120,15 @@ number(Id) ->
         name := binary() | none,
         account := {binary(), binary() | none} | none,
         comments := [post()],
+        %% the password this browser comments with
+        password := binary(),
         %% whether nobody may comment: the trunk open, the meta public
         open := boolean()
     }
 ) ->
     ike_html:html().
 meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer} = Who) ->
-    #{account := Account, comments := Comments, open := Open} = Who,
+    #{account := Account, comments := Comments, open := Open, password := Password} = Who,
     #{
         id := Id,
         type := Type,
@@ -1162,7 +1168,7 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         case {Account, Private, State, Entry} of
             {{Token, Name0}, false, shown, none} ->
                 [
-                    ike_html:el(h2, [ike_html:text(<<"curate">>)]),
+                    ike_html:el(h2, [ike_html:text(<<"make a card">>)]),
                     ike_html:el(
                         form, [{method, <<"post">>}, {action, <<Here/binary, "/curate">>}], [
                             ike_html:el(
@@ -1190,7 +1196,7 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                         ike_html:text(<<"on the booru as ">>),
                         anchor(
                             <<"/booru/", (integer_to_binary(E))/binary>>,
-                            <<"##", (integer_to_binary(E))/binary>>
+                            <<"card:", (integer_to_binary(E))/binary>>
                         )
                     ])
                 ];
@@ -1199,8 +1205,12 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         end,
     Talk =
         [ike_html:el(h2, [ike_html:text(<<"comments">>)])] ++
+            %% retracted as a board's posts are: ticked, with a password
             [
-                ike_html:el(ol, [ike_html:el(li, [post(P, true, 0)]) || P <- Comments])
+                ike_html:el(form, [{method, <<"post">>}, {action, <<"/act">>}], [
+                    ike_html:el(ol, [ike_html:el(li, [post(P, false, 0)]) || P <- Comments])
+                    | act_on(Here)
+                ])
              || Comments =/= []
             ] ++
             case Account of
@@ -1220,6 +1230,7 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                                         []
                                     )
                                 ]),
+                                password_field(Password),
                                 ike_html:el(
                                     p,
                                     Sign(Name1) ++
@@ -1246,6 +1257,7 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
                                         []
                                     )
                                 ]),
+                                password_field(Password),
                                 ike_html:el(p, [
                                     ike_html:el(button, [{type, <<"submit">>}], [
                                         ike_html:text(<<"comment">>)
@@ -1677,14 +1689,18 @@ entry(
                 T = integer_to_binary(Thread),
                 [
                     ike_html:el(h2, [ike_html:text(<<"comments">>)]),
-                    ike_html:el(ol, [ike_html:el(li, [post(P, true, Newest0)]) || P <- Posts]),
+                    %% retracted as a board's posts are: ticked, with a password
+                    ike_html:el(form, [{method, <<"post">>}, {action, <<"/act">>}], [
+                        ike_html:el(ol, [ike_html:el(li, [post(P, false, Newest0)]) || P <- Posts])
+                        | act_on(<<"/booru/", N/binary>>)
+                    ]),
                     ike_html:el(p, [anchor(<<"/board/trunk/", T/binary, "/reply">>, <<"comment">>)])
                 ]
         end,
     layout(
-        <<"##", N/binary>>,
+        <<"card:", N/binary>>,
         [
-            ike_html:el(h1, [ike_html:text(<<"##", N/binary>>)]),
+            ike_html:el(h1, [ike_html:text(<<"card:", N/binary>>)]),
             ike_html:el(p, [
                 anchor(<<"/booru">>, <<"booru">>),
                 ike_html:text(<<", since ">>),
@@ -1825,10 +1841,10 @@ found({Id, Hash, Type, _W, _H}) ->
             {<<_/binary>>, <<_/binary>>} ->
                 Thumb = ike_media:thumb_url(binary:encode_hex(Hash, lowercase)),
                 ike_html:el(a, [{href, Href}], [
-                    ike_html:el(img, [{src, Thumb}, {alt, <<"##", I/binary>>}], [])
+                    ike_html:el(img, [{src, Thumb}, {alt, <<"card:", I/binary>>}], [])
                 ]);
             _ ->
-                anchor(Href, <<"##", I/binary>>)
+                anchor(Href, <<"card:", I/binary>>)
         end
     ]).
 
@@ -1837,8 +1853,8 @@ found({Id, Hash, Type, _W, _H}) ->
     ike_html:html().
 moderated_entry(Csrf, Id, State, Kinds) ->
     N = integer_to_binary(Id),
-    layout(<<"moderating ##", N/binary>>, [
-        ike_html:el(h1, [ike_html:text(<<"##", N/binary>>)]),
+    layout(<<"moderating card:", N/binary>>, [
+        ike_html:el(h1, [ike_html:text(<<"card:", N/binary>>)]),
         ike_html:el(p, [anchor(<<"/mod">>, <<"moderation">>)]),
         ike_html:el(p, [ike_html:text(atom_to_binary(State))])
         | act(<<"/mod/booru/", N/binary>>, Csrf, Kinds, [])
@@ -1856,14 +1872,14 @@ entries(Entries) ->
                         ike_html:el(a, [{href, <<"/booru/", (integer_to_binary(Id))/binary>>}], [
                             ike_html:el(
                                 img,
-                                [{src, Thumb}, {alt, <<"##", (integer_to_binary(Id))/binary>>}],
+                                [{src, Thumb}, {alt, <<"card:", (integer_to_binary(Id))/binary>>}],
                                 []
                             )
                         ]);
                     gone ->
                         anchor(
                             <<"/booru/", (integer_to_binary(Id))/binary>>,
-                            <<"##", (integer_to_binary(Id))/binary>>
+                            <<"card:", (integer_to_binary(Id))/binary>>
                         )
                 end
             ])
@@ -2076,6 +2092,8 @@ style() ->
         ".added { color: #116329; }\n"
         ".removed { color: #82071e; }\n"
         "a.missing { color: #cf222e; }\n"
+        %% a link out of ike says so before it (lux); a site's own icon later
+        "a.out::before { content: \"\\2197\\FE0E\\00A0\"; font-size: 0.85em; }\n"
         ".title { font-weight: bold; }\n"
         ".specimen .sample { font-size: 48px; width: 100%; min-height: 3em;"
         " box-sizing: border-box; border: 1px dashed #8c959f; background: transparent; }\n"
@@ -2246,7 +2264,11 @@ inline([{mono, Code} | Rest], Links) ->
 inline([{url, Url, Label} | Rest], Links) ->
     %% someone else's site: no referrer, and no weight given it
     [
-        ike_html:el(a, [{href, Url}, {rel, <<"nofollow noreferrer">>}], inline(Label, Links))
+        ike_html:el(
+            a,
+            [{class, <<"out">>}, {href, Url}, {rel, <<"nofollow noreferrer">>}],
+            inline(Label, Links)
+        )
         | inline(Rest, Links)
     ];
 inline([{search, Query} | Rest], Links) ->
@@ -2267,6 +2289,8 @@ inline([{booru, _} = Piece | Rest], Links) ->
 inline([{entry, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];
 inline([{meta, _} = Piece | Rest], Links) ->
+    [piece(Piece, Links) | inline(Rest, Links)];
+inline([{out, _, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];
 inline([{page, _} = Piece | Rest], Links) ->
     [piece(Piece, Links) | inline(Rest, Links)];

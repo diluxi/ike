@@ -85,8 +85,10 @@ links(#{upload := Upload, type := Type, width := W, height := H}) ->
 %% one meta, or the same 404 whether it is not there or not the asker's
 %% to see (hazard G5)
 -spec shown(pos_integer(), cowboy_req:req()) -> cowboy_req:req().
-shown(Id, Req) ->
-    {#{moderator := Moderator} = Viewer, Session} = viewer(Req),
+shown(Id, Req0) ->
+    {#{moderator := Moderator} = Viewer, Session} = viewer(Req0),
+    %% the password this browser comments with, as on the boards
+    {Password, Req} = ike_http_post:kept_password(Req0),
     case ike_reader:meta(Id, Viewer) of
         %% curated: what is known of it is the curation's now (lux)
         {ok, #{curation := Entry}, _} when is_integer(Entry) ->
@@ -114,6 +116,7 @@ shown(Id, Req) ->
                 name => Name,
                 account => Account,
                 comments => Comments,
+                password => Password,
                 open =>
                     not Private andalso State =:= shown andalso
                     ike_reader:board(<<"trunk">>) =:= open
@@ -143,7 +146,11 @@ acted(What, Id, Req0) ->
                             true -> Actor;
                             false -> ike_id:anonymous()
                         end,
-                    case ike_writer:comment(Id, By, maps:get(<<"body">>, Form, <<>>)) of
+                    case
+                        ike_writer:comment(
+                            Id, By, maps:get(<<"body">>, Form, <<>>), password(Form)
+                        )
+                    of
                         {ok, Post} ->
                             _ = ike_render:sync(),
                             P = integer_to_binary(ike_id:to_integer(Post)),
@@ -201,7 +208,7 @@ acted(What, Id, Req0) ->
                     case ike_limit:board(<<"trunk">>) of
                         ok ->
                             Body = maps:get(<<"body">>, Form, <<>>),
-                            case ike_writer:comment(Id, ike_id:anonymous(), Body) of
+                            case ike_writer:comment(Id, ike_id:anonymous(), Body, password(Form)) of
                                 {ok, Post} ->
                                     _ = ike_render:sync(),
                                     P = integer_to_binary(ike_id:to_integer(Post)),
@@ -238,6 +245,11 @@ acted(What, Id, Req0) ->
         {_, {error, Status, Req}} ->
             ike_http:reply(Status, Req)
     end.
+
+%% the password a comment is retracted with, if one was given
+-spec password(#{binary() => binary()}) -> binary() | none.
+password(#{<<"password">> := P}) when byte_size(P) > 0, byte_size(P) =< 256 -> P;
+password(_) -> none.
 
 %% the owner makes it private, or public (unless the bytes have a public
 %% meta already: then they are sent to it), or puts their name on it

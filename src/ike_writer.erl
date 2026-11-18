@@ -7,7 +7,7 @@
 
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
 -export([report/2, dismiss/1, tag/3, wiki/1, privacy/3, sign_meta/2]).
--export([curate/4, revise/5, comment/3]).
+-export([curate/4, revise/5, comment/4]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -303,10 +303,16 @@ revise(Entry, Account, Signed, Box, Commentary) ->
 
 %% a comment on a meta: in its thread, started by it if it has none. who
 %% may see the meta is the asker's to have checked
--spec comment(pos_integer(), ike_id:actor(), binary()) ->
+%% Password, if given, retracts it later, as a post's does
+-spec comment(pos_integer(), ike_id:actor(), binary(), binary() | none) ->
     {ok, ike_id:post()} | {error, bad_text | no_such_meta} | error().
-comment(Meta, Actor, Body) ->
-    case call({comment, Meta, ike_id:to_integer(Actor), Body}) of
+comment(Meta, Actor, Body, Password) ->
+    Sealed =
+        case Password of
+            P when is_binary(P), byte_size(P) > 0 -> sealed(P);
+            _ -> undefined
+        end,
+    case call({comment, Meta, ike_id:to_integer(Actor), Body, Sealed}) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, ike_id:post(Id)};
         Other -> failed(Other)
     end.
@@ -637,8 +643,11 @@ handle_call({revise, Entry, Account, Signed, Box, Commentary}, _From, Conn) when
                 end
         end,
     {reply, Reply, Conn};
-handle_call({comment, Meta, Actor, Body}, _From, Conn) when
-    is_integer(Meta), is_integer(Actor), is_binary(Body)
+handle_call({comment, Meta, Actor, Body, Password}, _From, Conn) when
+    is_integer(Meta),
+    is_integer(Actor),
+    is_binary(Body),
+    (is_binary(Password) orelse Password =:= undefined)
 ->
     Time = erlang:system_time(second),
     Reply =
@@ -647,7 +656,17 @@ handle_call({comment, Meta, Actor, Body}, _From, Conn) when
                 {error, bad_text};
             true ->
                 committed(
-                    ike_db:transaction(Conn, fun() -> commented(Conn, Meta, Actor, Body, Time) end)
+                    ike_db:transaction(Conn, fun() ->
+                        case commented(Conn, Meta, Actor, Body, Time) of
+                            {ok, {Id, _}} = Done when is_binary(Password) ->
+                                case steps(Conn, sealing(Id, Password)) of
+                                    ok -> Done;
+                                    {error, _} = Error -> Error
+                                end;
+                            Other ->
+                                Other
+                        end
+                    end)
                 )
         end,
     {reply, Reply, Conn};

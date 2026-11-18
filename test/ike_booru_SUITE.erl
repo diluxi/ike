@@ -71,7 +71,7 @@ every_image_is_an_entry(Config) ->
     Post = posted(Config, Session, <<"booruposter">>, "base.png", <<"to the booru">>),
     E = integer_to_list(entry_of(Config, Post)),
     {200, _, Page} = request(Config, get, "/booru/" ++ E, [], none),
-    {_, _} = binary:match(Page, list_to_binary("<h1>##" ++ E ++ "</h1>")),
+    {_, _} = binary:match(Page, list_to_binary("<h1>card:" ++ E ++ "</h1>")),
     %% the image, where it is shown, and nothing of who brought it
     {_, _} = binary:match(Page, <<"<img src=\"http://media.test/">>),
     {_, _} = binary:match(Page, list_to_binary("href=\"/p/" ++ integer_to_list(Post) ++ "\"")),

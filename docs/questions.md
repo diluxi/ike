@@ -127,6 +127,17 @@ here.
 - **Q46 Groups** (lux, Q45.1): metas and curations shared within a group
   (a translation group's work, private until released). Stashed for
   later, on lux's word; it would also answer who may curate.
+- **Q47 Favicons and fetching.** lux: ike should fetch each outlink's
+  site favicon (SVG among them) into its own assets and mark outlinks
+  with it, and later fetch a source's post (a tweet: its image, its
+  text as commentary) into a meta, as Danbooru does; much of it may be
+  a userscript instead. This is the fetcher planning has, and invariant
+  7 ("the fetcher never connects to a non-public address") speaks of it:
+  its own unit, outside ike's VM, resolving and pinning addresses, no
+  redirects to private ones, size and time caps, and every image it
+  brings back through the stripper. Not started; the ↗ stands in. Which
+  first: favicons for the prefixes' known sites (a fixed set, fetched
+  once), or the fetcher in general?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

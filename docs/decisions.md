@@ -1383,3 +1383,40 @@ lux's model, in lux's words where they are given:
 - *Not here:* nobody's password on a meta's comment (the board forms
   take one); nobody's files on comments, which follow
   `anonymous_uploads` through the thread form only.
+
+## Cards, prefix:what, outlinks, comments' passwords (lux, 2026-11-18)
+
+- **A curation is a card** (lux: a cardboard box). Pages say "card:N"
+  (the card's page, revisions "card:N n", the trunk's mark, the front
+  page's "recent cards"); the booru, its tables and `/booru/N` keep
+  their names. `##N` still links, written as typed.
+- **`prefix:what` replaces `meta #N` and `booru #N`:** `meta:N` and
+  `card:N` link inside ike; and somewhere else's, at a word's start,
+  marked as outlinks:
+
+  | prefix | what | leads to |
+  |---|---|---|
+  | twitter | a number / a name | x.com/i/status/N / x.com/name |
+  | pixiv | a number / users/N | pixiv.net/artworks/N / pixiv.net/users/N |
+  | tumblr | blog or blog/N | tumblr.com/blog/N |
+  | danbooru | a number | danbooru.donmai.us/posts/N |
+  | gelbooru | a number | gelbooru.com/index.php?page=post&s=view&id=N |
+  | e621 | a number | e621.net/posts/N |
+  | github, codeberg | a path | github.com/path, codeberg.org/path |
+  | sourcehut | ~user/project | sr.ht/~user/project |
+  | 4chan | board or board/N | boards.4chan.org/board/thread/N |
+  | xdnmb, A岛匿名版 | a number | www.nmbxd1.com/t/N |
+  | komica, 糟糕岛 | a path | komica1.org/path |
+
+  A path is letters, digits and `_ . ~ / -`, never `..` or `//`; what
+  ends a sentence is not part of it. What fits no shape of its site is
+  text. *To be checked by lux:* the addresses are ike's reading of each
+  site; komica's and xdnmb's especially (both move, and komica's boards
+  differ), and whether twitter should be x.com or twitter.com.
+- **Every link out of ike** (outlinks, `"label":[url]`, bare urls) has
+  `class="out"`, and the stylesheet puts ↗ before it. *Not yet:* lux's
+  favicons (Q47).
+- **A meta's comment takes a password**, filled in from this browser's
+  as on the boards, and the comments on a meta's page and a card's page
+  are ticked and retracted (or reported) through `/act` as a board's
+  posts are, which leads back to the meta or the card.
