@@ -4,7 +4,7 @@
 %% (invariant 6); this module is the test's, not ike's.
 -module(ike_strip_stub).
 
--export([start/2, stop/0]).
+-export([start/2, start_tcp/2, stop/0]).
 
 %% Work is a directory for the uploads in flight; Caps are ike-strip's
 %% arguments. Returns the socket's address, for ike's configuration
@@ -27,6 +27,29 @@ start(Work, Caps) ->
     end,
     true = register(?MODULE, Pid),
     Name.
+
+%% the same on tcp, at 127.0.0.1, as a microvm's or a host's stripper is
+%% reached; returns the port
+start_tcp(Work, Caps) ->
+    ok = filelib:ensure_path(Work),
+    Exe = os:find_executable("ike-strip"),
+    true = is_list(Exe),
+    Self = self(),
+    Pid = spawn(fun() ->
+        {ok, Listen} = gen_tcp:listen(0, [
+            binary, {ip, {127, 0, 0, 1}}, {active, false}, {exit_on_close, false}
+        ]),
+        {ok, Port} = inet:port(Listen),
+        Self ! {self(), listening, Port},
+        accept(Listen, Work, [Exe | Caps])
+    end),
+    Port =
+        receive
+            {Pid, listening, P} -> P
+        after 5000 -> error(stub_not_listening)
+        end,
+    true = register(?MODULE, Pid),
+    Port.
 
 stop() ->
     case whereis(?MODULE) of

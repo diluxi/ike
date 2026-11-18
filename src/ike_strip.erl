@@ -1,6 +1,7 @@
-%% The stripper, asked over a unix socket (invariant 6, hazard P1). ike
-%% never runs a decoder: it hands the upload to whatever listens on the
-%% socket, a unit of its own in production, and reads back the stored
+%% The stripper, asked over a socket, unix or tcp (invariant 6, hazard
+%% P1). ike never runs a decoder: it hands the upload to whatever listens
+%% on the socket (a unit of its own, a microvm, a host of its own), and
+%% reads back the stored
 %% bytes and a thumbnail. What comes back is believed no further than it
 %% has to be: the type from a closed set, the sizes within the caps, and
 %% the stored hash is ike's own to compute.
@@ -45,7 +46,7 @@ run(Upload) ->
         false ->
             {no, <<"too-large">>};
         true ->
-            case gen_tcp:connect({local, Path}, 0, [binary, {active, false}], ?TIMEOUT) of
+            case connect(Path) of
                 {ok, Socket} ->
                     try exchange(Socket, Upload, Max) of
                         Answer -> Answer
@@ -56,6 +57,15 @@ run(Upload) ->
                     {error, unavailable}
             end
     end.
+
+%% the stripper where it is: a unix socket on this host, or tcp to a
+%% microvm or a host of its own
+-spec connect(binary() | {tcp, inet:ip_address(), inet:port_number()}) ->
+    {ok, gen_tcp:socket()} | {error, term()}.
+connect(Path) when is_binary(Path) ->
+    gen_tcp:connect({local, Path}, 0, [binary, {active, false}], ?TIMEOUT);
+connect({tcp, Ip, Port}) ->
+    gen_tcp:connect(Ip, Port, [binary, {active, false}, {nodelay, true}], ?TIMEOUT).
 
 -spec exchange(gen_tcp:socket(), binary(), pos_integer()) ->
     {ok, stripped()} | {no, binary()} | {error, unavailable}.

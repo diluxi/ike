@@ -17,6 +17,30 @@ in {
 		inherit (package) tests;
 	} // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
 		module = import ./nix/test.nix { inherit pkgs; };
+		# the stripper on a host of its own, over tcp
+		remote-strip = import ./nix/test-remote.nix { inherit pkgs; };
+		# the microvm: built, not booted (no kvm inside a test's vm)
+		microvm = (pkgs.nixos {
+			imports = [
+				./nix/module.nix
+				./nix/strip-microvm.nix
+				"${pins.microvm}/nixos-modules/host"
+			];
+			boot.loader.grub.enable = false;
+			fileSystems."/".device = "/dev/null";
+			system.stateVersion = "25.05";
+			services.ike = {
+				enable = true;
+				package = package;
+				boards.b = "random";
+				media.origin = "http://media.localhost";
+				oidc = {
+					issuer = "http://127.0.0.1:9";
+					redirectUri = "http://localhost/login/callback";
+				};
+				strip.isolation = "microvm";
+			};
+		}).config.microvm.vms.ike-strip.config.config.microvm.declaredRunner;
 	} // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
 		inherit (package) types;
 	};
@@ -35,4 +59,8 @@ in {
 	};
 
 	module = ./nix/module.nix;
+	# the stripper on a machine of its own: a host (deploying.md) or, with
+	# microvm.nix's host module, a microvm on ike's host
+	stripHost = ./nix/strip-host.nix;
+	stripMicrovm = ./nix/strip-microvm.nix;
 }

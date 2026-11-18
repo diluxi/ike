@@ -81,7 +81,9 @@ font's page shows its text in the thumbnail's place), `phi/front`
 (newest curations and posts), `phi/opencomments` (nobody comments when
 an admin opens the trunk). `phi/cards` (curations are cards;
 `prefix:what` links; outlinks marked; meta comments take a password),
-`phi/svg` (SVG uploads through an allowlist).
+`phi/svg` (SVG uploads through an allowlist). `phi/isolation` (the
+stripper in a microvm now, on a host of its own next month; one
+option, tcp between).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.

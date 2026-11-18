@@ -2,5 +2,9 @@
   "nixpkgs": {
     "url": "https://github.com/nixos/nixpkgs/archive/1d060086d60cb76a40cf37109f979d88a5bd6396.tar.gz",
     "sha256": "0br4sv8vf37pbasihv20kq62cmpxl925x4q40i5nghfvmg07a2ld"
+  },
+  "microvm": {
+    "url": "https://github.com/astro/microvm.nix/archive/194a254693f49af939a2b53d04982bd4b276fdb3.tar.gz",
+    "sha256": "0pbk5vq8z68nqx6n31qbqsxncl8rc9in2ai8lj8jp20bfa9rg64v"
   }
 }

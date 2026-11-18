@@ -10,9 +10,12 @@
 -export_type([oidc/0, limit/0, strip/0]).
 
 %% the stripper's socket, and the caps it was started with: ike reads no
-%% more than max_bytes of an upload, and believes no answer past them
+%% more than max_bytes of an upload, and believes no answer past them.
+%% the socket is a unix socket's path (a unit on ike's host), or an
+%% address and port over tcp (a microvm on a host-only link, or a host of
+%% its own over wireguard), an ip as written, never a name to look up
 -type strip() :: #{
-    socket := binary(),
+    socket := binary() | {tcp, inet:ip_address(), inet:port_number()},
     max_bytes := pos_integer(),
     max_side := pos_integer(),
     max_pixels := pos_integer(),
@@ -189,8 +192,17 @@ strip() ->
     #{
         socket =>
             case Given of
-                #{socket := Path} when is_binary(Path) -> Path;
-                _ -> <<"/run/ike-strip/strip.sock">>
+                #{socket := Path} when is_binary(Path) ->
+                    Path;
+                #{socket := {tcp, Host, Port}} when
+                    is_list(Host), is_integer(Port), Port > 0, Port < 65536
+                ->
+                    case inet:parse_strict_address([C || C <- Host, is_integer(C), C >= 0]) of
+                        {ok, Ip} -> {tcp, Ip, Port};
+                        {error, _} -> error({bad_strip_address, Host})
+                    end;
+                _ ->
+                    <<"/run/ike-strip/strip.sock">>
             end,
         %% stubs for planning's open size caps
         max_bytes => Positive(max_bytes, 20 * 1024 * 1024),

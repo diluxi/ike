@@ -1444,3 +1444,25 @@ lux's model, in lux's words where they are given:
   moves with the stripper to its own VM anyway.
 - *Simplification:* an embedded raster image in an SVG is dropped, not
   kept and stripped.
+
+## Where the stripper runs (lux, 2026-11-18)
+
+- **`services.ike.strip.isolation`:** `sandbox` (a unit on ike's host,
+  as before), `microvm` (now: a microvm on ike's host, a kernel of its
+  own), `remote` (next month: a host of its own over WireGuard). One
+  option apart; deploying.md has the steps for each, the remote one
+  ready to follow.
+- **ike speaks to the stripper over a unix socket or tcp,** the same
+  bytes either way; a tcp address is an ip as written, never a name to
+  look up. `nix/strip-unit.nix` is the one sandboxed instance all three
+  run; `nix/strip-host.nix` serves it over tcp to ike's address alone
+  (the socket's IP list and the firewall both); `nix/strip-microvm.nix`
+  puts that in a microvm on a host-only /30.
+- **New dependency, approved by lux** (option 1): microvm.nix (Astro,
+  astro/microvm.nix, from 2022), pinned in `pins.json`, its host module
+  imported by fog beside ike's.
+- **Tested:** `ike_strip_tcp_SUITE` (ike over tcp, and nothing listening
+  is "not kept, try again"); `checks.remote-strip`, two machines, the
+  stripper on one answering ike's and refusing its own; `checks.microvm`
+  builds the microvm's runner. *Not tested:* booting the microvm, which
+  needs kvm inside the test's vm; its first boot is on ike's host.

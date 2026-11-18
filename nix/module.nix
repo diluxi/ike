@@ -41,7 +41,9 @@
 					janitor => <<${builtins.toJSON cfg.roles.janitor}/utf8>>
 				}},
 				{strip, #{
-					socket => <<"${stripSocket}">>,
+					socket => ${if cfg.strip.isolation == "sandbox"
+						then "<<\"${stripSocket}\">>"
+						else "{tcp, \"${cfg.strip.address}\", ${toString cfg.strip.port}}"},
 					max_bytes => ${toString cfg.strip.maxBytes},
 					max_side => ${toString cfg.strip.maxSide},
 					max_pixels => ${toString cfg.strip.maxPixels},
@@ -315,6 +317,33 @@ in {
 				default = 20;
 				description = "Most files in one upload form.";
 			};
+
+			isolation = lib.mkOption {
+				type = lib.types.enum [ "sandbox" "microvm" "remote" ];
+				default = "sandbox";
+				description = ''
+					Where the stripper runs (hazard P1). "sandbox": a sandboxed
+					unit on ike's host, behind a unix socket. "microvm": in a
+					microvm on ike's host, a kernel of its own, reached over a
+					host-only link (import strip-microvm.nix and microvm.nix's
+					host module). "remote": on a host of its own running
+					strip-host.nix, reached over wireguard at `address`
+					(deploying.md).
+				'';
+			};
+
+			address = lib.mkOption {
+				type = lib.types.str;
+				default = "";
+				example = "10.78.0.2";
+				description = "The stripper's address, an ip, when it is not on ike's host: the microvm's (set by strip-microvm.nix) or the remote host's wireguard one.";
+			};
+
+			port = lib.mkOption {
+				type = lib.types.port;
+				default = 7070;
+				description = "The stripper's port, when it is not on ike's host.";
+			};
 		};
 
 		caddy = {
@@ -426,8 +455,10 @@ in {
 
 		# hazard P1: every upload is stripped by a process of its own, one
 		# per connection, that can reach nothing and change nothing but
-		# its scratch directory, within limits; ike only holds the socket
-		systemd.sockets.ike-strip = {
+		# its scratch directory, within limits; ike only holds the socket.
+		# here when it runs on ike's host; else it is the microvm's or the
+		# remote host's (strip-unit.nix in either)
+		systemd.sockets.ike-strip = lib.mkIf (cfg.strip.isolation == "sandbox") {
 			description = "ike's stripper";
 			wantedBy = [ "sockets.target" ];
 			listenStreams = [ stripSocket ];
@@ -440,52 +471,21 @@ in {
 			};
 		};
 
-		systemd.services."ike-strip@" = {
-			description = "ike's stripper, for one upload";
-			serviceConfig = {
-				ExecStart = "${strip}/bin/ike-strip ${toString cfg.strip.maxBytes} ${toString cfg.strip.maxSide} ${toString cfg.strip.maxPixels} ${toString cfg.strip.thumb} ${toString cfg.strip.maxSeconds}";
-				StandardInput = "socket";
-				StandardOutput = "socket";
-				StandardError = "journal";
-				DynamicUser = true;
-				PrivateNetwork = true;
-				IPAddressDeny = "any";
-				RestrictAddressFamilies = "none";
-				PrivateTmp = true;
-				PrivateDevices = true;
-				PrivateUsers = true;
-				ProtectSystem = "strict";
-				ProtectHome = true;
-				ProtectProc = "invisible";
-				ProcSubset = "pid";
-				ProtectClock = true;
-				ProtectHostname = true;
-				ProtectKernelLogs = true;
-				ProtectKernelModules = true;
-				ProtectKernelTunables = true;
-				ProtectControlGroups = true;
-				NoNewPrivileges = true;
-				LockPersonality = true;
-				MemoryDenyWriteExecute = true;
-				RestrictNamespaces = true;
-				RestrictRealtime = true;
-				RestrictSUIDSGID = true;
-				CapabilityBoundingSet = "";
-				SystemCallArchitectures = "native";
-				SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
-				UMask = "0077";
-				MemoryMax = "1G";
-				CPUQuota = "100%";
-				TasksMax = 32;
-				RuntimeMaxSec = 60;
-			};
-		};
+		systemd.services."ike-strip@" = lib.mkIf (cfg.strip.isolation == "sandbox") (import ./strip-unit.nix {
+			inherit strip;
+			inherit (cfg.strip) maxBytes maxSide maxPixels thumb maxSeconds;
+		});
+
+		assertions = [{
+			assertion = cfg.strip.isolation == "sandbox" || cfg.strip.address != "";
+			message = "services.ike.strip.address: where the stripper answers, for isolation \"${cfg.strip.isolation}\".";
+		}];
 
 		systemd.services.ike = {
 			description = "ike";
 			wantedBy = [ "multi-user.target" ];
-			after = [ "network.target" "ike-strip.socket" ];
-			wants = [ "ike-strip.socket" ];
+			after = [ "network.target" ] ++ lib.optional (cfg.strip.isolation == "sandbox") "ike-strip.socket";
+			wants = lib.optional (cfg.strip.isolation == "sandbox") "ike-strip.socket";
 			environment = {
 				HOME = "/var/lib/ike";
 				# a crash dump holds whatever was in memory (hazard N5)
