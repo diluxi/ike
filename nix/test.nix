@@ -21,6 +21,7 @@
 				hostName = "http://localhost";
 			};
 			media.origin = "http://media.localhost";
+			fetch.enable = true;
 		};
 		# to ask the stripper's socket directly, with a fixture
 		environment.systemPackages = [ pkgs.socat ];

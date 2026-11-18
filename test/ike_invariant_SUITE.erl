@@ -22,7 +22,7 @@
     inv04_text_is_escaped/1,
     inv05_no_user_bytes_on_the_main_origin/1,
     inv06_no_decoder_in_the_vm/1,
-    inv07_tripwire_no_fetcher/1,
+    inv07_fetcher_reaches_public_addresses_only/1,
     inv08_purge_leaves_nothing/1,
     inv09_reachability_view_is_complete/1,
     inv10_private_metas_are_their_owners_and_moderators/1,
@@ -37,7 +37,7 @@ all() ->
         inv04_text_is_escaped,
         inv05_no_user_bytes_on_the_main_origin,
         inv06_no_decoder_in_the_vm,
-        inv07_tripwire_no_fetcher,
+        inv07_fetcher_reaches_public_addresses_only,
         inv08_purge_leaves_nothing,
         inv09_reachability_view_is_complete,
         inv10_private_metas_are_their_owners_and_moderators,
@@ -826,15 +826,20 @@ inv06_no_decoder_in_the_vm(Config) ->
 
 %% 7. The fetcher never connects to a non-public address.
 %%
-%% TRIPWIRE. There is no fetcher. The one module that connects out is the
-%% oidc client, and only to the issuer the operator configured, never to
-%% anything a user wrote. When a fetcher arrives this fails, and is
-%% replaced by a test of its address checks.
-inv07_tripwire_no_fetcher(Config) ->
+%% The fetcher (fetch/ike-fetch) is a unit of its own, and ike only ever
+%% speaks to its socket. From inside ike: the modules that connect out are
+%% the oidc client (to the issuer the operator configured), the stripper's
+%% and the fetcher's (to sockets the operator named), and no other; and a
+%% post full of links makes nobody reach the canary. From outside: the
+%% built fetcher, run as its unit would, against a stand-in for X whose
+%% tweets name a link-local address, a private one, a host not X's, a
+%% canary's, or redirect to it: each is refused, and the canary counts no
+%% visit. The stand-in itself, a private address like any other, is
+%% reached only when the test-only allowance says so (the module never
+%% sets it; the VM test checks the unit's IP deny list).
+inv07_fetcher_reaches_public_addresses_only(Config) ->
     Connecting = [httpc, gen_tcp, gen_udp, gen_sctp, ssl, socket, inet_res, ftp, tftp, ssh],
-    %% ike_strip speaks to the stripper's unix socket, named by the
-    %% operator, and to nothing a user wrote
-    [ike_oidc, ike_strip] = lists:usort([
+    [ike_fetch, ike_oidc, ike_strip] = lists:usort([
         Mod
      || {{Mod, _, _}, {M, _, _}} <- ?config(calls, Config), lists:member(M, Connecting)
     ]),
@@ -865,7 +870,53 @@ inv07_tripwire_no_fetcher(Config) ->
     {ok, {{_, 200, _}, _, _}} = httpc:request(
         get, {binary_to_list(Canary) ++ "self", []}, [{ssl, [{verify, verify_none}]}], []
     ),
-    true = ike_mock_idp:hits() =:= Hits + 1.
+    true = ike_mock_idp:hits() =:= Hits + 1,
+    %% the fetcher itself
+    Png = read(?config(data_dir, Config), "base.png"),
+    ok = ike_fake_x:start(Png),
+    try
+        Port = integer_to_list(ike_fake_x:port()),
+        CanaryPort = integer_to_list(ike_fake_x:canary_port()),
+        Twitter = "IKE_FETCH_TWITTER=http://127.0.0.1:" ++ Port,
+        Allow = "IKE_FETCH_ALLOW=127.0.0.1:" ++ Port,
+        Tweet = fun(Id) -> "https://x.com/an_artist/status/" ++ Id end,
+        %% the allowance works: the stand-in's tweet is brought
+        <<"ok ", _/binary>> = fetched([Twitter, Allow], Tweet("1")),
+        %% what a tweet names that is not public, or not X's: not reached
+        [
+            <<"no not-allowed\n">> = fetched([Twitter, Allow], Tweet(Id))
+         || Id <- ["2", "3", "4", "5", "6"]
+        ],
+        %% without it, the stand-in is a private address like any other
+        <<"no not-allowed\n">> = fetched([Twitter], Tweet("1")),
+        %% and a link that is no site's is not followed at all
+        <<"no unknown-site\n">> = fetched(
+            [Twitter, Allow], "http://127.0.0.1:" ++ CanaryPort ++ "/x"
+        ),
+        <<"no unknown-site\n">> = fetched([], "http://169.254.169.254/latest/meta-data/"),
+        0 = ike_fake_x:hits()
+    after
+        ike_fake_x:stop()
+    end.
+
+%% the built fetcher, as its unit runs it: the link on stdin, with the
+%% environment given
+fetched(Env, Link) ->
+    Exe = os:find_executable("ike-fetch"),
+    true = is_list(Exe),
+    list_to_binary(
+        os:cmd(
+            lists:flatten([
+                "printf '%s\\n' ",
+                quote(Link),
+                " | env -i PATH=\"$PATH\" ",
+                lists:join(" ", [quote(E) || E <- Env]),
+                " ",
+                quote(Exe),
+                " 2000000 | head -c 200"
+            ])
+        )
+    ).
 
 %% 8. Purge leaves no row, file, thumbnail, static page or reverse link
 %% referencing the content, except the mod-log entry (see G5).
@@ -2015,6 +2066,7 @@ known_routes() ->
         [<<"mod">>, <<"board">>, board],
         [<<"mod">>, <<"account">>, account],
         [<<"upload">>],
+        [<<"upload">>, <<"fetch">>],
         [<<"account">>],
         '_'
     ]).

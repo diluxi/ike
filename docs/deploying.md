@@ -175,6 +175,20 @@ every page again. Sessions outlive a restart but not a restore, since
 snapshots are taken without them; accounts do. CI does this on
 every change (`ike_backup_SUITE`).
 
+## The fetcher
+
+`services.ike.fetch.enable = true;` lets accounts upload from a link (a
+tweet, for now). A socket unit `ike-fetch.socket` at
+`/run/ike-fetch/fetch.sock` (group `ike`), and `ike-fetch@.service`, one
+sandboxed instance per link, allowed out to public addresses and denied
+loopback, private, link-local, CGNAT, ULA and reserved ranges by systemd
+(and by its own checks). Names are resolved through nscd (NixOS's
+default); without nscd and with a local resolver, give its address in
+`services.ike.fetch.resolvers`. It reaches x.com's hosts over https:
+fog's egress rules, if any, must let it.
+
+To check it on a host, by hand: `test/live/x-tweet.sh` (in `nix-shell`).
+
 ## Where the stripper runs
 
 Every upload is decoded by the stripper, and nothing else of ike's ever

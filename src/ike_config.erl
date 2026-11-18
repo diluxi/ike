@@ -5,7 +5,7 @@
 -export([backup_dir/0, backup_seconds/0, backup_keep/0, boards/0]).
 -export([board_name/1, anonymous_names/0, limit/0, roles/0]).
 -export([assets_dir/0, media_dir/0, strip/0, media_origin/0, media_host/0, staged_seconds/0]).
--export([images/0, booru_at_once/0, wiki_history/0, anonymous_uploads/0]).
+-export([images/0, booru_at_once/0, wiki_history/0, anonymous_uploads/0, fetch/0]).
 
 -export_type([oidc/0, limit/0, strip/0]).
 
@@ -174,6 +174,14 @@ media_dir() ->
     case application:get_env(ike, media_dir) of
         {ok, Dir} when is_binary(Dir) -> Dir;
         _ -> <<(data_dir())/binary, "/media">>
+    end.
+
+%% the fetcher's socket, and whether there is one: off unless asked
+-spec fetch() -> #{socket := binary(), enabled := boolean()}.
+fetch() ->
+    case application:get_env(ike, fetch) of
+        {ok, #{socket := Path}} when is_binary(Path) -> #{socket => Path, enabled => true};
+        _ -> #{socket => <<"/run/ike-fetch/fetch.sock">>, enabled => false}
     end.
 
 -spec strip() -> strip().

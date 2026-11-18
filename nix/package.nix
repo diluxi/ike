@@ -13,6 +13,7 @@
 
 	elp = erlang-language-platform.override { inherit beamPackages; };
 	strip = callPackage ./strip.nix {};
+	fetch = callPackage ./fetch.nix {};
 	# elp carries eqwalizer as a native image, unpacks it into $TMPDIR and
 	# runs it there. the image asks for /lib64's loader, which a nix sandbox
 	# doesn't have and patchelf can't fix inside another binary. so the
@@ -51,13 +52,13 @@
 		buildPlugins = [ beamPackages.pc ];
 
 		passthru = {
-			inherit beamPackages checkouts elp strip;
+			inherit beamPackages checkouts elp strip fetch;
 			# the release's tests, against the same sources and dependencies
 			tests = ike.overrideAttrs (old: {
 				pname = "ike-tests";
 				# invariant 11 runs the stripper, and exiftool reads what it left
 				# and ffmpeg makes the video corpus's laden copies
-				nativeBuildInputs = old.nativeBuildInputs ++ [ beamPackages.erlfmt strip exiftool ffmpeg-headless ];
+				nativeBuildInputs = old.nativeBuildInputs ++ [ beamPackages.erlfmt strip fetch exiftool ffmpeg-headless ];
 				buildPhase = ''
 					runHook preBuild
 					erlfmt --check rebar.config config/*.config src/* test/*.erl

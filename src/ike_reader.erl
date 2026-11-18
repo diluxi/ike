@@ -41,7 +41,10 @@
     commentary := [{binary(), binary()}],
     %% its comment thread, and the curation made of it, if shown
     thread := pos_integer() | none,
-    curation := pos_integer() | none
+    curation := pos_integer() | none,
+    %% where it was fetched from, who made it, and what they said there
+    source :=
+        #{source := binary(), artist := binary(), artist_url := binary(), said := binary()} | none
 }.
 
 %% a staged upload as its uploader is shown it
@@ -389,7 +392,11 @@ metas_of([
         Axes,
         Said,
         Thread,
-        Curation
+        Curation,
+        Source,
+        Artist,
+        ArtistUrl,
+        SourceSaid
     ]
     | Rows
 ]) when
@@ -412,7 +419,8 @@ metas_of([
     (is_binary(Axes) orelse Axes =:= undefined),
     (is_binary(Said) orelse Said =:= undefined),
     (is_integer(Thread) orelse Thread =:= undefined),
-    (is_integer(Curation) orelse Curation =:= undefined)
+    (is_integer(Curation) orelse Curation =:= undefined),
+    (is_binary(Source) orelse Source =:= undefined)
 ->
     [
         #{
@@ -458,6 +466,15 @@ metas_of([
                 case Curation of
                     C when is_integer(C), C > 0 -> C;
                     _ -> none
+                end,
+            source =>
+                case {Source, Artist, ArtistUrl, SourceSaid} of
+                    {S, A, U, Said1} when
+                        is_binary(S), is_binary(A), is_binary(U), is_binary(Said1)
+                    ->
+                        #{source => S, artist => A, artist_url => U, said => Said1};
+                    _ ->
+                        none
                 end
         }
         | metas_of(Rows)
@@ -799,7 +816,8 @@ handle_call({metas, {Actor, Moderator}, Which}, _From, Conn) when
         " (SELECT min(e.id) FROM shown_entry e WHERE e.asset = m.asset),"
         " x.family, x.axes, (SELECT u.commentary FROM upload u WHERE u.asset = m.asset"
         " AND u.actor = m.owner ORDER BY u.id DESC LIMIT 1), m.thread,"
-        " (SELECT e.id FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.meta = m.id)"
+        " (SELECT e.id FROM booru b JOIN shown_entry e ON e.id = b.id WHERE b.meta = m.id),"
+        " m.source, m.artist, m.artist_url, m.said"
         " FROM meta m JOIN asset x ON x.hash = m.asset JOIN actor a ON a.id = m.owner"
         " WHERE ((m.state = 0 AND (m.private = 0 OR m.owner = ?1))"
         " OR (m.state = 2 AND m.owner = ?1) OR ?2 = 1)"

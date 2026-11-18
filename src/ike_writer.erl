@@ -130,7 +130,11 @@ post(#{actor := Actor, thread := Thread, body := Body} = Post) ->
     original := binary(),
     stripped := ike_strip:stripped(),
     private => boolean(),
-    signed => boolean()
+    signed => boolean(),
+    %% fetched from a link: what the fetcher said of it
+    source => #{
+        source := binary(), artist := binary(), artist_url := binary(), commentary := binary()
+    }
 }) ->
     {ok, Upload :: pos_integer()} | error().
 upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
@@ -155,13 +159,37 @@ upload(#{actor := Actor, original := Original, stripped := Stripped} = Given) ->
             _ ->
                 {undefined, undefined, undefined}
         end,
+    Source =
+        case Given of
+            #{source := #{source := S, artist := A, artist_url := U, commentary := C}} ->
+                {S, A, U, C};
+            _ ->
+                undefined
+        end,
     Request =
         {upload, ike_id:to_integer(Actor), crypto:hash(sha256, Original), atom_to_binary(Type), W,
-            H, Stored, Thumb, Traits, Private, Signed, Font},
+            H, Stored, Thumb, Traits, Private, Signed, Font, Source},
     case call(Request) of
         {ok, Id} when is_integer(Id), Id > 0 -> {ok, Id};
         Other -> failed(Other)
     end.
+
+%% where a fetched upload came from, on the uploader's meta of it (or
+%% the public one), unless that already says
+-spec sourced(ike_db:writer(), binary(), integer(), term()) -> ok | error().
+sourced(Conn, Hash, Actor, {Source, Artist, ArtistUrl, Said}) when
+    is_binary(Source), is_binary(Artist), is_binary(ArtistUrl), is_binary(Said)
+->
+    Sql = <<
+        "UPDATE meta SET source = ?3, artist = ?4, artist_url = ?5, said = ?6"
+        " WHERE asset = ?1 AND (owner = ?2 OR private = 0) AND source IS NULL"
+    >>,
+    case ike_db:q(Conn, Sql, [{blob, Hash}, Actor, Source, Artist, ArtistUrl, Said]) of
+        {ok, _} -> ok;
+        {error, _} = Error -> Error
+    end;
+sourced(_Conn, _Hash, _Actor, _) ->
+    ok.
 
 %% a font's axes as kept, one a line: tag, least, default, most
 -spec axes([{binary(), float(), float(), float()}]) -> binary().
@@ -763,7 +791,7 @@ handle_call({moderate, By, Role, Kind, Target, Reason}, _From, Conn) when
     {reply, Reply, Conn};
 handle_call(
     {upload, Actor, Original, Type, W, H, Stored, Thumb, Traits, Private0, Signed,
-        {Family, Axes, Commentary}},
+        {Family, Axes, Commentary}, Source},
     _From,
     Conn
 ) when
@@ -840,10 +868,17 @@ handle_call(
                                                 ])
                                             }
                                         of
-                                            {{ok, [[Id]]}, {ok, _}} -> {ok, {Id, []}};
-                                            {{ok, Other}, {ok, _}} -> {error, {unexpected, Other}};
-                                            {{error, _} = Error, _} -> Error;
-                                            {_, {error, _} = Error} -> Error
+                                            {{ok, [[Id]]}, {ok, _}} ->
+                                                case sourced(Conn, Hash, Actor, Source) of
+                                                    ok -> {ok, {Id, []}};
+                                                    {error, _} = Error -> Error
+                                                end;
+                                            {{ok, Other}, {ok, _}} ->
+                                                {error, {unexpected, Other}};
+                                            {{error, _} = Error, _} ->
+                                                Error;
+                                            {_, {error, _} = Error} ->
+                                                Error
                                         end;
                                     {error, _} = Error ->
                                         Error
@@ -1912,9 +1947,14 @@ boxed(Box) ->
 -spec curated(ike_db:writer(), integer(), integer(), integer(), [[binary()]], integer()) ->
     {ok, {integer(), [term()]}} | error().
 curated(Conn, Meta, Account, Shown, Box, Time) ->
-    Sql = <<"SELECT asset, private, state, thread, owner, signed FROM meta WHERE id = ?1">>,
+    Sql = <<
+        "SELECT asset, private, state, thread, owner, signed, coalesce(said, '') FROM meta"
+        " WHERE id = ?1"
+    >>,
     case ike_db:q(Conn, Sql, [Meta]) of
-        {ok, [[Asset, 0, 0, Thread1, Owner, Signed]]} when is_binary(Asset) ->
+        {ok, [[Asset, 0, 0, Thread1, Owner, Signed, Said]]} when
+            is_binary(Asset), is_binary(Said)
+        ->
             Thread0 = maybe_integer(Thread1),
             Has = <<"SELECT booru FROM booru_version WHERE asset = ?1 LIMIT 1">>,
             case ike_db:q(Conn, Has, [{blob, Asset}]) of
@@ -1925,7 +1965,8 @@ curated(Conn, Meta, Account, Shown, Box, Time) ->
                         {ok, [Entry]} ->
                             case boxed_tags(Conn, Entry, Account, Box, Time) of
                                 ok ->
-                                    Body = ike_tag:revision(Box, <<>>),
+                                    %% the source's own words, as Danbooru copies them
+                                    Body = ike_tag:revision(Box, Said),
                                     case revision(Conn, Thread0, Shown, Body, Time) of
                                         {ok, {Thread, Threads}} ->
                                             Steps = [

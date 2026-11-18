@@ -9,7 +9,7 @@
 -module(ike_limit).
 -behaviour(gen_server).
 
--export([start_link/0, charge/2, board/1, retraction/1]).
+-export([start_link/0, charge/2, board/1, retraction/1, fetch/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(TABLE, ?MODULE).
@@ -47,6 +47,12 @@ board(Name) ->
 -spec retraction(integer()) -> ok | limited.
 retraction(Post) ->
     spend({retraction, Post}, 10, 3600).
+
+%% one more link fetched by this account: thirty an hour (hazard N7: a
+%% fetch is a request ike makes on someone's word)
+-spec fetch(integer()) -> ok | limited.
+fetch(Account) ->
+    spend({fetch, Account}, 30, 3600).
 
 %% at most Max in each stretch of Period seconds
 -spec spend(term(), pos_integer(), pos_integer()) -> ok | limited.

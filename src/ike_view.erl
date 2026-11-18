@@ -948,12 +948,12 @@ act(Action, Csrf, Kinds, Fields) ->
 
 %% the uploads page: the form, what was refused just now, and what waits
 -spec upload(
-    {Csrf :: binary(), Name :: binary() | none},
+    {Csrf :: binary(), Name :: binary() | none, Fetch :: boolean()},
     Refused :: [binary()],
     [#{atom() => term()}],
     [{pos_integer(), pos_integer()}]
 ) -> ike_html:html().
-upload({Csrf, Name}, Refused, Staged, Posted) ->
+upload({Csrf, Name, Fetch}, Refused, Staged, Posted) ->
     Sign =
         case Name of
             none ->
@@ -1030,16 +1030,86 @@ upload({Csrf, Name}, Refused, Staged, Posted) ->
                 ])
             ]
         ),
-        ike_html:el(ul, [ike_html:el(li, [ike_html:text(R)]) || R <- Refused]),
-        ike_html:el(ul, [staged(S) || S <- Staged]),
-        %% and those posted, wherever their posts are now
-        ike_html:el(ul, [
-            ike_html:el(li, [
-                ike_html:text(<<"upload ", (integer_to_binary(U))/binary, ", posted in ">>),
-                permalink(P, <<>>)
-            ])
-         || {U, P} <- Posted
-        ])
+        ike_html:el(ul, [ike_html:el(li, [ike_html:text(R)]) || R <- Refused])
+        | [fetch_form(Csrf, Name) || Fetch] ++
+            [
+                ike_html:el(ul, [staged(S) || S <- Staged]),
+                %% and those posted, wherever their posts are now
+                ike_html:el(ul, [
+                    ike_html:el(li, [
+                        ike_html:text(<<"upload ", (integer_to_binary(U))/binary, ", posted in ">>),
+                        permalink(P, <<>>)
+                    ])
+                 || {U, P} <- Posted
+                ])
+            ]
+    ]).
+
+%% an upload from a link (lux, as Danbooru's from a source): the fetcher
+%% brings what the link shows, and where it came from goes with it
+-spec fetch_form(binary(), binary() | none) -> ike_html:html().
+fetch_form(Csrf, Name) ->
+    ike_html:el(form, [{method, <<"post">>}, {action, <<"/upload/fetch">>}], [
+        ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+        ike_html:el(p, [
+            ike_html:el(label, [{for, <<"link">>}], [
+                ike_html:text(<<"or from a link (a tweet, for now) ">>)
+            ]),
+            ike_html:el(
+                input,
+                [
+                    {type, <<"url">>},
+                    {id, <<"link">>},
+                    {name, <<"link">>},
+                    {maxlength, <<"2000">>},
+                    required
+                ],
+                []
+            )
+        ]),
+        ike_html:el(
+            p,
+            [
+                ike_html:el(
+                    input,
+                    [
+                        {type, <<"checkbox">>},
+                        {id, <<"link-private">>},
+                        {name, <<"private">>},
+                        {value, <<"1">>}
+                    ],
+                    []
+                ),
+                ike_html:text(<<" ">>),
+                ike_html:el(label, [{for, <<"link-private">>}], [ike_html:text(<<"private">>)])
+            ] ++
+                case Name of
+                    none ->
+                        [];
+                    _ ->
+                        [
+                            ike_html:text(<<" ">>),
+                            ike_html:el(
+                                input,
+                                [
+                                    {type, <<"checkbox">>},
+                                    {id, <<"link-signed">>},
+                                    {name, <<"signed">>},
+                                    {value, <<"1">>}
+                                ],
+                                []
+                            ),
+                            ike_html:text(<<" ">>),
+                            ike_html:el(label, [{for, <<"link-signed">>}], [
+                                ike_html:text(<<"sign as ", Name/binary>>)
+                            ])
+                        ]
+                end ++
+                [
+                    ike_html:text(<<" ">>),
+                    ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"fetch">>)])
+                ]
+        )
     ]).
 
 -spec staged(#{atom() => term()}) -> ike_html:html().
@@ -1143,8 +1213,42 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         family := Family,
         axes := Axes,
         commentary := Said,
-        entry := Entry
+        entry := Entry,
+        source := Source
     } = Meta,
+    %% where it was fetched from, who made it (outlinks, as written in
+    %% ikext), and what they said there
+    Fetched =
+        case Source of
+            none ->
+                [];
+            #{source := From, artist := Artist, artist_url := ArtistUrl, said := SourceSaid} ->
+                Out = fun(Href, Text) ->
+                    ike_html:el(
+                        a, [{class, <<"out">>}, {href, Href}, {rel, <<"nofollow noreferrer">>}], [
+                            ike_html:text(Text)
+                        ]
+                    )
+                end,
+                [
+                    ike_html:el(p, [ike_html:text(<<"source ">>), Out(From, From)]),
+                    ike_html:el(p, [ike_html:text(<<"artist ">>), Out(ArtistUrl, Artist)])
+                ] ++
+                    case SourceSaid of
+                        <<>> ->
+                            [];
+                        _ ->
+                            [
+                                ike_html:el(
+                                    'div',
+                                    [{class, <<"said">>}],
+                                    blocks(
+                                        ike_markup:parse(SourceSaid), ike_reader:links(SourceSaid)
+                                    )
+                                )
+                            ]
+                    end
+        end,
     Title = <<"meta ", (number(Id))/binary>>,
     Here = meta_path(Id),
     Sign = fun(Name) ->
@@ -1365,7 +1469,8 @@ meta(Meta, Image, Posts, #{csrf := Csrf, moderator := Moderator, name := Viewer}
         | case Family of
             none -> figure(Image);
             _ -> specimen(Image, Axes)
-        end ++ [ike_html:el(table, Rows)] ++ commentary(Said) ++ Shown ++ Owned ++ Curate ++ Talk ++
+        end ++ Fetched ++ [ike_html:el(table, Rows)] ++ commentary(Said) ++ Shown ++ Owned ++ Curate ++
+            Talk ++
             [
                 ike_html:el(p, [
                     anchor(<<"/mod/meta/", (integer_to_binary(Id))/binary>>, <<"moderate">>)

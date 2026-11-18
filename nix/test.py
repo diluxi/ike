@@ -60,6 +60,20 @@ machine.succeed("echo not-an-image | socat -t 60 - UNIX-CONNECT:/run/ike-strip/s
 for prop in ["PrivateNetwork=yes", "DynamicUser=yes", "NoNewPrivileges=yes", "MemoryDenyWriteExecute=yes"]:
 	machine.succeed(f"systemctl show -p {prop.split('=')[0]} ike-strip@probe.service | grep -x '{prop}'")
 machine.succeed("systemctl cat ike-strip@probe.service | grep -x 'RestrictAddressFamilies=none'")
+
+# the fetcher (invariant 7): its socket ike's alone, its unit denied the
+# private ranges by systemd, and never given the suites' allowances
+machine.wait_for_unit("ike-fetch.socket")
+machine.succeed("stat -c '%G %a' /run/ike-fetch/fetch.sock | grep -x 'ike 660'")
+deny = machine.succeed("systemctl show -p IPAddressDeny ike-fetch@probe.service")
+for net in ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "::1/128"]:
+	assert net in deny, f"{net} not denied: {deny}"
+machine.fail("systemctl cat ike-fetch@probe.service | grep IKE_FETCH")
+machine.succeed("grep -F 'fetch, #{socket => <<\"/run/ike-fetch/fetch.sock\">>}' $(systemctl show -p ExecStart ike.service | grep -o '/nix/store/[^ ]*sys.config' | head -n1)")
+# with no network to reach, a tweet is refused, and a link to a private
+# address is no site's at all
+machine.succeed("echo https://x.com/a/status/1 | su -s /bin/sh ike -c \"$(command -v socat) -t 60 - UNIX-CONNECT:/run/ike-fetch/fetch.sock\" | grep -E '^no (unresolved|unreachable|not-allowed)'")
+machine.succeed("echo http://127.0.0.1:8080/x | su -s /bin/sh ike -c \"$(command -v socat) -t 60 - UNIX-CONNECT:/run/ike-fetch/fetch.sock\" | grep -x 'no unknown-site'")
 # the upload form says how to log in; the media origin has nothing but
 # what a signed link names, and pages may show images from it only
 machine.succeed("curl -fsS http://localhost/upload | grep -q 'log in'")

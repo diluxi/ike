@@ -1466,3 +1466,48 @@ lux's model, in lux's words where they are given:
   stripper on one answering ike's and refusing its own; `checks.microvm`
   builds the microvm's runner. *Not tested:* booting the microvm, which
   needs kvm inside the test's vm; its first boot is on ike's host.
+
+## The fetcher, and tweets (lux, 2026-11-18)
+
+- **Uploads from a link,** by accounts only, from `/upload` ("or from a
+  link"), thirty an hour each (hazard N7). The link goes to the fetcher;
+  each file it brings is stripped as any upload (invariant 6) and kept as
+  the account's, private or signed as asked; its meta gets where it came
+  from, who made it, and what they said there (`meta.source`, `artist`,
+  `artist_url`, `said`, migration 0028), shown on its page; the card made
+  of it takes the words as its first commentary, as Danbooru copies an
+  artist's commentary. One file leads to its meta.
+- **The fetcher** (`fetch/ike-fetch`, Python's standard library, no new
+  dependency) is a unit of its own, once per link, behind a unix socket
+  (`services.ike.fetch.enable`, off unless asked). Invariant 7 in code: it
+  resolves each name itself and refuses one with any address that is not
+  public (loopback, private, link-local, CGNAT, ULA, multicast,
+  reserved), connects to the address it checked (no second lookup),
+  checks again at every redirect (three at most), talks https only and
+  only to a site's own hosts (X's: the embeds' endpoint, `pbs.twimg.com`,
+  `video.twimg.com`), and caps sizes (the stripper's) and times (20 s a
+  request, 90 s a link). And systemd: the unit is denied those ranges by
+  address too, and reaches DNS through nscd's socket.
+- **Sandbox, for now** (lux: the microvm does not run on a CCX13): ike is
+  accounts only, so the links are accounts'; the fetcher's own checks and
+  systemd's deny list are what keep invariant 7, wherever it runs. A host
+  of its own (deploying.md's `remote`) would add its own address to the
+  world and another machine between; the same socket protocol makes that
+  a move, not a rewrite.
+- **Tweets, as Danbooru reads them:** the original image (`name=orig`)
+  or the best mp4; the source as `https://x.com/<user>/status/<id>`; the
+  author's name and page; the text as ikext commentary, its short links
+  given their addresses back, hashtags and mentions made links (they do
+  lead to twitter here), the media's own link dropped. Read from the
+  endpoint X's own embeds read (`cdn.syndication.twimg.com/tweet-result`),
+  which needs no account. *Not reached that way:* protected tweets, and
+  some marked sensitive; Danbooru's way (X's GraphQL with an account's
+  cookies) would reach them, behind the same fetcher, with the account
+  lux offered (Q47).
+- **Tested:** `ike_fetch_SUITE` against a stand-in for X; invariant 7's
+  test (no longer a tripwire) runs the built fetcher at a stand-in whose
+  tweets name a link-local, a private, a foreign and a canary's address,
+  or redirect to it, and the canary counts no visit; the VM test reads
+  the unit's deny list; and `test/live/x-tweet.sh`, by hand on theorem,
+  fetches lux's tweet from X itself and checks its words, author and
+  image to the byte (it passed 2026-11-18).

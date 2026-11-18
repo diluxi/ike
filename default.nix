@@ -52,6 +52,7 @@ in {
 			package.beamPackages.erlfmt
 			package.elp
 			package.strip
+			package.fetch
 			pkgs.exiftool
 			pkgs.ffmpeg-headless
 			pkgs.sqlite

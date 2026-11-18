@@ -16,6 +16,8 @@
 	# the stripper's socket; a unit behind it runs once per upload
 	stripSocket = "/run/ike-strip/strip.sock";
 	strip = cfg.package.strip;
+	fetch = cfg.package.fetch;
+	fetchSocket = "/run/ike-fetch/fetch.sock";
 	# a whole upload form: every file at its cap, and room for the rest
 	uploadBytes = cfg.strip.maxBytes * cfg.strip.files + 1048576;
 
@@ -40,6 +42,7 @@
 					moderator => <<${builtins.toJSON cfg.roles.moderator}/utf8>>,
 					janitor => <<${builtins.toJSON cfg.roles.janitor}/utf8>>
 				}},
+				${lib.optionalString cfg.fetch.enable "{fetch, #{socket => <<\"${fetchSocket}\">>}},"}
 				{strip, #{
 					socket => ${if cfg.strip.isolation == "sandbox"
 						then "<<\"${stripSocket}\">>"
@@ -346,6 +349,27 @@ in {
 			};
 		};
 
+		fetch = {
+			enable = lib.mkEnableOption ''
+				uploads from a link (a tweet, for now), by accounts: fetched by
+				a unit of its own (fetch/ike-fetch) that resolves names itself,
+				reaches public addresses only (invariant 7) and is denied the
+				rest by systemd too
+			'';
+
+			resolvers = lib.mkOption {
+				type = lib.types.listOf lib.types.str;
+				default = [ ];
+				example = [ "127.0.0.53" ];
+				description = ''
+					Addresses the fetcher may reach for DNS, beside every public
+					one. None is needed while names are looked up through nscd
+					(NixOS's default); with a local resolver and no nscd, its
+					address.
+				'';
+			};
+		};
+
 		caddy = {
 			enable = lib.mkEnableOption ''
 				a Caddy virtual host for ike: the rendered pages straight from
@@ -480,6 +504,79 @@ in {
 			assertion = cfg.strip.isolation == "sandbox" || cfg.strip.address != "";
 			message = "services.ike.strip.address: where the stripper answers, for isolation \"${cfg.strip.isolation}\".";
 		}];
+
+		# invariant 7, hazards N1, N7: the fetcher, once per link, reaching
+		# public addresses only. the fetcher refuses the rest itself; here
+		# systemd refuses it too, by address
+		systemd.sockets.ike-fetch = lib.mkIf cfg.fetch.enable {
+			description = "ike's fetcher";
+			wantedBy = [ "sockets.target" ];
+			listenStreams = [ fetchSocket ];
+			socketConfig = {
+				Accept = true;
+				SocketUser = "root";
+				SocketGroup = "ike";
+				SocketMode = "0660";
+				MaxConnections = 4;
+			};
+		};
+
+		systemd.services."ike-fetch@" = lib.mkIf cfg.fetch.enable {
+			description = "ike's fetcher, for one link";
+			environment.SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt";
+			serviceConfig = {
+				ExecStart = "${fetch}/bin/ike-fetch ${toString cfg.strip.maxBytes}";
+				StandardInput = "socket";
+				StandardOutput = "socket";
+				StandardError = "journal";
+				DynamicUser = true;
+				# out to the world, and nowhere near: loopback, private,
+				# link-local, cgnat, ula, multicast, reserved
+				RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+				IPAddressAllow = cfg.fetch.resolvers;
+				IPAddressDeny = [
+					"localhost"
+					"link-local"
+					"multicast"
+					"0.0.0.0/8"
+					"10.0.0.0/8"
+					"100.64.0.0/10"
+					"172.16.0.0/12"
+					"192.0.0.0/24"
+					"192.168.0.0/16"
+					"198.18.0.0/15"
+					"240.0.0.0/4"
+					"::/128"
+					"fc00::/7"
+				];
+				PrivateTmp = true;
+				PrivateDevices = true;
+				ProtectSystem = "strict";
+				ProtectHome = true;
+				ProtectProc = "invisible";
+				ProcSubset = "pid";
+				ProtectClock = true;
+				ProtectHostname = true;
+				ProtectKernelLogs = true;
+				ProtectKernelModules = true;
+				ProtectKernelTunables = true;
+				ProtectControlGroups = true;
+				NoNewPrivileges = true;
+				LockPersonality = true;
+				MemoryDenyWriteExecute = true;
+				RestrictNamespaces = true;
+				RestrictRealtime = true;
+				RestrictSUIDSGID = true;
+				CapabilityBoundingSet = "";
+				SystemCallArchitectures = "native";
+				SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+				UMask = "0077";
+				MemoryMax = "512M";
+				CPUQuota = "50%";
+				TasksMax = 16;
+				RuntimeMaxSec = 120;
+			};
+		};
 
 		systemd.services.ike = {
 			description = "ike";

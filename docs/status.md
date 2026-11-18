@@ -83,7 +83,8 @@ an admin opens the trunk). `phi/cards` (curations are cards;
 `prefix:what` links; outlinks marked; meta comments take a password),
 `phi/svg` (SVG uploads through an allowlist). `phi/isolation` (the
 stripper in a microvm now, on a host of its own next month; one
-option, tcp between).
+option, tcp between). `phi/fetch` (uploads from a link, tweets as
+Danbooru reads them; the fetcher reaches public addresses only, tested).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -98,7 +99,7 @@ option, tcp between).
 
 ## Blocked on lux
 
-- **Q46:** groups, stashed. **Q47:** favicons and the fetcher.
+- **Q46:** groups, stashed. **Q47:** favicons, X's logged-in way, next sites.
 - **Q44:** fonts' loose ends.
 - **Q43:** trashed posts and their owners.
 - **hazards.md:** invariant 10 changed as asked, left uncommitted with

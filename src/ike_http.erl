@@ -68,6 +68,7 @@ dispatch() ->
             {"/login/callback", ike_http_login, callback},
             {"/logout", ike_http_login, logout},
             {"/upload", ike_http_upload, []},
+            {"/upload/fetch", ike_http_fetch, []},
             {"/account", ike_http_account, []},
             {"/mod", ike_http_mod, front},
             {"/mod/post/:post", [{post, int}], ike_http_mod, post},
