@@ -8,7 +8,7 @@
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
 -export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1, trunk/0]).
--export([entry_page/2, tagged/1]).
+-export([entry_page/2, tagged/1, resolved/1, shown/1]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -190,7 +190,7 @@ post(Post) ->
 
 %% entries with every name in Must, none in Not, and for each prefix a
 %% name that starts with it; newest first, at most a hundred
--spec search({[binary()], [binary()], [binary()]}) ->
+-spec search({[ike_tag:typed()], [ike_tag:typed()], [ike_tag:typed()]}) ->
     [
         {
             pos_integer(),
@@ -225,10 +225,40 @@ entry_page(Entry, Query) ->
         _ -> none
     end.
 
-%% whether any card has a tag by this name
+%% whether any card has this tag (kind/name)
 -spec tagged(binary()) -> boolean().
-tagged(Name) ->
-    gen_server:call(?MODULE, {tagged, Name}) =:= true.
+tagged(Word) ->
+    case ike_tag:typed(Word) of
+        {ok, {Kind, Name}} when is_binary(Kind) ->
+            gen_server:call(?MODULE, {tagged, Kind, Name}) =:= true;
+        _ ->
+            false
+    end.
+
+%% tags and pages (kind/name) as they are shown: by their name alone
+%% until another kind has it
+-spec shown([binary()]) -> #{binary() => binary()}.
+shown(Words) ->
+    case gen_server:call(?MODULE, {shown, Words}) of
+        #{} = Shown ->
+            maps:from_list([{K, V} || {K, V} <- maps:to_list(Shown), is_binary(K), is_binary(V)]);
+        _ ->
+            #{}
+    end.
+
+%% the page a name leads to: kind/name is its own; a name alone is the
+%% one page or tag by that name, info's if there is none, and when there
+%% are several, which they are
+-spec resolved(ike_tag:typed()) -> {one, binary()} | {many, [binary()]}.
+resolved({any, Name}) ->
+    case gen_server:call(?MODULE, {resolved, Name}) of
+        {ok, []} -> {one, <<"info/", Name/binary>>};
+        {ok, [[Word]]} when is_binary(Word) -> {one, Word};
+        {ok, Rows} when is_list(Rows) -> {many, [W || [W] <- Rows, is_binary(W)]};
+        _ -> {one, <<"info/", Name/binary>>}
+    end;
+resolved({Kind, _} = Typed) when is_binary(Kind) ->
+    {one, ike_tag:word(Typed)}.
 
 %% the metas a viewer may see, newest first: public ones, their own, and
 %% to a moderator every one
@@ -696,10 +726,20 @@ handle_call({entry_page, Entry, Query}, _From, Conn) when is_integer(Entry), is_
             none -> none
         end,
     {reply, Reply, Conn};
-handle_call({tagged, Name}, _From, Conn) when is_binary(Name) ->
-    Sql =
-        <<"SELECT 1 FROM tag t WHERE t.name = ?1 AND EXISTS (SELECT 1 FROM booru_tag bt WHERE bt.tag = t.id)">>,
-    {reply, ike_db:q(Conn, Sql, [Name]) =:= {ok, [[1]]}, Conn};
+handle_call({tagged, Kind, Name}, _From, Conn) when is_binary(Kind), is_binary(Name) ->
+    Sql = <<
+        "SELECT 1 FROM tag t WHERE t.kind = ?1 AND t.name = ?2"
+        " AND EXISTS (SELECT 1 FROM booru_tag bt WHERE bt.tag = t.id)"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Kind, Name]) =:= {ok, [[1]]}, Conn};
+handle_call({shown, Words}, _From, Conn) when is_list(Words) ->
+    {reply, ike_render:shown(Conn, [W || W <- Words, is_binary(W)]), Conn};
+handle_call({resolved, Name}, _From, Conn) when is_binary(Name) ->
+    Sql = <<
+        "SELECT kind || '/' || name FROM tag WHERE name = ?1"
+        " UNION SELECT name FROM page WHERE bare = ?1 ORDER BY 1"
+    >>,
+    {reply, ike_db:q(Conn, Sql, [Name]), Conn};
 handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
     Reply =
         case ike_db:q(Conn, <<"SELECT locked, log FROM board WHERE name = ?1">>, [Name]) of
@@ -719,32 +759,59 @@ handle_call({staged, Actor}, _From, Conn) when is_integer(Actor) ->
 handle_call({search, {Must, Not, Prefixes}}, _From, Conn) when
     is_list(Must), is_list(Not), is_list(Prefixes)
 ->
-    Has = <<
-        " AND EXISTS (SELECT 1 FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
-        " WHERE bt.booru = e.id AND t.name = ?)"
-    >>,
-    Lacks = <<
-        " AND NOT EXISTS (SELECT 1 FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
-        " WHERE bt.booru = e.id AND t.name = ?)"
-    >>,
-    Starts = <<
-        " AND EXISTS (SELECT 1 FROM booru_tag bt JOIN tag_search s ON s.rowid = bt.tag"
-        " WHERE bt.booru = e.id AND tag_search MATCH ?)"
-    >>,
+    %% a name alone is any kind's (lux: until another kind has it, it is
+    %% the one tag), kind/name that kind's
+    Kinded = fun
+        ({any, _}) -> <<>>;
+        (_) -> <<" AND t.kind = ?">>
+    end,
+    Args = fun
+        ({any, N}) -> [N];
+        ({K, N}) -> [N, K]
+    end,
+    Has = fun(How, T) ->
+        [
+            How,
+            <<
+                " (SELECT 1 FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+                " WHERE bt.booru = e.id AND t.name = ?"
+            >>,
+            Kinded(T),
+            <<")">>
+        ]
+    end,
+    Starts = fun(T) ->
+        [
+            <<
+                " AND EXISTS (SELECT 1 FROM booru_tag bt JOIN tag_search s ON s.rowid = bt.tag"
+                " JOIN tag t ON t.id = bt.tag WHERE bt.booru = e.id AND tag_search MATCH ?"
+            >>,
+            Kinded(T),
+            <<")">>
+        ]
+    end,
     Sql = iolist_to_binary([
         <<
             "SELECT e.id, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0) FROM shown_entry e"
             " LEFT JOIN asset x ON x.hash = e.asset WHERE 1"
         >>,
-        [Has || _ <- Must],
-        [Lacks || _ <- Not],
-        [Starts || _ <- Prefixes],
+        [Has(<<" AND EXISTS">>, T) || T <- Must],
+        [Has(<<" AND NOT EXISTS">>, T) || T <- Not],
+        [Starts(T) || T <- Prefixes],
         <<" ORDER BY e.id DESC LIMIT 100">>
     ]),
     %% a name is from a closed set without quotes, so a quoted prefix is
     %% only ever itself
-    Args = Must ++ Not ++ [<<"\"", P/binary, "\"*">> || P <- Prefixes, is_binary(P)],
-    {reply, ike_db:q(Conn, Sql, Args), Conn};
+    Values =
+        lists:append([Args(T) || T <- Must ++ Not]) ++
+            lists:append([
+                case K of
+                    any -> [<<"\"", P/binary, "\"*">>];
+                    _ -> [<<"\"", P/binary, "\"*">>, K]
+                end
+             || {K, P} <- Prefixes, is_binary(P)
+            ]),
+    {reply, ike_db:q(Conn, Sql, Values), Conn};
 handle_call({signed, Name}, _From, Conn) when is_binary(Name) ->
     Sql = <<
         "SELECT s.id, b.name, s.time, s.body FROM actor a JOIN shown s ON s.actor = a.id"
@@ -923,20 +990,19 @@ narrow([]) ->
 
 %% what [[name]] leads to: a page, else a tag, else nothing
 -spec kind_of_name(ike_db:reader(), term()) -> binary() | none.
-kind_of_name(Conn, Name) ->
-    Page = <<
-        "SELECT 1 FROM page pg JOIN shown s ON s.thread = pg.thread JOIN post p ON p.id = s.id"
-        " WHERE pg.name = ?1 AND p.revision = 1 LIMIT 1"
-    >>,
+kind_of_name(Conn, Name) when is_binary(Name) ->
+    {Page, Tag} = ike_render:named(),
     case ike_db:q(Conn, Page, [Name]) of
-        {ok, [_]} ->
+        {ok, [_ | _]} ->
             <<"page">>;
         _ ->
-            case ike_db:q(Conn, <<"SELECT 1 FROM tag WHERE name = ?1">>, [Name]) of
-                {ok, [_]} -> <<"tag">>;
+            case ike_db:q(Conn, Tag, [Name]) of
+                {ok, [_ | _]} -> <<"tag">>;
                 _ -> none
             end
-    end.
+    end;
+kind_of_name(_Conn, _Name) ->
+    none.
 
 -spec handle_cast(term(), ike_db:reader()) -> {noreply, ike_db:reader()}.
 handle_cast(_Request, Conn) ->

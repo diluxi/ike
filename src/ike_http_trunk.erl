@@ -190,6 +190,9 @@ acted(What, Id, Req0) ->
                             );
                         {error, no_such_meta} ->
                             ike_http:not_found(Req);
+                        {error, {ambiguous, Name1, Words}} when is_binary(Name1), is_list(Words) ->
+                            Html = ike_view:ambiguous(Name1, [W || W <- Words, is_binary(W)]),
+                            ike_http:page(422, Html, Req);
                         {error, _} ->
                             ike_http:reply(500, Req)
                     end

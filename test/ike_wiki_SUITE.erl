@@ -58,7 +58,9 @@ started_and_read(Config) ->
     {303, H, _} = save(
         Config, Session, "blue_hair", <<"hair that is blue.\nsee [[long_hair]].">>
     ),
-    "/wiki/blue_hair" = proplists:get_value("location", H),
+    %% a name alone that nothing has is an info page (lux): its own
+    %% address names the kind
+    "/wiki/info/blue_hair" = proplists:get_value("location", H),
     {200, _, Page} = request(Config, get, "/wiki/blue_hair", [], none),
     {_, _} = binary:match(Page, <<"hair that is blue.">>),
     %% a name with no page and no tag links to where its page would be
@@ -69,7 +71,8 @@ started_and_read(Config) ->
     %% revision's number leads to the history and the talk, and nothing
     %% else does
     {_, _} = binary:match(
-        Page, <<"<h1>blue_hair <a class=\"edit\" href=\"/wiki/blue_hair/edit\">edit</a></h1>">>
+        Page,
+        <<"<h1 class=\"page page-info\">blue_hair <a class=\"edit\" href=\"/wiki/info/blue_hair/edit\">edit</a></h1>">>
     ),
     nomatch = binary:match(Page, <<">discussion<">>),
     nomatch = binary:match(Page, <<"/history\"">>),
@@ -85,7 +88,9 @@ started_and_read(Config) ->
     ),
     {_, _} = binary:match(Discussion, <<"hair that is blue.">>),
     {200, _, Index} = request(Config, get, "/wiki", [], none),
-    {_, _} = binary:match(Index, <<"href=\"/wiki/blue_hair\"">>),
+    {_, _} = binary:match(Index, <<"href=\"/wiki/info/blue_hair\">blue_hair</a>">>),
+    {200, _, Same} = request(Config, get, "/wiki/info/blue_hair", [], none),
+    {_, _} = binary:match(Same, <<"hair that is blue.">>),
     %% the wiki's board starts no threads: a page does
     {404, _, _} = request(Config, get, "/board/wiki/new", cookies(Session), none).
 
@@ -129,7 +134,7 @@ edits_stack(Config) ->
     [[3]] = query(
         Config,
         "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
-        " WHERE pg.name = 'long_hair' AND p.revision = 1",
+        " WHERE pg.bare = 'long_hair' AND p.revision = 1",
         []
     ).
 
@@ -145,7 +150,7 @@ signed_edits_are_amended(Config) ->
         [[N]] = query(
             Config,
             "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
-            " WHERE pg.name = 'amended' AND p.revision = 1",
+            " WHERE pg.bare = 'amended' AND p.revision = 1",
             []
         ),
         N
@@ -190,7 +195,7 @@ retracted_by_password(Config) ->
     {303, _, _} = save(Config, Session, "undone", <<"mistaken">>, [{"password", "pw"}]),
     [[Last]] = query(
         Config,
-        "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'undone'",
+        "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.bare = 'undone'",
         []
     ),
     Act = uri_string:compose_query([
@@ -228,12 +233,12 @@ accounts_write(Config) ->
     ),
     Session = login(Config, <<"tokenless">>),
     {403, _, _} = save(Config, Session#{csrf := "wrong"}, "anyone", <<"x">>),
-    [[0]] = query(Config, "SELECT count(*) FROM page WHERE name = 'anyone'", []).
+    [[0]] = query(Config, "SELECT count(*) FROM page WHERE bare = 'anyone'", []).
 
 names(Config) ->
     Session = login(Config, <<"spacer">>),
     {303, H, _} = save(Config, Session, "Big%20Eyes", <<"eyes.">>),
-    "/wiki/big_eyes" = proplists:get_value("location", H),
+    "/wiki/info/big_eyes" = proplists:get_value("location", H),
     [
         404 = element(1, request(Config, get, "/wiki/" ++ N, [], none))
      || N <- [".x", "..x", "a%2Fb", "%3Cb%3E"]
@@ -246,7 +251,7 @@ a_hidden_revision_steps_back(Config) ->
     {303, _, _} = save(Config, Session, "steps", <<"vandalised">>),
     [[Last]] = query(
         Config,
-        "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.name = 'steps'",
+        "SELECT max(p.id) FROM post p JOIN page pg ON pg.thread = p.thread WHERE pg.bare = 'steps'",
         []
     ),
     #{csrf := Csrf} = Moderator,
@@ -262,7 +267,7 @@ a_hidden_revision_steps_back(Config) ->
     nomatch = binary:match(Page, <<"vandalised">>),
     %% a revision after one out of view takes over what that one did
     {303, _, _} = save(Config, Session, "steps", <<"first\nsecond\nthird">>),
-    [[Root]] = query(Config, "SELECT thread FROM page WHERE name = 'steps'", []),
+    [[Root]] = query(Config, "SELECT thread FROM page WHERE bare = 'steps'", []),
     {200, _, History} = request(Config, get, "/board/wiki/" ++ integer_to_list(Root), [], none),
     {_, _} = binary:match(History, <<"<span class=\"title\">steps 2</span>">>),
     nomatch = binary:match(History, <<"steps 3">>),
@@ -286,9 +291,9 @@ missing_pages_are_asked_for(Config) ->
     ),
     {_, _} = binary:match(Page, <<"<a class=\"missing\" href=\"/wiki/why%3F\">ask</a>">>),
     {404, _, Asked} = request(Config, get, "/wiki/doesn%27t_yet_exist", cookies(Session), none),
-    {_, _} = binary:match(Asked, <<"href=\"/wiki/doesn%27t_yet_exist/edit\">start it">>),
+    {_, _} = binary:match(Asked, <<"href=\"/wiki/info/doesn%27t_yet_exist/edit\">start it">>),
     {303, Made, _} = save(Config, Session, "why%3F", <<"because.">>),
-    "/wiki/why%3F" = proplists:get_value("location", Made),
+    "/wiki/info/why%3F" = proplists:get_value("location", Made),
     {200, _, Why} = request(Config, get, "/wiki/why%3F", [], none),
     {_, _} = binary:match(Why, <<"because.">>),
     {200, _, Again} = request(Config, get, Thread, [], none),
@@ -314,12 +319,12 @@ amend_reads_links_again(Config) ->
     [[1]] = query(
         Config,
         "SELECT count(*) FROM post p JOIN page pg ON pg.thread = p.thread"
-        " WHERE pg.name = 'relinked' AND p.revision = 1",
+        " WHERE pg.bare = 'relinked' AND p.revision = 1",
         []
     ),
     [[Rev]] = query(
         Config,
-        "SELECT p.id FROM post p JOIN page pg ON pg.thread = p.id WHERE pg.name = 'relinked'",
+        "SELECT p.id FROM post p JOIN page pg ON pg.thread = p.id WHERE pg.bare = 'relinked'",
         []
     ),
     Reply = list_to_binary("href=\"/p/" ++ integer_to_list(Rev) ++ "\""),
@@ -349,7 +354,7 @@ first_revision_retracted(Config) ->
     end,
     {303, _, _} = save(Config, A, "rooted", <<"root">>, [{"password", "pw"}]),
     {303, _, _} = save(Config, B, "rooted", <<"root\nover it">>),
-    [[Root]] = query(Config, "SELECT thread FROM page WHERE name = 'rooted'", []),
+    [[Root]] = query(Config, "SELECT thread FROM page WHERE bare = 'rooted'", []),
     Thread = "/board/wiki/" ++ integer_to_list(Root),
     Retract(Root),
     {200, _, Page} = request(Config, get, "/wiki/rooted", [], none),
@@ -363,7 +368,7 @@ first_revision_retracted(Config) ->
     nomatch = binary:match(History, <<"rooted 2">>),
     %% a page with nothing in view after its first revision goes with it
     {303, _, _} = save(Config, A, "alone", <<"lonely">>, [{"password", "pw"}]),
-    [[Alone]] = query(Config, "SELECT thread FROM page WHERE name = 'alone'", []),
+    [[Alone]] = query(Config, "SELECT thread FROM page WHERE bare = 'alone'", []),
     Retract(Alone),
     {404, _, _} = request(Config, get, "/wiki/alone", [], none),
     {404, _, _} = request(Config, get, "/board/wiki/" ++ integer_to_list(Alone), [], none),

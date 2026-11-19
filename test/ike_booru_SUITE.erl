@@ -17,7 +17,8 @@
     entries_for_older_images/1,
     tagged_and_found/1,
     tags_by_what_it_is/1,
-    the_search_bar_stays/1
+    the_search_bar_stays/1,
+    kinds_tell_tags_apart/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1, upload/3]).
@@ -31,7 +32,8 @@ all() ->
         entries_for_older_images,
         tagged_and_found,
         tags_by_what_it_is,
-        the_search_bar_stays
+        the_search_bar_stays,
+        kinds_tell_tags_apart
     ].
 
 init_per_suite(Config) ->
@@ -242,11 +244,18 @@ tagged_and_found(Config) ->
     %% the entry's page lists them, each linked to its wiki page (lux),
     %% and what changed, as a revision in its thread (unsigned: no name)
     {200, _, Page} = request(Config, get, "/booru/" ++ E1, [], none),
-    {_, _} = binary:match(Page, <<"<a href=\"/wiki/blue_hair\">blue_hair</a>">>),
-    {_, _} = binary:match(Page, <<"<ins><a href=\"/wiki/rating:s\">rating:s</a></ins>">>),
+    {_, _} = binary:match(
+        Page,
+        <<"<a class=\"tag tag-description\" href=\"/wiki/description/blue_hair\">blue_hair</a>">>
+    ),
+    {_, _} = binary:match(
+        Page,
+        <<"<ins><a class=\"tag tag-description\" href=\"/wiki/description/rating:s\">rating:s</a></ins>">>
+    ),
     %% a tag with no page has one to be led to, and to its cards from
-    {200, _, Wiki} = request(Config, get, "/wiki/blue_hair", [], none),
-    {_, _} = binary:match(Wiki, <<"href=\"/booru/search?tags=blue_hair\"">>),
+    {200, _, Wiki} = request(Config, get, "/wiki/description/blue_hair", [], none),
+    {_, _} = binary:match(Wiki, <<"href=\"/booru/search?tags=description/blue_hair\"">>),
+    {200, _, _} = request(Config, get, "/wiki/blue_hair", [], none),
     {404, _, _} = request(Config, get, "/wiki/no_such_tag", [], none),
     nomatch = binary:match(Page, <<"tagger">>),
     %% the history keeps who
@@ -347,3 +356,86 @@ the_search_bar_stays(Config) ->
     {200, _, Odd} = request(Config, get, "/booru/" ++ E ++ "?tags=%3Cb%3E+bar_two", [], none),
     {_, _} = binary:match(Odd, <<"value=\"bar_two\"">>),
     {404, _, _} = request(Config, get, "/booru/999999?tags=bar_one", [], none).
+
+%% a tag is a kind and a name (lux): canon/spider-man and
+%% character/spider-man are two tags, each with its page, shown by the
+%% name alone until the other is there; a name alone is the one tag,
+%% and when there are two, the curator says which
+kinds_tell_tags_apart(Config) ->
+    Session = login(Config, <<"kinder">>),
+    Here = [{"origin", ?config(base, Config)}],
+    Png = posted(Config, Session, <<"kinder">>, "base.png", <<"a">>),
+    Webp = posted(Config, Session, <<"kinder">>, "base.jpg", <<"b">>),
+    E1 = integer_to_list(entry_of(Config, Png)),
+    E2 = integer_to_list(entry_of(Config, Webp)),
+    303 = tag(
+        Config, cookies(Session) ++ Here, E1, "image raster\nCanon/spider-man artist/someone"
+    ),
+    %% the name typed alone that ike tags with is meta's, made no other
+    [[1]] = query(Config, "SELECT count(*) FROM tag WHERE name = 'image'", []),
+    [[<<"meta">>]] = query(Config, "SELECT kind FROM tag WHERE name = 'image'", []),
+    Link = fun(Kind, Shown) ->
+        list_to_binary(
+            "<a class=\"tag tag-" ++ Kind ++ "\" href=\"/wiki/" ++ Kind ++ "/spider-man\">" ++
+                Shown ++ "</a>"
+        )
+    end,
+    {200, _, Alone} = request(Config, get, "/booru/" ++ E1, [], none),
+    {_, _} = binary:match(Alone, Link("canon", "spider-man")),
+    {_, _} = binary:match(Alone, <<"class=\"tag tag-artist\"">>),
+    %% another kind, the same name: both shown by kind from now on, the
+    %% card that had it first too
+    303 = tag(Config, cookies(Session) ++ Here, E2, "character/spider-man"),
+    {200, _, Second} = request(Config, get, "/booru/" ++ E2, [], none),
+    {_, _} = binary:match(Second, Link("character", "character/spider-man")),
+    200 = eventually(
+        fun() ->
+            {200, _, First} = request(Config, get, "/booru/" ++ E1, [], none),
+            case binary:match(First, Link("canon", "canon/spider-man")) of
+                nomatch -> 0;
+                _ -> 200
+            end
+        end,
+        50
+    ),
+    %% the name alone is now two tags: the curator is asked which
+    {422, _, Asked} = request(
+        Config,
+        post,
+        "/booru/" ++ E2 ++ "/tags",
+        cookies(Session) ++ Here,
+        {form, uri_string:compose_query([{"tags", "spider-man"}])}
+    ),
+    {_, _} = binary:match(Asked, <<"canon/spider-man character/spider-man">>),
+    %% a search by the name alone finds either, by kind/name that kind's
+    Has = fun(Page, E) ->
+        binary:match(Page, list_to_binary("href=\"/booru/" ++ E ++ "?tags=")) =/= nomatch
+    end,
+    S1 = search(Config, "spider-man"),
+    {true, true} = {Has(S1, E1), Has(S1, E2)},
+    S2 = search(Config, "canon/spider-man"),
+    {true, false} = {Has(S2, E1), Has(S2, E2)},
+    S3 = search(Config, "spider-man -character/spider-man"),
+    {true, false} = {Has(S3, E1), Has(S3, E2)},
+    S4 = search(Config, "character/spider*"),
+    {false, true} = {Has(S4, E1), Has(S4, E2)},
+    %% the wiki: each kind its page; the name alone lists them
+    {200, _, Many} = request(Config, get, "/wiki/spider-man", [], none),
+    {_, _} = binary:match(Many, <<"href=\"/wiki/canon/spider-man\"">>),
+    {_, _} = binary:match(Many, <<"href=\"/wiki/character/spider-man\"">>),
+    {200, _, Canon} = request(Config, get, "/wiki/canon/spider-man", [], none),
+    {_, _} = binary:match(Canon, <<"href=\"/booru/search?tags=canon/spider-man\"">>),
+    {404, _, _} = request(Config, get, "/wiki/nokind/spider-man", [], none),
+    %% and a theme can tell the kinds apart
+    {200, _, Style} = request(Config, get, "/style.css", [], none),
+    {_, _} = binary:match(Style, <<"a.tag-artist">>),
+    %% [[kind/name]] in a post leads to that kind's page
+    {303, H, _} = ike_browser:post(
+        Config, "/board/b/new", Session, <<"[[canon/spider-man]] [[spider-man]]">>
+    ),
+    Thread = hd(string:split(proplists:get_value("location", H), "#")),
+    {200, _, Posted} = request(Config, get, Thread, [], none),
+    {_, _} = binary:match(
+        Posted, <<"<a href=\"/wiki/canon/spider-man\">[[canon/spider-man]]</a>">>
+    ),
+    {_, _} = binary:match(Posted, <<"<a href=\"/wiki/spider-man\">[[spider-man]]</a>">>).

@@ -1,11 +1,14 @@
 %% Wiki page names, and the difference between two revisions. A name is
 %% a tag's name that does not start with a dot, since a page's name is
-%% also a file's. The difference is by lines, the longest common
+%% also a file's. A page is of a kind, as a tag is, or info, the kind of
+%% every page that is no tag's (lux, 2026-11-19), and is written
+%% kind/name; a name alone is whichever page or tag has it, while one
+%% does. The difference is by lines, the longest common
 %% subsequence of the two (as diff(1) has done since 1974, Hunt and
 %% McIlroy), computed when a page is shown (planning: diffs at render).
 -module(ike_wiki).
 
--export([name/1, path/1, diff/2]).
+-export([name/1, typed/1, kinds/0, path/1, diff/2]).
 -export_type([change/0]).
 
 -type change() :: {same | added | removed, binary()}.
@@ -13,12 +16,28 @@
 %% beyond this many lines a side, the whole is shown as taken and given
 -define(MOST, 1000).
 
+%% a page's name as written: kind/name, or a name alone
 -spec name(binary()) -> {ok, binary()} | error.
 name(Typed) ->
-    case ike_tag:name(binary:replace(Typed, <<" ">>, <<"_">>, [global])) of
-        {ok, <<".", _/binary>>} -> error;
-        Other -> Other
+    case typed(Typed) of
+        {ok, T} -> {ok, ike_tag:word(T)};
+        error -> error
     end.
+
+-spec typed(binary()) -> {ok, ike_tag:typed()} | error.
+typed(Typed) ->
+    case ike_tag:split(binary:replace(Typed, <<" ">>, <<"_">>, [global])) of
+        {Kind, Name0} when Kind =:= any; is_binary(Kind) ->
+            case (Kind =:= any orelse lists:member(Kind, kinds())) andalso ike_tag:name(Name0) of
+                {ok, <<".", _/binary>>} -> error;
+                {ok, Name} -> {ok, {Kind, Name}};
+                _ -> error
+            end
+    end.
+
+%% the kinds of page: a tag's, or info
+-spec kinds() -> [binary()].
+kinds() -> ike_tag:kinds() ++ [<<"info">>].
 
 %% where a page is, as an href or a Location: a name may hold a ? that
 %% would start a query, and a ' that is no use escaped in an href

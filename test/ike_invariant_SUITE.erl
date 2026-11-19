@@ -360,6 +360,8 @@ inv02_works_without_scripts(Config) ->
         {get, "/booru/1?tags=a+-b+c*", []},
         {get, "/wiki", []},
         {get, "/wiki/nothing_yet", []},
+        {get, "/wiki/canon/nothing_yet", []},
+        {get, "/wiki/canon/nothing_yet/edit", Cookies},
         {get, "/wiki/nothing_yet/edit", Cookies},
         {get, "/nothing/here", []},
         {get, "/login/callback", []},
@@ -661,6 +663,7 @@ inv04_text_is_escaped(Config) ->
             "/booru/search?tags=" ++ Attack,
             "/booru/1?tags=" ++ Attack,
             "/wiki/" ++ Attack,
+            "/wiki/character/" ++ Attack,
             "/wiki/" ++ Attack ++ "/history"
         ]
     ).
@@ -2055,6 +2058,9 @@ known_routes() ->
         [<<"trunk">>, meta, <<"comment">>],
         [<<"trunk">>, meta, <<"curate">>],
         [<<"wiki">>, name],
+        [<<"wiki">>, kind, name],
+        [<<"wiki">>, kind, name, <<"edit">>],
+        [<<"wiki">>, kind, name, <<"history">>],
         [<<"wiki">>, name, <<"edit">>],
         [<<"wiki">>, name, <<"history">>],
         [<<"mod">>, <<"booru">>, booru],

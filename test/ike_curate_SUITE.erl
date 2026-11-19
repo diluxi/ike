@@ -245,7 +245,10 @@ revised_and_amended(Config) ->
         <<"<summary>tags <span class=\"added\">+1</span> <span class=\"removed\">-1</span>,",
             " commentary <span class=\"added\">+1</span></summary>">>
     ),
-    {_, _} = binary:match(Page, <<"<del>sun</del>">>),
+    {_, _} = binary:match(
+        Page,
+        <<"<del><a class=\"tag tag-description\" href=\"/wiki/description/sun\">sun</a></del>">>
+    ),
     {_, _} = binary:match(Page, <<"<h2>commentary</h2><p>a line</p>">>),
     %% the same account again, signed, right after: folded into its own
     {303, _, _} = revise(
@@ -288,7 +291,7 @@ revised_and_amended(Config) ->
     ),
     {_, _} = binary:match(
         Laid,
-        <<"href=\"/wiki/copyright:%E3%82%AC%E3%83%BC%E3%83%AB%E3%82%BA%E3%83%90%E3%83%B3%E3%83%89%E3%82%AF%E3%83%A9%E3%82%A4\"">>
+        <<"href=\"/wiki/description/copyright:%E3%82%AC%E3%83%BC%E3%83%AB%E3%82%BA%E3%83%90%E3%83%B3%E3%83%89%E3%82%AF%E3%83%A9%E3%82%A4\"">>
     ),
     %% the same box again, tidied the same, is no change; an unsigned
     %% change is a revision of its own

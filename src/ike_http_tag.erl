@@ -50,6 +50,9 @@ tag(N, {Actor, Name}, Req0) ->
                     ike_http:see_other(Back, Req);
                 {error, no_such_entry} ->
                     ike_http:not_found(Req);
+                {error, {ambiguous, Tag, Words}} when is_binary(Tag), is_list(Words) ->
+                    Html = ike_view:ambiguous(Tag, [W || W <- Words, is_binary(W)]),
+                    ike_http:page(422, Html, Req);
                 {error, bad_text} ->
                     Html = ike_view:message(
                         <<"not saved">>,

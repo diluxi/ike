@@ -3,6 +3,10 @@
 %% on the one it was opened on, /wiki/NAME/history shows each revision
 %% against the one before. Accounts write; anonymous edits are proposals
 %% (M4). The page's discussion is its thread on the board wiki.
+%%
+%% A page is of a kind (lux, 2026-11-19): /wiki/KIND/NAME. A name alone
+%% is the one page or tag that has it, info's if none does; when several
+%% do, the page for it lists them.
 -module(ike_http_wiki).
 -behaviour(cowboy_handler).
 
@@ -14,8 +18,17 @@ init(Req, What) ->
     Reply =
         case {What, name(Req), cowboy_req:method(Req)} of
             {index, _, <<"GET">>} ->
-                ike_http:page(200, ike_view:wiki_index(ike_reader:pages()), Req);
-            {_, error, _} when What =/= index -> ike_http:not_found(Req);
+                Pages = ike_reader:pages(),
+                Shown = ike_reader:shown(Pages),
+                ike_http:page(
+                    200, ike_view:wiki_index([{P, maps:get(P, Shown, P)} || P <- Pages]), Req
+                );
+            {_, error, _} when What =/= index ->
+                ike_http:not_found(Req);
+            {page, {many, Bare, Words}, <<"GET">>} ->
+                ike_http:page(200, ike_view:wiki_many(Bare, Words), Req);
+            {_, {many, Bare, Words}, _} ->
+                ike_http:page(409, ike_view:wiki_many(Bare, Words), Req);
             {page, {ok, Name}, <<"GET">>} ->
                 read(Name, Req);
             {edit, {ok, Name}, <<"GET">>} ->
@@ -29,17 +42,34 @@ init(Req, What) ->
         end,
     {ok, Reply, What}.
 
--spec name(cowboy_req:req()) -> {ok, binary()} | error.
+%% the page asked for, as kind/name; or the pages a name alone could be
+-spec name(cowboy_req:req()) -> {ok, binary()} | {many, binary(), [binary()]} | error.
 name(Req) ->
-    case cowboy_req:binding(name, Req) of
-        Raw when is_binary(Raw) ->
-            try uri_string:percent_decode(Raw) of
-                Decoded when is_binary(Decoded) -> ike_wiki:name(Decoded);
-                _ -> error
-            catch
-                _:_ -> error
+    Typed =
+        case {cowboy_req:binding(kind, Req), cowboy_req:binding(name, Req)} of
+            {Kind, Raw} when is_binary(Raw), (is_binary(Kind) orelse Kind =:= undefined) ->
+                try uri_string:percent_decode(Raw) of
+                    Decoded when is_binary(Decoded), is_binary(Kind) ->
+                        ike_wiki:typed(<<Kind/binary, "/", Decoded/binary>>);
+                    Decoded when is_binary(Decoded) ->
+                        ike_wiki:typed(Decoded);
+                    _ ->
+                        error
+                catch
+                    _:_ -> error
+                end;
+            _ ->
+                error
+        end,
+    case Typed of
+        {ok, {any, Bare} = T} ->
+            case ike_reader:resolved(T) of
+                {one, Word} -> {ok, Word};
+                {many, Words} -> {many, Bare, Words}
             end;
-        _ ->
+        {ok, T} ->
+            {ok, ike_tag:word(T)};
+        error ->
             error
     end.
 
@@ -47,7 +77,9 @@ name(Req) ->
 read(Name, Req) ->
     case ike_reader:page(Name) of
         {ok, #{body := Body} = Page} ->
-            Html = ike_view:wiki_page(Name, Page, ike_reader:links(Body), ike_reader:tagged(Name)),
+            Html = ike_view:wiki_page(
+                titled(Name), Page, ike_reader:links(Body), ike_reader:tagged(Name)
+            ),
             ike_http:page(200, Html, Req);
         none ->
             %% a tag with no page yet is still somewhere to be led to
@@ -57,8 +89,14 @@ read(Name, Req) ->
                     true -> 200;
                     false -> 404
                 end,
-            ike_http:page(Status, ike_view:wiki_missing(Name, signed_in(Req), Tagged), Req)
+            ike_http:page(Status, ike_view:wiki_missing(titled(Name), signed_in(Req), Tagged), Req)
     end.
+
+%% a page's name, and as it is shown: its name alone, until another kind
+%% has it (lux)
+-spec titled(binary()) -> {binary(), binary()}.
+titled(Name) ->
+    {Name, maps:get(Name, ike_reader:shown([Name]), Name)}.
 
 -spec signed_in(cowboy_req:req()) -> boolean().
 signed_in(Req) ->

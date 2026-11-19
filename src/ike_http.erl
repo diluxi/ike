@@ -29,6 +29,7 @@ child_spec() ->
 dispatch() ->
     Thread = {thread, int},
     Board = {board, fun board/2},
+    Kind = {kind, fun kind/2},
     %% the media origin first: what it serves, ike's own host never does
     Media = binary_to_list(ike_config:media_host()),
     cowboy_router:compile([
@@ -52,6 +53,10 @@ dispatch() ->
             {"/trunk/:meta/comment", [{meta, int}], ike_http_trunk, comment},
             {"/trunk/:meta/curate", [{meta, int}], ike_http_trunk, curate},
             {"/wiki", ike_http_wiki, index},
+            %% kind/name: a page of a kind (lux); a name alone, whichever has it
+            {"/wiki/:kind/:name", [Kind], ike_http_wiki, page},
+            {"/wiki/:kind/:name/edit", [Kind], ike_http_wiki, edit},
+            {"/wiki/:kind/:name/history", [Kind], ike_http_wiki, history},
             {"/wiki/:name", ike_http_wiki, page},
             {"/wiki/:name/edit", ike_http_wiki, edit},
             {"/wiki/:name/history", ike_http_wiki, history},
@@ -95,6 +100,19 @@ board(_, Name) when is_binary(Name) ->
     end;
 board(_, _) ->
     {error, not_a_board}.
+
+%% a kind of wiki page, as its address names it
+-spec kind(forward | reverse | format_error, term()) ->
+    {ok, binary()} | {error, not_a_kind} | binary().
+kind(format_error, _) ->
+    <<"not a kind of page">>;
+kind(_, Kind) when is_binary(Kind) ->
+    case lists:member(Kind, ike_wiki:kinds()) of
+        true -> {ok, Kind};
+        false -> {error, not_a_kind}
+    end;
+kind(_, _) ->
+    {error, not_a_kind}.
 
 %% nothing ike sends may run a script, be framed or be sniffed into
 %% another type. caddy sets the same on the pages it serves from disk

@@ -4,8 +4,8 @@
 
 -export([thread/3, board/2, boards/1, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
--export([entry/1, entries/1, moderated_entry/4, search/2]).
--export([wiki_index/1, wiki_page/4, wiki_missing/3, wiki_edit/5, wiki_history/2]).
+-export([entry/1, entries/1, moderated_entry/4, search/2, ambiguous/2]).
+-export([wiki_index/1, wiki_many/2, wiki_page/4, wiki_missing/3, wiki_edit/5, wiki_history/2]).
 -export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4, index/2]).
 -export([preview/3, preview_button/0]).
 
@@ -29,8 +29,8 @@
     %% a wiki page's first post, out of view: its title and nothing else
     tombstone => true,
     %% a curation's revision: the tags it put on and took off (its
-    %% changes are then its commentary's)
-    curation => {[binary()], [binary()]}
+    %% changes are then its commentary's), each kind/name and as shown
+    curation => {[{binary(), binary()}], [{binary(), binary()}]}
 }.
 %% an asset a post shows, where the media origin has it
 -type image() :: #{
@@ -260,7 +260,7 @@ post(
                                 p,
                                 spaced(
                                     [ike_html:el(ins, [tag_link(T)]) || T <- On] ++
-                                        [ike_html:el(del, [ike_html:text(T)]) || T <- Off]
+                                        [ike_html:el(del, [tag_link(T)]) || T <- Off]
                                 )
                             )
                             | [ike_html:el(p, changes(Changes)) || Changes =/= []]
@@ -429,22 +429,20 @@ piece({post, N}, Links) ->
         #{N := _} -> permalink(N, <<>>);
         _ -> gone(<<">>", (integer_to_binary(N))/binary>>)
     end;
+%% a page, or a tag, whose page in the wiki leads to its cards; kind/name
+%% that kind's, a name alone whichever has it (lux)
 piece({page, Name}, Links) ->
     Text = <<"[[", Name/binary, "]]">>,
     case Links of
-        #{{page, Name} := <<"page">>} ->
+        #{{page, Name} := Found} when Found =:= <<"page">>; Found =:= <<"tag">> ->
             anchor(ike_wiki:path(Name), Text);
-        #{{page, Name} := <<"tag">>} ->
-            anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Text);
         _ ->
             missing(Name, Text)
     end;
 piece({page, Name, Label}, Links) ->
     case Links of
-        #{{page, Name} := <<"page">>} ->
+        #{{page, Name} := Found} when Found =:= <<"page">>; Found =:= <<"tag">> ->
             anchor(ike_wiki:path(Name), Label);
-        #{{page, Name} := <<"tag">>} ->
-            anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Label);
         _ ->
             missing(Name, Label)
     end;
@@ -1688,7 +1686,9 @@ account({Csrf, Name, Role}) ->
     versions := [{non_neg_integer(), image() | gone}],
     shown_in := [pos_integer()],
     linked_from := [pos_integer()],
-    tags := [binary()],
+    %% each kind/name, and as shown: its name alone until another kind
+    %% has the name
+    tags := [{binary(), binary()}],
     %% the search its bar holds: none for its file, the reader's when
     %% made per request
     query := [binary()],
@@ -1717,7 +1717,7 @@ entry(
     %% a curation with no revision yet has its tags one to a line
     Box =
         case Box0 of
-            none -> joined_lines(Tags);
+            none -> joined_lines([S || {_, S} <- Tags]);
             _ -> Box0
         end,
     N = integer_to_binary(Id),
@@ -1908,8 +1908,8 @@ changed({When, Added, Removed}) ->
 %% a card's tag (lux): + puts it in the search the bar holds, - takes it
 %% out (or, not in it, leaves out what has it, as a minus does); the
 %% name leads to its wiki page
--spec card_tag(binary(), [binary()]) -> ike_html:html().
-card_tag(Name, Query) ->
+-spec card_tag({binary(), binary()}, [binary()]) -> ike_html:html().
+card_tag({_, Name} = Tag, Query) ->
     ike_html:el(li, [
         ike_html:el(
             a,
@@ -1931,22 +1931,39 @@ card_tag(Name, Query) ->
             [ike_html:text(<<"-">>)]
         ),
         ike_html:text(<<" ">>),
-        tag_link(Name)
+        tag_link(Tag)
     ]).
 
-%% a tag's name, to its page in the wiki; a name no page can have (one
-%% starting with a dot), to the cards that have it
--spec tag_link(binary()) -> ike_html:html().
-tag_link(Name) ->
-    case ike_wiki:name(Name) of
-        {ok, Name} -> anchor(ike_wiki:path(Name), Name);
-        _ -> anchor(ike_tag:search_href([Name]), Name)
-    end.
+%% a tag, to its page in the wiki, as shown; a name no page can have
+%% (one starting with a dot), to the cards that have it. classed by its
+%% kind, for a theme to tell them apart (lux)
+-spec tag_link({binary(), binary()}) -> ike_html:html().
+tag_link({Word, Shown}) ->
+    Class =
+        case ike_tag:split(Word) of
+            {Kind, _} when is_binary(Kind) -> <<"tag tag-", Kind/binary>>;
+            {any, _} -> <<"tag">>
+        end,
+    Href =
+        case ike_wiki:name(Word) of
+            {ok, Word} -> ike_wiki:path(Word);
+            _ -> ike_tag:search_href([Shown])
+        end,
+    ike_html:el(a, [{class, Class}, {href, Href}], [ike_html:text(Shown)]).
 
 -spec words([binary()]) -> binary().
 words([W]) -> W;
 words([W | Ws]) -> <<W/binary, " ", (words(Ws))/binary>>;
 words([]) -> <<>>.
+
+%% a name alone that more than one kind of tag has (lux): which to say
+-spec ambiguous(binary(), [binary()]) -> ike_html:html().
+ambiguous(Name, Words) ->
+    message(
+        <<"not saved">>,
+        <<Name/binary, " is more than one tag: ", (words(Words))/binary,
+            ". say which, as kind/name.">>
+    ).
 
 %% the booru's search bar, on each of its pages, holding the search the
 %% reader came by (lux): a card reached from a search keeps it
@@ -2063,17 +2080,40 @@ entries(Entries) ->
     ]).
 
 %% the wiki's pages, by name
--spec wiki_index([binary()]) -> ike_html:html().
+-spec wiki_index([{binary(), binary()}]) -> ike_html:html().
 wiki_index(Names) ->
     layout(<<"wiki">>, [
         ike_html:el(h1, [ike_html:text(<<"wiki">>)]),
-        ike_html:el(ul, [ike_html:el(li, [anchor(ike_wiki:path(N), N)]) || N <- Names])
+        ike_html:el(ul, [ike_html:el(li, [page_link(N)]) || N <- Names])
     ]).
+
+%% a page, as shown, classed by its kind (lux: for a theme)
+-spec page_link({binary(), binary()}) -> ike_html:html().
+page_link({Word, Shown}) ->
+    ike_html:el(a, [{class, kind_class(Word)}, {href, ike_wiki:path(Word)}], [
+        ike_html:text(Shown)
+    ]).
+
+%% a name alone that pages or tags of more than one kind have: each
+-spec wiki_many(binary(), [binary()]) -> ike_html:html().
+wiki_many(Bare, Words) ->
+    layout(Bare, [
+        ike_html:el(h1, [ike_html:text(Bare)]),
+        ike_html:el(p, [ike_html:text(<<"more than one kind has this name:">>)]),
+        ike_html:el(ul, [ike_html:el(li, [page_link({W, W})]) || W <- Words])
+    ]).
+
+-spec kind_class(binary()) -> binary().
+kind_class(Word) ->
+    case ike_tag:split(Word) of
+        {Kind, _} when is_binary(Kind) -> <<"page page-", Kind/binary>>;
+        {any, _} -> <<"page">>
+    end.
 
 %% a page as it now reads, and the ways to its history, its editing and
 %% its discussion
 -spec wiki_page(
-    binary(),
+    {binary(), binary()},
     #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()},
     #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()},
     Tagged :: boolean()
@@ -2081,15 +2121,17 @@ wiki_index(Names) ->
 %% the page, its title with the way to edit it beside it (a word for now,
 %% a pen later; the key e too, where scripts run), and the revision it
 %% is as of, whose number leads to the history and the talk alike
-wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links, Tagged) ->
+wiki_page({Name, Shown}, #{revision := Revision, time := Time, body := Body}, Links, Tagged) ->
     Stamp = stamp(Time),
     Edit = ike_html:el(
         a, [{class, <<"edit">>}, {href, <<(ike_wiki:path(Name))/binary, "/edit">>}], [
             ike_html:text(<<"edit">>)
         ]
     ),
-    layout(Name, [
-        ike_html:el(h1, [ike_html:text(Name), ike_html:text(<<" ">>), Edit])
+    layout(Shown, [
+        ike_html:el(h1, [{class, kind_class(Name)}], [
+            ike_html:text(Shown), ike_html:text(<<" ">>), Edit
+        ])
         | blocks(ike_markup:parse(Body), Links) ++
             [
                 ike_html:el(p, [
@@ -2098,28 +2140,29 @@ wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links, Tagg
                     ike_html:text(<<", ">>),
                     ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
                 ])
-            ] ++ tagged(Name, Tagged)
+            ] ++ tagged(Name, Shown, Tagged)
     ]).
 
 %% a tag's page leads to the cards that have it
--spec tagged(binary(), boolean()) -> [ike_html:html()].
-tagged(Name, true) ->
+-spec tagged(binary(), binary(), boolean()) -> [ike_html:html()].
+tagged(Name, Shown, true) ->
     [
         ike_html:el(p, [{class, <<"cards">>}], [
-            anchor(ike_tag:search_href([Name]), <<"cards tagged ", Name/binary>>)
+            anchor(ike_tag:search_href([Name]), <<"cards tagged ", Shown/binary>>)
         ])
     ];
-tagged(_Name, false) ->
+tagged(_Name, _Shown, false) ->
     [].
 
 %% a name with no page yet
--spec wiki_missing(binary(), SignedIn :: boolean(), Tagged :: boolean()) -> ike_html:html().
-wiki_missing(Name, SignedIn, Tagged) ->
+-spec wiki_missing({binary(), binary()}, SignedIn :: boolean(), Tagged :: boolean()) ->
+    ike_html:html().
+wiki_missing({Name, Shown}, SignedIn, Tagged) ->
     layout(
-        Name,
+        Shown,
         [
-            ike_html:el(h1, [ike_html:text(Name)])
-            | tagged(Name, Tagged)
+            ike_html:el(h1, [{class, kind_class(Name)}], [ike_html:text(Shown)])
+            | tagged(Name, Shown, Tagged)
         ] ++
             [
                 ike_html:el(p, [
@@ -2291,6 +2334,13 @@ style() ->
         ".specimen .sample { font-size: 48px; width: 100%; min-height: 3em;"
         " box-sizing: border-box; border: 1px dashed #8c959f; background: transparent; }\n"
         "textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }\n"
+        %% kinds of tag and page, in danbooru's colours (lux: a theme may
+        %% tell them apart as it likes)
+        "a.tag-artist, .page-artist { color: #c00004; }\n"
+        "a.tag-canon, .page-canon { color: #a800aa; }\n"
+        "a.tag-character, .page-character { color: #00ab2c; }\n"
+        "a.tag-meta, .page-meta { color: #fd9200; }\n"
+        "ul.tags { list-style: none; padding-left: 0; }\n"
         "h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }\n"
     >>.
 

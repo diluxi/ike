@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, dirty/1, dirty_board/1, dirty_booru/1, settle/1, sync/0]).
--export([entry_page/3]).
+-export([entry_page/3, named/0, shown/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -294,9 +294,10 @@ thread_posts(Conn, Thread) ->
 -spec paged(ike_db:reader(), integer(), ike_view:board(), [ike_view:post()]) ->
     {ike_view:board(), [ike_view:post()]}.
 paged(Conn, Thread, Board, Posts0) ->
+    %% as shown: by its name alone until another kind has it (lux)
     Page =
         case ike_db:q(Conn, <<"SELECT name FROM page WHERE thread = ?1">>, [Thread]) of
-            {ok, [[N]]} when is_binary(N) -> N;
+            {ok, [[N]]} when is_binary(N) -> maps:get(N, shown(Conn, [N]), N);
             _ -> <<">>", (integer_to_binary(Thread))/binary>>
         end,
     Posts1 =
@@ -343,12 +344,14 @@ links(Conn, Thread) ->
         " JOIN thread t ON t.root = p.thread JOIN board b ON b.id = t.board"
         " WHERE s.thread = ?1"
     >>,
-    %% the names they point at: a page, else a tag
+    %% the names they point at: a page, else a tag; kind/name that kind's,
+    %% a name alone any kind's
     Names = <<
         "SELECT DISTINCT l.name,"
         " EXISTS (SELECT 1 FROM page pg JOIN shown s2 ON s2.thread = pg.thread"
-        " JOIN post p2 ON p2.id = s2.id WHERE pg.name = l.name AND p2.revision = 1),"
-        " EXISTS (SELECT 1 FROM tag WHERE name = l.name)"
+        " JOIN post p2 ON p2.id = s2.id WHERE (pg.name = l.name OR pg.bare = l.name)"
+        " AND p2.revision = 1),"
+        " EXISTS (SELECT 1 FROM tag WHERE name = l.name OR kind || '/' || name = l.name)"
         " FROM post s JOIN link l ON l.source = s.id WHERE s.thread = ?1 AND l.name IS NOT NULL"
     >>,
     Named =
@@ -518,6 +521,40 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
             error({render, Name, Other})
     end.
 
+%% whether [[name]] leads to a page, or to a tag: kind/name to that
+%% kind's, a name alone to any kind's (a name has no slash)
+-spec named() -> {binary(), binary()}.
+named() ->
+    {
+        <<
+            "SELECT 1 FROM page pg JOIN shown s ON s.thread = pg.thread JOIN post p ON p.id = s.id"
+            " WHERE (pg.name = ?1 OR pg.bare = ?1) AND p.revision = 1 LIMIT 1"
+        >>,
+        <<"SELECT 1 FROM tag WHERE name = ?1 OR kind || '/' || name = ?1 LIMIT 1">>
+    }.
+
+%% how tags and pages (kind/name) are shown (lux): by their name alone,
+%% until a tag or page of another kind has the same name
+-spec shown(ike_db:reader(), [binary()]) -> #{binary() => binary()}.
+shown(Conn, Words) ->
+    Sql = <<
+        "SELECT count(*) FROM (SELECT kind FROM tag WHERE name = ?1"
+        " UNION SELECT kind FROM page WHERE bare = ?1)"
+    >>,
+    maps:from_list([
+        {W,
+            case ike_tag:split(W) of
+                {Kind, Name} when is_binary(Kind) ->
+                    case ike_db:q(Conn, Sql, [Name]) of
+                        {ok, [[N]]} when is_integer(N), N > 1 -> W;
+                        _ -> Name
+                    end;
+                {any, Name} ->
+                    Name
+            end}
+     || W <- lists:usort(Words), is_binary(W)
+    ]).
+
 %% a booru entry's page: its versions, newest first, the posts that show
 %% it and those that point at it. one not to be shown has no page; the
 %% writer unlinks it
@@ -545,9 +582,11 @@ entry_page(Conn, Entry, Query) ->
         "SELECT l.source FROM link l JOIN shown s ON s.id = l.source"
         " WHERE l.booru = ?1 ORDER BY l.source"
     >>,
+    %% by kind, as danbooru lists them: artist, canon, character,
+    %% description, meta
     Tags = <<
-        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
-        " ORDER BY t.name"
+        "SELECT t.kind || '/' || t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+        " WHERE bt.booru = ?1 ORDER BY t.kind, t.name"
     >>,
     %% what was changed, and when; not who
     Changes = <<
@@ -574,13 +613,15 @@ entry_page(Conn, Entry, Query) ->
                         [Entry]
                     )
                 of
-                    {ok, [[F, Tr]]} when is_binary(F), is_binary(Tr) -> ike_tag:inherent(F, Tr);
-                    _ -> []
+                    {ok, [[F, Tr]]} when is_binary(F), is_binary(Tr) ->
+                        [<<"meta/", T/binary>> || T <- ike_tag:inherent(F, Tr)];
+                    _ ->
+                        []
                 end,
             Posts =
                 case Thread of
                     _ when is_integer(Thread) ->
-                        curated(thread_posts(Conn, Thread), Entry, {Inherent, <<>>}, 1);
+                        curated(Conn, thread_posts(Conn, Thread), Entry, {Inherent, <<>>}, 1);
                     _ ->
                         []
                 end,
@@ -594,6 +635,9 @@ entry_page(Conn, Entry, Query) ->
                 }
             of
                 {{ok, Vs}, {ok, Ps}, {ok, Ls}, {ok, Ts}, {ok, Cs}} ->
+                    Words = [T || [T] <- Ts, is_binary(T)],
+                    Box = box(Posts),
+                    Display = shown(Conn, Words ++ boxed_words(Conn, Box)),
                     Page = ike_view:entry(#{
                         id => Entry,
                         query => Query,
@@ -605,7 +649,11 @@ entry_page(Conn, Entry, Query) ->
                             end,
                         posts => Posts,
                         commentary => commentary(Posts),
-                        box => box(Posts),
+                        box =>
+                            case Box of
+                                none -> none;
+                                _ -> shown_box(Conn, Box, Display)
+                            end,
                         owner =>
                             case {HasOwner, Owner} of
                                 {1, _} when is_binary(Owner) -> {account, Owner};
@@ -629,7 +677,7 @@ entry_page(Conn, Entry, Query) ->
                         ],
                         shown_in => [P || [P] <- Ps, is_integer(P)],
                         linked_from => [L || [L] <- Ls, is_integer(L)],
-                        tags => [T || [T] <- Ts, is_binary(T)],
+                        tags => [{W, maps:get(W, Display, W)} || W <- Words],
                         changes => [
                             {W, A, R}
                          || [W, A, R] <- Cs, is_integer(W), is_binary(A), is_binary(R)
@@ -648,24 +696,76 @@ entry_page(Conn, Entry, Query) ->
 %% a curation's thread: each revision named for the entry and its count,
 %% with the tags it put on and took off and what it changed of the
 %% commentary, against the revision in view before it
--spec curated([ike_view:post()], integer(), {[binary()], binary()}, pos_integer()) ->
+-spec curated(
+    ike_db:reader(), [ike_view:post()], integer(), {[binary()], binary()}, pos_integer()
+) ->
     [ike_view:post()].
-curated([#{revision := true, body := Body} = P | Rest], Entry, {Tags0, Said0}, N) ->
-    {_, Tags, Said} = ike_tag:revised(Body),
+curated(Conn, [#{revision := true, body := Body} = P | Rest], Entry, {Tags0, Said0}, N) ->
+    {_, Tags1, Said} = ike_tag:revised(Body),
+    Tags = [qualified(Conn, T) || T <- Tags1],
     Title = <<"card:", (integer_to_binary(Entry))/binary, " ", (integer_to_binary(N))/binary>>,
+    On = [T || T <- Tags, not lists:member(T, Tags0)],
+    Off = [T || T <- Tags0, not lists:member(T, Tags)],
+    Shown = shown(Conn, On ++ Off),
     Changed = P#{
         title => Title,
-        curation => {[T || T <- Tags, not lists:member(T, Tags0)], [
-            T
-         || T <- Tags0, not lists:member(T, Tags)
+        curation => {[{T, maps:get(T, Shown, T)} || T <- On], [
+            {T, maps:get(T, Shown, T)}
+         || T <- Off
         ]},
         changes => ike_wiki:diff(Said0, Said)
     },
-    [Changed | curated(Rest, Entry, {Tags, Said}, N + 1)];
-curated([P | Rest], Entry, State, N) ->
-    [P | curated(Rest, Entry, State, N)];
-curated([], _Entry, _State, _N) ->
+    [Changed | curated(Conn, Rest, Entry, {Tags, Said}, N + 1)];
+curated(Conn, [P | Rest], Entry, State, N) ->
+    [P | curated(Conn, Rest, Entry, State, N)];
+curated(_Conn, [], _Entry, _State, _N) ->
     [].
+
+%% a word of a revision as kind/name: a revision from before kinds has a
+%% name alone, which is the one tag by that name (a description, if none)
+-spec qualified(ike_db:reader(), binary()) -> binary().
+qualified(Conn, Word) ->
+    case ike_tag:split(Word) of
+        {Kind, _} when is_binary(Kind) ->
+            Word;
+        {any, Name} ->
+            case ike_db:q(Conn, <<"SELECT kind FROM tag WHERE name = ?1">>, [Name]) of
+                {ok, [[Kind]]} when is_binary(Kind) -> <<Kind/binary, "/", Name/binary>>;
+                _ -> <<"description/", Name/binary>>
+            end
+    end.
+
+%% the words of a box, as kind/name
+-spec boxed_words(ike_db:reader(), binary() | none) -> [binary()].
+boxed_words(_Conn, none) ->
+    [];
+boxed_words(Conn, Box) ->
+    [
+        qualified(Conn, W)
+     || W <- binary:split(Box, [<<" ">>, <<"\n">>], [global]), W =/= <<>>
+    ].
+
+%% a box as its curator is shown it: laid out as kept, each tag as shown
+-spec shown_box(ike_db:reader(), binary(), #{binary() => binary()}) -> binary().
+shown_box(Conn, Box, Shown) ->
+    joined(
+        [
+            joined(
+                [
+                    maps:get(qualified(Conn, W), Shown, W)
+                 || W <- binary:split(Line, <<" ">>, [global]), W =/= <<>>
+                ],
+                <<" ">>
+            )
+         || Line <- binary:split(Box, <<"\n">>, [global])
+        ],
+        <<"\n">>
+    ).
+
+-spec joined([binary()], binary()) -> binary().
+joined([W], _) -> W;
+joined([W | Ws], Sep) -> <<W/binary, Sep/binary, (joined(Ws, Sep))/binary>>;
+joined([], _) -> <<>>.
 
 %% the commentary of the newest revision
 -spec commentary([ike_view:post()]) -> binary().

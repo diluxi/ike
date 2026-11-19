@@ -1534,3 +1534,43 @@ lux, 2026-11-19: a search bar the booru keeps while a card is looked at,
   have (one starting with a dot) still leads to its search.
 - **Not cached:** a card made per request reads the database each time,
   as search does (N6's cache is still owed for both).
+
+## Kinds of tag
+
+lux, 2026-11-19: `canon/spider-man` is not `character/spider-man`, and
+both linking to `[[spider-man]]` is a mistake. No hierarchy; `/` between
+a kind and a name, since `:` is ikext's.
+
+- **The kinds:** artist, character, canon (danbooru's copyright),
+  description (its general), meta; and info, which is no kind of tag but
+  every wiki page that is no tag's. A tag is a kind and a name, unique
+  together (migration 0029); a page too, its name written `kind/name`.
+- **A name alone** is the one tag (or page) by that name: in a tag box,
+  in a search, in `[[name]]`, at `/wiki/name`. In a box, a name nothing
+  has yet is a description (the names ike tags with by what an asset
+  is, image and the like, are meta's); a name two kinds have is refused,
+  with which they are, for the curator to say. In a search, a name alone
+  is any kind's, `kind/name` that kind's (and `kind/pre*`). At
+  `/wiki/name`, two kinds list both; none is info's page to start.
+- **Shown** by the name alone until a tag or page of another kind has
+  the same name, then as `kind/name` (lux). The cards whose tags become
+  ambiguous so are made again when the other kind's tag or page is
+  made; links always carry `kind/name`, so a stale card would only have
+  been shown short, never led wrong.
+- **Kept as kind/name:** a curation's revision keeps its box with every
+  word as `kind/name`, so it reads the same however names are shared
+  later. A revision from before kinds has names alone, read as the one
+  tag by that name (a description if none), and is not rewritten (posts
+  are immutable).
+- **Classes for themes:** `tag tag-<kind>` on a tag's link, `page
+  page-<kind>` on a page's title and links. The stylesheet gives them
+  danbooru's colours for now (themes are next).
+- **Existing data:** every tag became a description, but for the names
+  ike tags with by what an asset is, which became meta's; a page by a
+  tag's name became that tag's page, every other one info's. Tags
+  written `copyright:x` or `character:x` stay names with a colon in them;
+  retagging them as `canon/x` is the curators'. *Simplified:* no rename of
+  a tag from one kind to another (renames are M3's still).
+- **Addresses:** `/wiki/kind/name` (and `/edit`, `/history`) for a page;
+  saving goes there. `/wiki/name` still reads, edits and starts the page
+  a name alone leads to.

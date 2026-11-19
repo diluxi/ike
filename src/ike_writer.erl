@@ -44,6 +44,8 @@
 }.
 
 -type error() :: {error, term()}.
+%% a name alone in a tag box that more than one kind has: which they are
+-type ambiguous() :: {ambiguous, binary(), [binary()]}.
 
 %% who acts: an account in a role, or ike itself
 -type who() :: {Actor :: integer(), ike_role:role()} | system.
@@ -309,7 +311,9 @@ sign_meta(Meta, Owner) when is_integer(Meta), Meta > 0 ->
 %% in it. bytes with an entry already are not curated again
 %% Box: the tag box's lines (ike_tag:layout/1), the whole of its tags
 -spec curate(Meta :: pos_integer(), ike_id:actor(), Signed :: boolean(), Box :: [[binary()]]) ->
-    {ok, pos_integer()} | {error, not_public | no_such_meta | {curated, pos_integer()}} | error().
+    {ok, pos_integer()}
+    | {error, not_public | no_such_meta | {curated, pos_integer()} | ambiguous()}
+    | error().
 curate(Meta, Account, Signed, Box) when is_integer(Meta), Meta > 0 ->
     case call({curate, Meta, ike_id:to_integer(Account), Signed, Box}) of
         {ok, Entry} when is_integer(Entry), Entry > 0 -> {ok, Entry};
@@ -325,7 +329,7 @@ curate(Meta, Account, Signed, Box) when is_integer(Meta), Meta > 0 ->
 -spec revise(
     pos_integer(), ike_id:actor(), Signed :: boolean(), [[binary()]] | keep, binary() | keep
 ) ->
-    ok | {error, nothing | no_such_entry | bad_text} | error().
+    ok | {error, nothing | no_such_entry | bad_text | ambiguous()} | error().
 revise(Entry, Account, Signed, Box, Commentary) ->
     done(call({revise, Entry, ike_id:to_integer(Account), Signed, Box, Commentary})).
 
@@ -573,16 +577,19 @@ handle_call({wiki, Name, Actor, Body, Password}, _From, Conn) when
     (is_binary(Password) orelse Password =:= undefined)
 ->
     Reply =
-        case text(Body) of
-            false ->
+        case {text(Body), ike_wiki:typed(Name)} of
+            {false, _} ->
                 {error, bad_text};
-            true ->
+            %% a page is of a kind (lux): kind/name, which the asker found
+            {true, {ok, {Kind, _}}} when is_binary(Kind) ->
                 Time = erlang:system_time(second),
                 committed(
                     ike_db:transaction(Conn, fun() ->
                         revised(Conn, Name, Actor, Body, Password, Time)
                     end)
-                )
+                );
+            {true, _} ->
+                {error, no_such_page}
         end,
     {reply, Reply, Conn};
 handle_call({privacy, Meta, Owner, Flag}, _From, Conn) when
@@ -634,7 +641,12 @@ handle_call({curate, Meta, Account, Signed, Box}, _From, Conn) when
     Time = erlang:system_time(second),
     Reply = committed(
         ike_db:transaction(Conn, fun() ->
-            curated(Conn, Meta, Account, shown_as(Account, Signed), boxed(Box), Time)
+            case kinded(Conn, boxed(Box)) of
+                {ok, Kinded} ->
+                    curated(Conn, Meta, Account, shown_as(Account, Signed), Kinded, Time);
+                {error, _} = Error ->
+                    Error
+            end
         end)
     ),
     {reply, Reply, Conn};
@@ -652,18 +664,25 @@ handle_call({revise, Entry, Account, Signed, Box, Commentary}, _From, Conn) when
                 {error, bad_text};
             true ->
                 Result = ike_db:transaction(Conn, fun() ->
-                    revised_entry(
-                        Conn,
-                        Entry,
-                        Account,
-                        shown_as(Account, Signed),
+                    Resolved =
                         case Box of
-                            keep -> keep;
-                            _ -> boxed(Box)
+                            keep -> {ok, keep};
+                            _ -> kinded(Conn, boxed(Box))
                         end,
-                        Commentary,
-                        Time
-                    )
+                    case Resolved of
+                        {ok, Kinded} ->
+                            revised_entry(
+                                Conn,
+                                Entry,
+                                Account,
+                                shown_as(Account, Signed),
+                                Kinded,
+                                Commentary,
+                                Time
+                            );
+                        {error, _} = Error ->
+                            Error
+                    end
                 end),
                 case committed(Result) of
                     {ok, _} -> ok;
@@ -1780,23 +1799,40 @@ state(Conn, Who, Kind, {Post, Thread, Board}, To, Reason, Time) ->
 -spec revised(ike_db:writer(), binary(), integer(), binary(), binary() | undefined, integer()) ->
     {ok, {integer(), [term()]}} | error().
 revised(Conn, Name, Actor, Body, Password, Time) ->
-    %% the threads that point at the name: it is a page now
+    %% the threads that point at the page, by kind/name or its name alone:
+    %% it is a page now
     Pointing = <<
-        "SELECT DISTINCT p.thread FROM link l JOIN post p ON p.id = l.source WHERE l.name = ?1"
+        "SELECT DISTINCT p.thread FROM link l JOIN post p ON p.id = l.source"
+        " WHERE l.name IN (?1, ?2)"
     >>,
+    {Kind, Bare} = kind_name(Name),
+    %% info's pages are titled by their name alone: info is no kind of tag
+    Title =
+        case Kind of
+            <<"info">> -> Bare;
+            _ -> Name
+        end,
     case ike_db:q(Conn, <<"SELECT thread FROM page WHERE name = ?1">>, [Name]) of
         {ok, []} ->
+            Crowded = crowded(Conn, [Name]),
             case post(Conn, Actor, {new, <<"wiki">>}, Time, Body) of
                 {ok, {Id, Threads}} ->
                     Steps = [
-                        {<<"UPDATE post SET revision = 1, title = ?2 WHERE id = ?1">>, [Id, Name]},
-                        {<<"INSERT INTO page (name, thread) VALUES (?1, ?2)">>, [Name, Id]}
+                        {<<"UPDATE post SET revision = 1, title = ?2 WHERE id = ?1">>, [Id, Title]},
+                        {
+                            <<"INSERT INTO page (name, kind, bare, thread) VALUES (?1, ?2, ?3, ?4)">>,
+                            [Name, Kind, Bare, Id]
+                        }
                         | sealing(Id, Password)
                     ],
-                    case {steps(Conn, Steps), ike_db:q(Conn, Pointing, [Name])} of
-                        {ok, {ok, Rows}} -> {ok, {Id, Threads ++ [T || [T] <- Rows]}};
-                        {{error, _} = Error, _} -> Error;
-                        {_, {error, _} = Error} -> Error
+                    case {steps(Conn, Steps), ike_db:q(Conn, Pointing, [Name, Bare])} of
+                        {ok, {ok, Rows}} ->
+                            {ok,
+                                {Id, Threads ++ [T || [T] <- Rows] ++ [{booru, E} || E <- Crowded]}};
+                        {{error, _} = Error, _} ->
+                            Error;
+                        {_, {error, _} = Error} ->
+                            Error
                     end;
                 {error, _} = Error ->
                     Error
@@ -1964,7 +2000,7 @@ curated(Conn, Meta, Account, Shown, Box, Time) ->
                     case entered(Conn, [Asset], Time, []) of
                         {ok, [Entry]} ->
                             case boxed_tags(Conn, Entry, Account, Box, Time) of
-                                ok ->
+                                {ok, Crowded} ->
                                     %% the source's own words, as Danbooru copies them
                                     Body = ike_tag:revision(Box, Said),
                                     case revision(Conn, Thread0, Shown, Body, Time) of
@@ -1982,8 +2018,16 @@ curated(Conn, Meta, Account, Shown, Box, Time) ->
                                                 }
                                             ],
                                             case steps(Conn, Steps) of
-                                                ok -> {ok, {Entry, Threads ++ [{booru, Entry}]}};
-                                                {error, _} = Error -> Error
+                                                ok ->
+                                                    {ok,
+                                                        {Entry,
+                                                            Threads ++
+                                                                [
+                                                                    {booru, E}
+                                                                 || E <- [Entry | Crowded]
+                                                                ]}};
+                                                {error, _} = Error ->
+                                                    Error
                                             end;
                                         {error, _} = Error ->
                                             Error
@@ -2011,24 +2055,135 @@ curated(Conn, Meta, Account, Shown, Box, Time) ->
             Error
     end.
 
-%% an entry's tags made what the box names, and the history told
--spec boxed_tags(ike_db:writer(), integer(), integer(), [[binary()]], integer()) -> ok | error().
+%% an entry's tags made what the box names, and the history told; with
+%% the cards whose tags a new tag's kind now tells apart from it, which
+%% are shown by kind/name from now (lux), and so made again
+-spec boxed_tags(ike_db:writer(), integer(), integer(), [[binary()]], integer()) ->
+    {ok, [integer()]} | error().
 boxed_tags(Conn, Entry, Account, Box, Time) ->
     Wanted = [N || L <- Box, N <- L],
     case current_tags(Conn, Entry) of
         {ok, Current} ->
+            Crowded = crowded(Conn, Wanted),
             Added = [N || N <- Wanted, not lists:member(N, Current), put_tag(Conn, Entry, N)],
             Removed = [N || N <- Current, not lists:member(N, Wanted), take_tag(Conn, Entry, N)],
-            history(Conn, Entry, Account, Added, Removed, Time);
+            case history(Conn, Entry, Account, Added, Removed, Time) of
+                ok -> {ok, Crowded};
+                {error, _} = Error -> Error
+            end;
         {error, _} = Error ->
             Error
     end.
 
+%% a box's words, each kind/name (lux). a name alone is the one tag by
+%% that name, here or in the same box; a description if there is none;
+%% and if there are several, the curator is to say which
+-spec kinded(ike_db:writer(), [[binary()]]) ->
+    {ok, [[binary()]]} | {error, {ambiguous, binary(), [binary()]}} | error().
+kinded(Conn, Box) ->
+    Named = [ike_tag:split(W) || L <- Box, W <- L],
+    try
+        Lines = [
+            [kinded_word(Conn, ike_tag:split(W), Named) || W <- L]
+         || L <- Box
+        ],
+        {ok, unique_lines(Lines, #{})}
+    catch
+        throw:{ambiguous, _, _} = Ambiguous -> {error, Ambiguous}
+    end.
+
+-spec kinded_word(ike_db:writer(), ike_tag:typed(), [ike_tag:typed()]) -> binary().
+kinded_word(_Conn, {Kind, Name}, _Named) when is_binary(Kind) ->
+    <<Kind/binary, "/", Name/binary>>;
+kinded_word(Conn, {any, Name}, Named) ->
+    %% what ike tags an entry with by what it is, is meta's, made or not
+    Here =
+        [K || {K, N} <- Named, N =:= Name, is_binary(K)] ++
+            [<<"meta">> || lists:member(Name, ike_tag:inherent_names())],
+    Kinds = [
+        K
+     || K <- lists:usort(
+            case ike_db:q(Conn, <<"SELECT kind FROM tag WHERE name = ?1">>, [Name]) of
+                {ok, Rows} -> Here ++ [K1 || [K1] <- Rows];
+                {error, _} -> Here
+            end
+        ),
+        is_binary(K)
+    ],
+    case Kinds of
+        [] -> <<"description/", Name/binary>>;
+        [Kind] -> <<Kind/binary, "/", Name/binary>>;
+        _ -> throw({ambiguous, Name, [<<K/binary, "/", Name/binary>> || K <- Kinds]})
+    end.
+
+%% each word once, where it first was; a line left empty goes
+-spec unique_lines([[binary()]], #{binary() => []}) -> [[binary()]].
+unique_lines([Line | Rest], Seen) ->
+    {Kept, Seen1} = unique_words(Line, Seen),
+    case Kept of
+        [] -> unique_lines(Rest, Seen1);
+        _ -> [Kept | unique_lines(Rest, Seen1)]
+    end;
+unique_lines([], _Seen) ->
+    [].
+
+-spec unique_words([binary()], #{binary() => []}) -> {[binary()], #{binary() => []}}.
+unique_words([W | Ws], Seen) when is_map_key(W, Seen) ->
+    unique_words(Ws, Seen);
+unique_words([W | Ws], Seen) ->
+    {Kept, Seen1} = unique_words(Ws, Seen#{W => []}),
+    {[W | Kept], Seen1};
+unique_words([], Seen) ->
+    {[], Seen}.
+
+%% the cards to show again when these tags (kind/name) are new and
+%% another kind has their name: those with a tag by that name
+-spec crowded(ike_db:writer(), [binary()]) -> [integer()].
+crowded(Conn, Words) ->
+    Sql = <<
+        "SELECT DISTINCT bt.booru FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+        " WHERE t.name = ?2 AND t.kind <> ?1"
+        " AND NOT EXISTS (SELECT 1 FROM tag WHERE kind = ?1 AND name = ?2)"
+    >>,
+    Found = [
+        E
+     || W <- Words,
+        {Kind, Name} <- [ike_tag:split(W)],
+        is_binary(Kind),
+        {ok, Rows} <- [ike_db:q(Conn, Sql, [Kind, Name])],
+        [E] <- Rows
+    ],
+    [E || E <- lists:usort(Found), is_integer(E)].
+
+%% a word of a box kept before kinds, as kind/name: the one tag by that
+%% name, or a description
+-spec requalified(ike_db:writer(), binary()) -> binary().
+requalified(Conn, BoxText) ->
+    Lines = lines(BoxText),
+    Named = [ike_tag:split(W) || L <- Lines, W <- L],
+    Words = [
+        [
+            try
+                kinded_word(Conn, ike_tag:split(W), Named)
+            catch
+                throw:{ambiguous, Name, _} -> <<"description/", Name/binary>>
+            end
+         || W <- L
+        ]
+     || L <- Lines
+    ],
+    joined_box(Words).
+
+-spec joined_box([[binary()]]) -> binary().
+joined_box(Lines) ->
+    {Box, _, _} = ike_tag:revised(ike_tag:revision(Lines, <<>>)),
+    Box.
+
 -spec current_tags(ike_db:writer(), integer()) -> {ok, [binary()]} | error().
 current_tags(Conn, Entry) ->
     Sql = <<
-        "SELECT t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag WHERE bt.booru = ?1"
-        " ORDER BY t.name"
+        "SELECT t.kind || '/' || t.name FROM booru_tag bt JOIN tag t ON t.id = bt.tag"
+        " WHERE bt.booru = ?1 ORDER BY t.kind, t.name"
     >>,
     case ike_db:q(Conn, Sql, [Entry]) of
         {ok, Rows} -> {ok, [N || [N] <- Rows, is_binary(N)]};
@@ -2054,7 +2209,7 @@ revised_entry(Conn, Entry, Account, Shown, Box0, Commentary0, Time) ->
             %% has its tags on one line
             {BeforeBox, BeforeSaid} =
                 case said(Conn, Thread0) of
-                    {ok, BoxText, Said} -> {BoxText, Said};
+                    {ok, BoxText, Said} -> {requalified(Conn, BoxText), Said};
                     none -> {spaced(Current), <<>>}
                 end,
             Box =
@@ -2079,13 +2234,18 @@ revised_entry(Conn, Entry, Account, Shown, Box0, Commentary0, Time) ->
                     {error, nothing};
                 false ->
                     case boxed_tags(Conn, Entry, Account, Box, Time) of
-                        ok ->
+                        {ok, Crowded} ->
                             case revision(Conn, Thread0, Shown, Body, Time) of
                                 {ok, {Thread, Threads}} ->
                                     Set = <<"UPDATE booru SET thread = ?2 WHERE id = ?1">>,
                                     case ike_db:q(Conn, Set, [Entry, Thread]) of
-                                        {ok, _} -> {ok, {Entry, Threads ++ [{booru, Entry}]}};
-                                        {error, _} = Error -> Error
+                                        {ok, _} ->
+                                            {ok,
+                                                {Entry,
+                                                    Threads ++
+                                                        [{booru, E} || E <- [Entry | Crowded]]}};
+                                        {error, _} = Error ->
+                                            Error
                                     end;
                                 {error, _} = Error ->
                                     Error
@@ -2250,30 +2410,42 @@ spaced([N]) -> N;
 spaced([N | Ns]) -> <<N/binary, " ", (spaced(Ns))/binary>>;
 spaced([]) -> <<>>.
 
-%% whether the tag went on: false if it was on already
+%% whether the tag (kind/name; a name alone is a description) went on:
+%% false if it was on already
 -spec put_tag(ike_db:writer(), integer(), binary()) -> boolean().
-put_tag(Conn, Entry, Name) ->
-    _ = ike_db:q(Conn, <<"INSERT INTO tag (name) VALUES (?1) ON CONFLICT (name) DO NOTHING">>, [
-        Name
-    ]),
+put_tag(Conn, Entry, Word) ->
+    {Kind, Name} = kind_name(Word),
+    _ = ike_db:q(
+        Conn,
+        <<"INSERT INTO tag (kind, name) VALUES (?1, ?2) ON CONFLICT (kind, name) DO NOTHING">>,
+        [Kind, Name]
+    ),
     Sql = <<
-        "INSERT INTO booru_tag (booru, tag) SELECT ?1, id FROM tag WHERE name = ?2"
+        "INSERT INTO booru_tag (booru, tag) SELECT ?1, id FROM tag WHERE kind = ?2 AND name = ?3"
         " ON CONFLICT DO NOTHING RETURNING tag"
     >>,
-    case ike_db:q(Conn, Sql, [Entry, Name]) of
+    case ike_db:q(Conn, Sql, [Entry, Kind, Name]) of
         {ok, [_]} -> true;
         _ -> false
     end.
 
 -spec take_tag(ike_db:writer(), integer(), binary()) -> boolean().
-take_tag(Conn, Entry, Name) ->
+take_tag(Conn, Entry, Word) ->
+    {Kind, Name} = kind_name(Word),
     Sql = <<
-        "DELETE FROM booru_tag WHERE booru = ?1 AND tag = (SELECT id FROM tag WHERE name = ?2)"
-        " RETURNING tag"
+        "DELETE FROM booru_tag WHERE booru = ?1"
+        " AND tag = (SELECT id FROM tag WHERE kind = ?2 AND name = ?3) RETURNING tag"
     >>,
-    case ike_db:q(Conn, Sql, [Entry, Name]) of
+    case ike_db:q(Conn, Sql, [Entry, Kind, Name]) of
         {ok, [_]} -> true;
         _ -> false
+    end.
+
+-spec kind_name(binary()) -> {binary(), binary()}.
+kind_name(Word) ->
+    case ike_tag:split(Word) of
+        {Kind, Name} when is_binary(Kind) -> {Kind, Name};
+        {any, Name} -> {<<"description">>, Name}
     end.
 
 %% trashed by its poster: what trash does, with no entry in the log
@@ -2407,7 +2579,10 @@ entered(_Conn, [], _Time, Acc) ->
 inherent(Conn, Entry, Hash) ->
     case ike_db:q(Conn, <<"SELECT filetype, traits FROM asset WHERE hash = ?1">>, [{blob, Hash}]) of
         {ok, [[Format, Traits]]} when is_binary(Format), is_binary(Traits) ->
-            _ = [put_tag(Conn, Entry, N) || N <- ike_tag:inherent(Format, Traits)],
+            _ = [
+                put_tag(Conn, Entry, <<"meta/", N/binary>>)
+             || N <- ike_tag:inherent(Format, Traits)
+            ],
             ok;
         _ ->
             ok
