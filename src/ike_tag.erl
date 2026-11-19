@@ -6,6 +6,7 @@
 
 -export([name/1, edit/1, query/1, layout/1, inherent/2, quoted/1]).
 -export([revision/2, revised/1]).
+-export([said/1, with/2, without/2, search_href/1, query_string/1]).
 
 -define(MOST, 64).
 
@@ -181,6 +182,46 @@ query(Text) ->
             {ok, N} <- [name(binary:part(W, 0, byte_size(W) - 1))]
         ]
     }.
+
+%% a search as the bar keeps it (lux): its words, each as query/1 read
+%% it, in the order typed
+-spec said(binary()) -> [binary()].
+said(Text) ->
+    {Must, Not, Prefixes} = query(Text),
+    Must ++ [<<"-", N/binary>> || N <- Not] ++ [<<P/binary, "*">> || P <- Prefixes].
+
+%% a search with a name added: on, if it was taken off
+-spec with([binary()], binary()) -> [binary()].
+with(Said, Name) ->
+    case lists:member(Name, Said) of
+        true -> Said;
+        false -> [W || W <- Said, W =/= <<"-", Name/binary>>] ++ [Name]
+    end.
+
+%% a search with a name removed, if it is in it; else with entries that
+%% have it left out, as a minus does
+-spec without([binary()], binary()) -> [binary()].
+without(Said, Name) ->
+    case lists:member(Name, Said) of
+        true -> [W || W <- Said, W =/= Name];
+        false -> with_off(Said, <<"-", Name/binary>>)
+    end.
+
+-spec with_off([binary()], binary()) -> [binary()].
+with_off(Said, Off) ->
+    case lists:member(Off, Said) of
+        true -> Said;
+        false -> Said ++ [Off]
+    end.
+
+%% a search's words as a query's value: a + between them, which no name
+%% has; beyond ascii as %XX
+-spec query_string([binary()]) -> binary().
+query_string(Said) -> joined([quoted(W) || W <- Said], <<"+">>).
+
+-spec search_href([binary()]) -> binary().
+search_href([]) -> <<"/booru/search">>;
+search_href(Said) -> <<"/booru/search?tags=", (query_string(Said))/binary>>.
 
 -spec first(non_neg_integer(), [binary()]) -> [binary()].
 first(N, [W | Ws]) when N > 0 -> [W | first(N - 1, Ws)];

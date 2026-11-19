@@ -8,6 +8,7 @@
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
 -export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1, trunk/0]).
+-export([entry_page/2, tagged/1]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -215,6 +216,19 @@ search(Query) ->
         _ ->
             []
     end.
+
+%% a card's page with the search its bar holds, made here and now
+-spec entry_page(pos_integer(), [binary()]) -> {ok, binary()} | none.
+entry_page(Entry, Query) ->
+    case gen_server:call(?MODULE, {entry_page, Entry, Query}) of
+        {ok, Page} when is_binary(Page) -> {ok, Page};
+        _ -> none
+    end.
+
+%% whether any card has a tag by this name
+-spec tagged(binary()) -> boolean().
+tagged(Name) ->
+    gen_server:call(?MODULE, {tagged, Name}) =:= true.
 
 %% the metas a viewer may see, newest first: public ones, their own, and
 %% to a moderator every one
@@ -675,6 +689,17 @@ handle_call({whereabouts, Post}, _From, Conn) when is_integer(Post) ->
             _ -> none
         end,
     {reply, Reply, Conn};
+handle_call({entry_page, Entry, Query}, _From, Conn) when is_integer(Entry), is_list(Query) ->
+    Reply =
+        case ike_render:entry_page(Conn, Entry, [W || W <- Query, is_binary(W)]) of
+            {ok, Page} -> {ok, iolist_to_binary(ike_html:to_iodata(Page))};
+            none -> none
+        end,
+    {reply, Reply, Conn};
+handle_call({tagged, Name}, _From, Conn) when is_binary(Name) ->
+    Sql =
+        <<"SELECT 1 FROM tag t WHERE t.name = ?1 AND EXISTS (SELECT 1 FROM booru_tag bt WHERE bt.tag = t.id)">>,
+    {reply, ike_db:q(Conn, Sql, [Name]) =:= {ok, [[1]]}, Conn};
 handle_call({board, Name}, _From, Conn) when is_binary(Name) ->
     Reply =
         case ike_db:q(Conn, <<"SELECT locked, log FROM board WHERE name = ?1">>, [Name]) of

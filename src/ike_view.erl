@@ -5,7 +5,7 @@
 -export([thread/3, board/2, boards/1, post_form/2, message/2, layout/2]).
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2]).
--export([wiki_index/1, wiki_page/3, wiki_missing/2, wiki_edit/5, wiki_history/2]).
+-export([wiki_index/1, wiki_page/4, wiki_missing/3, wiki_edit/5, wiki_history/2]).
 -export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4, index/2]).
 -export([preview/3, preview_button/0]).
 
@@ -1689,6 +1689,9 @@ account({Csrf, Name, Role}) ->
     shown_in := [pos_integer()],
     linked_from := [pos_integer()],
     tags := [binary()],
+    %% the search its bar holds: none for its file, the reader's when
+    %% made per request
+    query := [binary()],
     changes := [{integer(), binary(), binary()}],
     thread := pos_integer() | none,
     posts := [post()],
@@ -1703,6 +1706,7 @@ entry(
 ) ->
     #{
         tags := Tags,
+        query := Query,
         changes := Changes,
         thread := Thread,
         posts := Posts,
@@ -1805,6 +1809,7 @@ entry(
     layout(
         <<"card:", N/binary>>,
         [
+            search_bar(Query),
             ike_html:el(h1, [ike_html:text(<<"card:", N/binary>>)]),
             ike_html:el(p, [
                 anchor(<<"/booru">>, <<"booru">>),
@@ -1813,7 +1818,10 @@ entry(
             ])
             | Newest
         ] ++ Whose ++
-            [ike_html:el(p, [ike_html:text(<<"tags ">>) | spaced([tag_link(T) || T <- Tags])])] ++
+            [
+                ike_html:el(p, [ike_html:text(<<"tags">>)]),
+                ike_html:el(ul, [{class, <<"tags">>}], [card_tag(T, Query) || T <- Tags])
+            ] ++
             Commentary ++
             [Edit] ++
             [
@@ -1897,13 +1905,76 @@ changed({When, Added, Removed}) ->
         ike_html:text(<<Plus/binary, Minus/binary>>)
     ]).
 
+%% a card's tag (lux): + puts it in the search the bar holds, - takes it
+%% out (or, not in it, leaves out what has it, as a minus does); the
+%% name leads to its wiki page
+-spec card_tag(binary(), [binary()]) -> ike_html:html().
+card_tag(Name, Query) ->
+    ike_html:el(li, [
+        ike_html:el(
+            a,
+            [
+                {class, <<"with">>},
+                {href, ike_tag:search_href(ike_tag:with(Query, Name))},
+                {title, <<"search with it">>}
+            ],
+            [ike_html:text(<<"+">>)]
+        ),
+        ike_html:text(<<" ">>),
+        ike_html:el(
+            a,
+            [
+                {class, <<"without">>},
+                {href, ike_tag:search_href(ike_tag:without(Query, Name))},
+                {title, <<"search without it">>}
+            ],
+            [ike_html:text(<<"-">>)]
+        ),
+        ike_html:text(<<" ">>),
+        tag_link(Name)
+    ]).
+
+%% a tag's name, to its page in the wiki; a name no page can have (one
+%% starting with a dot), to the cards that have it
 -spec tag_link(binary()) -> ike_html:html().
 tag_link(Name) ->
-    anchor(<<"/booru/search?tags=", (ike_tag:quoted(Name))/binary>>, Name).
+    case ike_wiki:name(Name) of
+        {ok, Name} -> anchor(ike_wiki:path(Name), Name);
+        _ -> anchor(ike_tag:search_href([Name]), Name)
+    end.
+
+-spec words([binary()]) -> binary().
+words([W]) -> W;
+words([W | Ws]) -> <<W/binary, " ", (words(Ws))/binary>>;
+words([]) -> <<>>.
+
+%% the booru's search bar, on each of its pages, holding the search the
+%% reader came by (lux): a card reached from a search keeps it
+-spec search_bar([binary()]) -> ike_html:html().
+search_bar(Query) ->
+    ike_html:el(
+        form,
+        [{class, <<"search">>}, {method, <<"get">>}, {action, <<"/booru/search">>}],
+        [
+            ike_html:el(
+                input,
+                [
+                    {type, <<"search">>},
+                    {name, <<"tags">>},
+                    {value, words(Query)},
+                    {maxlength, <<"1000">>},
+                    {aria_label, <<"tags">>}
+                ],
+                []
+            ),
+            ike_html:text(<<" ">>),
+            ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"search">>)])
+        ]
+    ).
 
 %% entries by their tags: the form, what it was asked, and what it found
 -spec search(
-    Said :: binary(),
+    Said :: [binary()],
     [
         {
             pos_integer(),
@@ -1916,17 +1987,9 @@ tag_link(Name) ->
 ) -> ike_html:html().
 search(Said, Found) ->
     layout(<<"search">>, [
+        search_bar(Said),
         ike_html:el(h1, [ike_html:text(<<"search">>)]),
-        ike_html:el(form, [{method, <<"get">>}, {action, <<"/booru/search">>}], [
-            ike_html:el(p, [
-                ike_html:el(
-                    input, [{name, <<"tags">>}, {value, Said}, {maxlength, <<"1000">>}], []
-                ),
-                ike_html:text(<<" ">>),
-                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"search">>)])
-            ])
-        ]),
-        ike_html:el(ul, [found(F) || F <- Found])
+        ike_html:el(ul, [found(F, Said) || F <- Found])
     ]).
 
 -spec found(
@@ -1936,11 +1999,17 @@ search(Said, Found) ->
         binary() | undefined,
         integer() | undefined,
         integer() | undefined
-    }
+    },
+    [binary()]
 ) -> ike_html:html().
-found({Id, Hash, Type, _W, _H}) ->
+found({Id, Hash, Type, _W, _H}, Said) ->
     I = integer_to_binary(Id),
-    Href = <<"/booru/", I/binary>>,
+    %% the card, with the search it was found by
+    Href =
+        case Said of
+            [] -> <<"/booru/", I/binary>>;
+            _ -> <<"/booru/", I/binary, "?tags=", (ike_tag:query_string(Said))/binary>>
+        end,
     ike_html:el(li, [
         case {Hash, Type} of
             {<<_/binary>>, <<_/binary>>} ->
@@ -1969,6 +2038,7 @@ moderated_entry(Csrf, Id, State, Kinds) ->
 -spec entries([{pos_integer(), image() | gone}]) -> ike_html:html().
 entries(Entries) ->
     layout(<<"booru">>, [
+        search_bar([]),
         ike_html:el(h1, [ike_html:text(<<"booru">>)]),
         ike_html:el(ul, [
             ike_html:el(li, [
@@ -2005,12 +2075,13 @@ wiki_index(Names) ->
 -spec wiki_page(
     binary(),
     #{thread := pos_integer(), revision := pos_integer(), time := integer(), body := binary()},
-    #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()}
+    #{integer() | {booru, integer()} | {page, binary()} | {meta, integer()} => binary()},
+    Tagged :: boolean()
 ) -> ike_html:html().
 %% the page, its title with the way to edit it beside it (a word for now,
 %% a pen later; the key e too, where scripts run), and the revision it
 %% is as of, whose number leads to the history and the talk alike
-wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links) ->
+wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links, Tagged) ->
     Stamp = stamp(Time),
     Edit = ike_html:el(
         a, [{class, <<"edit">>}, {href, <<(ike_wiki:path(Name))/binary, "/edit">>}], [
@@ -2027,22 +2098,39 @@ wiki_page(Name, #{revision := Revision, time := Time, body := Body}, Links) ->
                     ike_html:text(<<", ">>),
                     ike_html:el(time, [{datetime, Stamp}], [ike_html:text(Stamp)])
                 ])
-            ]
+            ] ++ tagged(Name, Tagged)
     ]).
 
-%% a name with no page yet
--spec wiki_missing(binary(), SignedIn :: boolean()) -> ike_html:html().
-wiki_missing(Name, SignedIn) ->
-    layout(Name, [
-        ike_html:el(h1, [ike_html:text(Name)]),
-        ike_html:el(p, [
-            ike_html:text(<<"no page by this name yet. ">>),
-            case SignedIn of
-                true -> anchor(<<(ike_wiki:path(Name))/binary, "/edit">>, <<"start it">>);
-                false -> anchor(<<"/login">>, <<"log in to start it">>)
-            end
+%% a tag's page leads to the cards that have it
+-spec tagged(binary(), boolean()) -> [ike_html:html()].
+tagged(Name, true) ->
+    [
+        ike_html:el(p, [{class, <<"cards">>}], [
+            anchor(ike_tag:search_href([Name]), <<"cards tagged ", Name/binary>>)
         ])
-    ]).
+    ];
+tagged(_Name, false) ->
+    [].
+
+%% a name with no page yet
+-spec wiki_missing(binary(), SignedIn :: boolean(), Tagged :: boolean()) -> ike_html:html().
+wiki_missing(Name, SignedIn, Tagged) ->
+    layout(
+        Name,
+        [
+            ike_html:el(h1, [ike_html:text(Name)])
+            | tagged(Name, Tagged)
+        ] ++
+            [
+                ike_html:el(p, [
+                    ike_html:text(<<"no page by this name yet. ">>),
+                    case SignedIn of
+                        true -> anchor(<<(ike_wiki:path(Name))/binary, "/edit">>, <<"start it">>);
+                        false -> anchor(<<"/login">>, <<"log in to start it">>)
+                    end
+                ])
+            ]
+    ).
 
 %% where a poster gives the password a post is retracted with
 -spec password_field(binary()) -> ike_html:html().

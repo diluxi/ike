@@ -5,6 +5,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, dirty/1, dirty_board/1, dirty_booru/1, settle/1, sync/0]).
+-export([entry_page/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -522,6 +523,15 @@ render_board(#state{conn = Conn, dir = Dir}, Name) ->
 %% writer unlinks it
 -spec render_entry(#state{}, integer()) -> ok | none.
 render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
+    case entry_page(Conn, Entry, []) of
+        {ok, Page} -> write(Dir, <<"booru/", (integer_to_binary(Entry))/binary, ".html">>, Page);
+        none -> none
+    end.
+
+%% the page, with the search its bar holds: none for the file, and the
+%% reader's when one comes by a search (made per request, ike_reader)
+-spec entry_page(ike_db:reader(), integer(), [binary()]) -> {ok, ike_html:html()} | none.
+entry_page(Conn, Entry, Query) ->
     Versions = <<
         "SELECT v.position, x.hash, x.filetype, coalesce(x.width, 0), coalesce(x.height, 0),"
         " x.family, x.axes FROM booru_version v"
@@ -586,6 +596,7 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                 {{ok, Vs}, {ok, Ps}, {ok, Ls}, {ok, Ts}, {ok, Cs}} ->
                     Page = ike_view:entry(#{
                         id => Entry,
+                        query => Query,
                         time => Time,
                         thread =>
                             case Thread of
@@ -624,7 +635,7 @@ render_entry(#state{conn = Conn, dir = Dir}, Entry) ->
                          || [W, A, R] <- Cs, is_integer(W), is_binary(A), is_binary(R)
                         ]
                     }),
-                    write(Dir, <<"booru/", (integer_to_binary(Entry))/binary, ".html">>, Page);
+                    {ok, Page};
                 Other ->
                     error({render, {booru, Entry}, Other})
             end;

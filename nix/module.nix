@@ -458,8 +458,11 @@ in {
 					request_body @form {
 						max_size 64KB
 					}
+					# a card reached from a search is made by ike, its search
+					# bar holding the search (lux)
 					@page {
 						method GET HEAD
+						not query tags=*
 						file {
 							root ${pages}
 							try_files {path}.html {path}index.html

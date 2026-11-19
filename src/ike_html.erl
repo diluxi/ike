@@ -95,7 +95,9 @@
         | formmethod
         | formenctype
         | formtarget
-        | spellcheck,
+        | spellcheck
+        | title
+        | aria_label,
         binary()
     }
     | required
@@ -243,6 +245,8 @@ tag(video) -> <<"video">>.
 
 -spec name(atom()) -> binary().
 name(accept) -> <<"accept">>;
+name(title) -> <<"title">>;
+name(aria_label) -> <<"aria-label">>;
 name(action) -> <<"action">>;
 name(alt) -> <<"alt">>;
 name(charset) -> <<"charset">>;

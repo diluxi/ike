@@ -162,8 +162,8 @@ posted_it_is_an_entry(Config) ->
     {200, _, Page} = request(Config, get, Entry, [], none),
     {_, _} = binary:match(Page, <<"class=\"specimen\"">>),
     {_, _} = binary:match(Page, <<"data-axis=\"wght\"">>),
-    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=font\"">>),
-    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=sans\"">>).
+    {_, _} = binary:match(Page, <<"href=\"/wiki/font\"">>),
+    {_, _} = binary:match(Page, <<"href=\"/wiki/sans\"">>).
 
 purged_its_files_go(Config) ->
     #{csrf := Csrf} = Session = login(Config, <<"purged-type">>),

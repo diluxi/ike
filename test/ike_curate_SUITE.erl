@@ -288,7 +288,7 @@ revised_and_amended(Config) ->
     ),
     {_, _} = binary:match(
         Laid,
-        <<"href=\"/booru/search?tags=copyright:%E3%82%AC%E3%83%BC%E3%83%AB%E3%82%BA%E3%83%90%E3%83%B3%E3%83%89%E3%82%AF%E3%83%A9%E3%82%A4\"">>
+        <<"href=\"/wiki/copyright:%E3%82%AC%E3%83%BC%E3%83%AB%E3%82%BA%E3%83%90%E3%83%B3%E3%83%89%E3%82%AF%E3%83%A9%E3%82%A4\"">>
     ),
     %% the same box again, tidied the same, is no change; an unsigned
     %% change is a revision of its own

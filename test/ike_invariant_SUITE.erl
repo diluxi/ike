@@ -357,6 +357,7 @@ inv02_works_without_scripts(Config) ->
         {get, "/booru", []},
         {get, "/booru/1", []},
         {get, "/booru/search?tags=a+-b+c*", []},
+        {get, "/booru/1?tags=a+-b+c*", []},
         {get, "/wiki", []},
         {get, "/wiki/nothing_yet", []},
         {get, "/wiki/nothing_yet/edit", Cookies},
@@ -658,6 +659,7 @@ inv04_text_is_escaped(Config) ->
             "/upload?x=" ++ Attack,
             "/account?x=" ++ Attack,
             "/booru/search?tags=" ++ Attack,
+            "/booru/1?tags=" ++ Attack,
             "/wiki/" ++ Attack,
             "/wiki/" ++ Attack ++ "/history"
         ]

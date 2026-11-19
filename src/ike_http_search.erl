@@ -18,22 +18,14 @@ init(Req, State) ->
                     catch
                         _:_ -> <<>>
                     end,
-                {Must, Not, Prefixes} = Query = ike_tag:query(Text),
+                Query = ike_tag:query(Text),
                 Found =
                     case Query of
                         {[], [], []} -> [];
                         _ -> ike_reader:search(Query)
                     end,
-                Said = joined(
-                    Must ++ [<<"-", N/binary>> || N <- Not] ++ [<<P/binary, "*">> || P <- Prefixes]
-                ),
-                ike_http:page(200, ike_view:search(Said, Found), Req);
+                ike_http:page(200, ike_view:search(ike_tag:said(Text), Found), Req);
             _ ->
                 ike_http:reply(405, Req)
         end,
     {ok, Reply, State}.
-
--spec joined([binary()]) -> binary().
-joined([W]) -> W;
-joined([W | Ws]) -> <<W/binary, " ", (joined(Ws))/binary>>;
-joined([]) -> <<>>.

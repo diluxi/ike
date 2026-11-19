@@ -85,6 +85,8 @@ an admin opens the trunk). `phi/cards` (curations are cards;
 stripper in a microvm now, on a host of its own next month; one
 option, tcp between). `phi/fetch` (uploads from a link, tweets as
 Danbooru reads them; the fetcher reaches public addresses only, tested).
+`phi/searchbar` (the booru's search bar stays on a card reached from a
+search; + and - beside each tag; tags lead to the wiki).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.

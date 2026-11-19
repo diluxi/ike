@@ -16,7 +16,8 @@
     a_purged_image_leaves_a_gap/1,
     entries_for_older_images/1,
     tagged_and_found/1,
-    tags_by_what_it_is/1
+    tags_by_what_it_is/1,
+    the_search_bar_stays/1
 ]).
 
 -import(ike_browser, [login/2, login/3, request/5, query/3, cookies/1, upload/3]).
@@ -29,7 +30,8 @@ all() ->
         a_purged_image_leaves_a_gap,
         entries_for_older_images,
         tagged_and_found,
-        tags_by_what_it_is
+        tags_by_what_it_is,
+        the_search_bar_stays
     ].
 
 init_per_suite(Config) ->
@@ -237,13 +239,15 @@ tagged_and_found(Config) ->
     403 = tag(Config, Here, E1, "nobody_tag"),
     403 = tag(Config, cookies(Session), E1, "no_origin"),
     [[0]] = query(Config, "SELECT count(*) FROM tag WHERE name IN ('nobody_tag', 'no_origin')", []),
-    %% the entry's page lists them, linked to a search, and what changed,
-    %% as a revision in its thread (unsigned: no name)
+    %% the entry's page lists them, each linked to its wiki page (lux),
+    %% and what changed, as a revision in its thread (unsigned: no name)
     {200, _, Page} = request(Config, get, "/booru/" ++ E1, [], none),
-    {_, _} = binary:match(Page, <<"href=\"/booru/search?tags=blue_hair\"">>),
-    {_, _} = binary:match(
-        Page, <<"<ins><a href=\"/booru/search?tags=rating:s\">rating:s</a></ins>">>
-    ),
+    {_, _} = binary:match(Page, <<"<a href=\"/wiki/blue_hair\">blue_hair</a>">>),
+    {_, _} = binary:match(Page, <<"<ins><a href=\"/wiki/rating:s\">rating:s</a></ins>">>),
+    %% a tag with no page has one to be led to, and to its cards from
+    {200, _, Wiki} = request(Config, get, "/wiki/blue_hair", [], none),
+    {_, _} = binary:match(Wiki, <<"href=\"/booru/search?tags=blue_hair\"">>),
+    {404, _, _} = request(Config, get, "/wiki/no_such_tag", [], none),
     nomatch = binary:match(Page, <<"tagger">>),
     %% the history keeps who
     [[_Actor]] = query(Config, "SELECT actor FROM tag_change WHERE booru = ? LIMIT 1", [
@@ -251,7 +255,7 @@ tagged_and_found(Config) ->
     ]),
     %% search: every name, none of the minus, a name by its start
     Has = fun(Page1, E) ->
-        binary:match(Page1, list_to_binary("href=\"/booru/" ++ E ++ "\"")) =/= nomatch
+        binary:match(Page1, list_to_binary("href=\"/booru/" ++ E ++ "?tags=")) =/= nomatch
     end,
     S1 = search(Config, "long_hair"),
     {true, true} = {Has(S1, E1), Has(S1, E2)},
@@ -301,8 +305,45 @@ tags_by_what_it_is(Config) ->
     ],
     E = integer_to_list(entry_of(Config, Webm)),
     Has = fun(Page, X) ->
-        binary:match(Page, list_to_binary("href=\"/booru/" ++ X ++ "\"")) =/= nomatch
+        binary:match(Page, list_to_binary("href=\"/booru/" ++ X ++ "?tags=")) =/= nomatch
     end,
     true = Has(search(Config, "video audio"), E),
     false = Has(search(Config, "video -audio"), E),
     [[0]] = query(Config, "SELECT count(*) FROM tag_change WHERE booru = ?", [list_to_integer(E)]).
+
+%% the booru's pages each have the search bar, and a card reached from a
+%% search keeps it there (lux); beside each of its tags, + puts the tag
+%% in that search and - takes it out, or leaves out what has it
+the_search_bar_stays(Config) ->
+    Session = login(Config, <<"bar-keeper">>),
+    Here = [{"origin", ?config(base, Config)}],
+    P = posted(Config, Session, <<"bar-keeper">>, "base.jpg", <<"kept">>),
+    E = integer_to_list(entry_of(Config, P)),
+    303 = tag(Config, cookies(Session) ++ Here, E, "bar_one bar_two"),
+    Bar = <<"<form class=\"search\" method=\"get\" action=\"/booru/search\">">>,
+    {200, _, Index} = request(Config, get, "/booru", [], none),
+    {_, _} = binary:match(Index, Bar),
+    Found = search(Config, "bar_one -bar_three"),
+    {_, _} = binary:match(Found, <<"value=\"bar_one -bar_three\"">>),
+    {_, _} = binary:match(
+        Found, list_to_binary("href=\"/booru/" ++ E ++ "?tags=bar_one+-bar_three\"")
+    ),
+    {200, _, Card} = request(Config, get, "/booru/" ++ E ++ "?tags=bar_one+-bar_three", [], none),
+    {_, _} = binary:match(Card, Bar),
+    {_, _} = binary:match(Card, <<"value=\"bar_one -bar_three\"">>),
+    With = fun(Q) -> list_to_binary("class=\"with\" href=\"/booru/search" ++ Q ++ "\"") end,
+    Without = fun(Q) -> list_to_binary("class=\"without\" href=\"/booru/search" ++ Q ++ "\"") end,
+    {_, _} = binary:match(Card, With("?tags=bar_one+-bar_three+bar_two")),
+    {_, _} = binary:match(Card, With("?tags=bar_one+-bar_three")),
+    {_, _} = binary:match(Card, Without("?tags=-bar_three")),
+    {_, _} = binary:match(Card, Without("?tags=bar_one+-bar_three+-bar_two")),
+    %% without a search, the card is its file: the bar empty, + and -
+    %% searching from nothing
+    {200, _, Plain} = request(Config, get, "/booru/" ++ E, [], none),
+    {_, _} = binary:match(Plain, <<"value=\"\"">>),
+    {_, _} = binary:match(Plain, With("?tags=bar_one")),
+    {_, _} = binary:match(Plain, Without("?tags=-bar_two")),
+    %% what is no name is not kept
+    {200, _, Odd} = request(Config, get, "/booru/" ++ E ++ "?tags=%3Cb%3E+bar_two", [], none),
+    {_, _} = binary:match(Odd, <<"value=\"bar_two\"">>),
+    {404, _, _} = request(Config, get, "/booru/999999?tags=bar_one", [], none).

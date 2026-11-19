@@ -1511,3 +1511,26 @@ lux's model, in lux's words where they are given:
   the unit's deny list; and `test/live/x-tweet.sh`, by hand on theorem,
   fetches lux's tweet from X itself and checks its words, author and
   image to the byte (it passed 2026-11-18).
+
+## The search bar stays, and tags lead to the wiki
+
+lux, 2026-11-19: a search bar the booru keeps while a card is looked at,
++ and - beside each of a card's tags, and the tags linked into the wiki.
+
+- **Where the search is kept:** in the link. A search's results lead to
+  `/booru/N?tags=...`, and that card is made per request (by the reader,
+  with the renderer's own code), its bar holding the search; without a
+  search the card is its file, as before. Caddy leaves a request with
+  `tags` in its query to ike. So it needs no script, and no cookie: the
+  bar keeps what the address keeps (back and forward included), and a
+  card opened from elsewhere starts with an empty bar.
+- **+ and -:** + puts the tag in the search (on, if it was taken off);
+  - takes it out if it is in it, and otherwise leaves out the cards that
+  have it, as a minus does (Danbooru's two buttons). Each is a link to
+  the search it makes.
+- **Tags lead to their wiki page**, on the card and in its revisions; a
+  tag's page (or the page offered for one with none yet, now a 200
+  rather than a 404) leads to the cards that have it. A name no page can
+  have (one starting with a dot) still leads to its search.
+- **Not cached:** a card made per request reads the database each time,
+  as search does (N6's cache is still owed for both).

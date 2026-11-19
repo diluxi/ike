@@ -47,9 +47,17 @@ name(Req) ->
 read(Name, Req) ->
     case ike_reader:page(Name) of
         {ok, #{body := Body} = Page} ->
-            ike_http:page(200, ike_view:wiki_page(Name, Page, ike_reader:links(Body)), Req);
+            Html = ike_view:wiki_page(Name, Page, ike_reader:links(Body), ike_reader:tagged(Name)),
+            ike_http:page(200, Html, Req);
         none ->
-            ike_http:page(404, ike_view:wiki_missing(Name, signed_in(Req)), Req)
+            %% a tag with no page yet is still somewhere to be led to
+            Tagged = ike_reader:tagged(Name),
+            Status =
+                case Tagged of
+                    true -> 200;
+                    false -> 404
+                end,
+            ike_http:page(Status, ike_view:wiki_missing(Name, signed_in(Req), Tagged), Req)
     end.
 
 -spec signed_in(cowboy_req:req()) -> boolean().
