@@ -29,7 +29,8 @@ article > p { margin: 8px 24px; }
 article header a { color: #800000; text-decoration: none; }
 article header time { color: #800000; }
 blockquote { color: #789922; margin: 0 0 0 1em; }
-blockquote::before { content: ">"; }
+blockquote > p { margin: 0; }
+blockquote > p::before { content: ">"; }
 
 /* forms as the post box: labels on warm ground */
 form label { background: #eeaa88; border: 1px solid #000000; padding: 0 4px; font-weight: bold;
