@@ -4,6 +4,7 @@
 -module(ike_media).
 
 -export([file/2, thumb/1, url/2, thumb_url/1, parse/1, mime/1, moving/1]).
+-export([style_url/0, theme_file/1, theme_url/1, styled/1, theme_name/1]).
 
 %% what a type is served as
 -spec mime(binary()) -> binary().
@@ -64,6 +65,45 @@ parse(<<Hex:64/binary, ".otf">>) -> hex(Hex, <<"font/otf">>);
 parse(<<Hex:64/binary, ".woff">>) -> hex(Hex, <<"font/woff">>);
 parse(<<Hex:64/binary, ".woff2">>) -> hex(Hex, <<"font/woff2">>);
 parse(_) -> error.
+
+%% the stylesheets, on the media origin (lux: no stylesheet is static, a
+%% moderator edits each; moderators' bytes are users' bytes, which the
+%% main origin never serves, invariant 5): the site's, at a name that
+%% stays, and each theme's, for trying it before it is the site's
+-spec style_url() -> binary().
+style_url() ->
+    <<(ike_config:media_origin())/binary, "/style.css">>.
+
+-spec theme_file(binary()) -> binary().
+theme_file(Name) ->
+    <<"theme.", Name/binary, ".css">>.
+
+-spec theme_url(binary()) -> binary().
+theme_url(Name) ->
+    <<(ike_config:media_origin())/binary, "/", (theme_file(Name))/binary>>.
+
+%% whether a media origin's name is a stylesheet's
+-spec styled(binary()) -> boolean().
+styled(<<"style.css">>) ->
+    true;
+styled(<<"theme.", Rest/binary>>) when byte_size(Rest) > 4 ->
+    case binary:part(Rest, byte_size(Rest) - 4, 4) of
+        <<".css">> -> theme_name(binary:part(Rest, 0, byte_size(Rest) - 4));
+        _ -> false
+    end;
+styled(_) ->
+    false.
+
+%% a theme's name: what a file's name may hold
+-spec theme_name(binary()) -> boolean().
+theme_name(Name) ->
+    byte_size(Name) >= 1 andalso byte_size(Name) =< 32 andalso
+        <<
+            <<C>>
+         || <<C>> <= Name,
+            (C >= $a andalso C =< $z) orelse (C >= $0 andalso C =< $9) orelse C =:= $-
+        >> =:=
+            Name.
 
 -spec hex(binary(), binary()) -> {ok, binary(), binary()} | error.
 hex(Hex, Mime) ->

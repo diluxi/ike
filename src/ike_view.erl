@@ -6,7 +6,8 @@
 -export([moderation/5, moderated/3, upload/4, upload_locked/0, account/1, acted/2]).
 -export([entry/1, entries/1, moderated_entry/4, search/2, ambiguous/2]).
 -export([wiki_index/1, wiki_many/2, wiki_page/4, wiki_missing/3, wiki_edit/5, wiki_history/2]).
--export([style/0, script/0, user/2, trunk/1, meta/4, moderated_meta/4, index/2]).
+-export([themes/2, theme/4]).
+-export([script/0, user/2, trunk/1, meta/4, moderated_meta/4, index/2]).
 -export([preview/3, preview_button/0]).
 
 -export_type([post/0, summary/0, board/0, held/0, image/0]).
@@ -115,7 +116,7 @@ thread(#{name := Name, log := Log} = Board, Root, Posts) ->
                     ])
                 ]
         end,
-    layout(Heading, [
+    layout(Heading, <<"thread">>, [
         ike_html:el(h1, [ike_html:text(Heading)]),
         ike_html:el(p, [board_link(Board)])
         | Body ++ Reply
@@ -748,6 +749,11 @@ moderation({Csrf, Role}, Boards, Suspended, Down, Reports) ->
             anchor(<<"/board/mod">>, <<"/mod/">>),
             ike_html:text(<<", with the reason given and without your name.">>)
         ]),
+        %% the site's looks, a moderator's to change (lux)
+        ike_html:el(
+            p,
+            [anchor(<<"/mod/themes">>, <<"themes">>) || Role =:= admin orelse Role =:= moderator]
+        ),
         %% what readers reported, oldest first
         ike_html:el(ul, [
             ike_html:el(li, [
@@ -1806,10 +1812,16 @@ entry(
                     ike_html:el(p, [anchor(<<"/board/trunk/", T/binary, "/reply">>, <<"comment">>)])
                 ]
         end,
-    layout(
+    %% the search and the tags at the side (lux), where a theme puts it
+    sided(
         <<"card:", N/binary>>,
+        <<"card">>,
         [
             search_bar(Query),
+            ike_html:el(h2, [ike_html:text(<<"tags">>)]),
+            ike_html:el(ul, [{class, <<"tags">>}], [card_tag(T, Query) || T <- Tags])
+        ],
+        [
             ike_html:el(h1, [ike_html:text(<<"card:", N/binary>>)]),
             ike_html:el(p, [
                 anchor(<<"/booru">>, <<"booru">>),
@@ -1818,10 +1830,6 @@ entry(
             ])
             | Newest
         ] ++ Whose ++
-            [
-                ike_html:el(p, [ike_html:text(<<"tags">>)]),
-                ike_html:el(ul, [{class, <<"tags">>}], [card_tag(T, Query) || T <- Tags])
-            ] ++
             Commentary ++
             [Edit] ++
             [
@@ -2003,10 +2011,9 @@ search_bar(Query) ->
     ]
 ) -> ike_html:html().
 search(Said, Found) ->
-    layout(<<"search">>, [
-        search_bar(Said),
+    sided(<<"search">>, <<"booru search">>, [search_bar(Said)], [
         ike_html:el(h1, [ike_html:text(<<"search">>)]),
-        ike_html:el(ul, [found(F, Said) || F <- Found])
+        ike_html:el(ul, [{class, <<"thumbs">>}], [found(F, Said) || F <- Found])
     ]).
 
 -spec found(
@@ -2054,10 +2061,9 @@ moderated_entry(Csrf, Id, State, Kinds) ->
 %% the booru: the newest entries, each its thumbnail, linking to it
 -spec entries([{pos_integer(), image() | gone}]) -> ike_html:html().
 entries(Entries) ->
-    layout(<<"booru">>, [
-        search_bar([]),
+    sided(<<"booru">>, <<"booru">>, [search_bar([])], [
         ike_html:el(h1, [ike_html:text(<<"booru">>)]),
-        ike_html:el(ul, [
+        ike_html:el(ul, [{class, <<"thumbs">>}], [
             ike_html:el(li, [
                 case Image of
                     #{thumb := Thumb} ->
@@ -2304,6 +2310,166 @@ files_field(Which) ->
         )
     ]).
 
+%% the themes (lux): each to its page, the site's marked, the others to
+%% be made the site's or dropped; and a new one, from another's sheet
+-spec themes(binary(), [{binary(), boolean()}]) -> ike_html:html().
+themes(Csrf, Themes) ->
+    Site = [N || {N, true} <- Themes],
+    Hidden = fun(Name, Value) ->
+        ike_html:el(input, [{type, <<"hidden">>}, {name, Name}, {value, Value}], [])
+    end,
+    Button = fun(Name, Do, Label) ->
+        ike_html:el(
+            form, [{method, <<"post">>}, {action, <<"/mod/themes">>}, {class, <<"inline">>}], [
+                Hidden(<<"csrf">>, Csrf),
+                Hidden(<<"name">>, Name),
+                Hidden(<<"do">>, Do),
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(Label)])
+            ]
+        )
+    end,
+    layout(<<"themes">>, <<"themes">>, [
+        ike_html:el(h1, [ike_html:text(<<"themes">>)]),
+        ike_html:el(p, [
+            anchor(<<"/mod">>, <<"moderation">>),
+            ike_html:text(
+                <<". the site's looks: one stylesheet a theme, edited whole on its page,",
+                    " which wears it. every moderator may change them.">>
+            )
+        ]),
+        ike_html:el(ul, [
+            ike_html:el(
+                li,
+                [anchor(<<"/mod/themes/", Name/binary>>, Name), ike_html:text(<<" ">>)] ++
+                    case Active of
+                        true ->
+                            [ike_html:text(<<"(the site's)">>)];
+                        false ->
+                            [
+                                Button(Name, <<"use">>, <<"make it the site's">>),
+                                Button(Name, <<"drop">>, <<"drop">>)
+                            ]
+                    end
+            )
+         || {Name, Active} <- Themes
+        ]),
+        ike_html:el(h2, [ike_html:text(<<"a new theme">>)]),
+        ike_html:el(form, [{method, <<"post">>}, {action, <<"/mod/themes">>}], [
+            Hidden(<<"csrf">>, Csrf),
+            Hidden(<<"do">>, <<"new">>),
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"name">>}], [
+                    ike_html:text(<<"name (a to z, 0 to 9, -) ">>)
+                ]),
+                ike_html:el(
+                    input,
+                    [{id, <<"name">>}, {name, <<"name">>}, {maxlength, <<"32">>}, required],
+                    []
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(label, [{for, <<"from">>}], [
+                    ike_html:text(<<"starting from the theme ">>)
+                ]),
+                ike_html:el(
+                    input,
+                    [
+                        {id, <<"from">>},
+                        {name, <<"from">>},
+                        {maxlength, <<"32">>},
+                        {value,
+                            case Site of
+                                [S | _] -> S;
+                                [] -> <<>>
+                            end},
+                        required
+                    ],
+                    []
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"make it">>)])
+            ])
+        ])
+    ]).
+
+%% a theme's page: its stylesheet whole, to edit, and a little of
+%% everything a page may show, all in the theme itself, to try it on
+-spec theme(binary(), binary(), binary(), boolean()) -> ike_html:html().
+theme(Csrf, Name, Css, Active) ->
+    Sample = [
+        ike_html:el(h2, [ike_html:text(<<"how it looks">>)]),
+        ike_html:el(ol, [
+            ike_html:el(li, [
+                ike_html:el(article, [
+                    ike_html:el(header, [
+                        ike_html:el(span, [{class, <<"title">>}], [ike_html:text(<<"a title">>)]),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(span, [{class, <<"name">>}], [ike_html:text(<<"nobody">>)]),
+                        ike_html:text(<<" ">>),
+                        anchor(<<"#">>, <<">>1">>)
+                    ]),
+                    ike_html:el(p, [ike_html:text(<<"a post, ">>), anchor(<<"#">>, <<"a link">>)]),
+                    ike_html:el(blockquote, [ike_html:el(p, [ike_html:text(<<"a quote">>)])])
+                ])
+            ]),
+            ike_html:el(li, [
+                ike_html:el(article, [
+                    ike_html:el(header, [
+                        ike_html:el(span, [{class, <<"name">>}], [ike_html:text(<<"nobody">>)])
+                    ]),
+                    ike_html:el(p, [
+                        ike_html:el(ins, [ike_html:text(<<"added">>)]),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(del, [ike_html:text(<<"taken">>)]),
+                        ike_html:text(<<" ">>),
+                        ike_html:el(span, [{class, <<"spoiler">>}], [ike_html:text(<<"a spoiler">>)])
+                    ])
+                ])
+            ])
+        ]),
+        ike_html:el(ul, [{class, <<"tags">>}], [
+            ike_html:el(li, [
+                ike_html:el(a, [{class, <<"tag tag-", K/binary>>}, {href, <<"#">>}], [
+                    ike_html:text(K)
+                ])
+            ])
+         || K <- ike_tag:kinds()
+        ])
+    ],
+    styled(<<"theme ", Name/binary>>, ike_media:theme_url(Name), [{class, <<"theme">>}], [
+        ike_html:el(h1, [ike_html:text(<<"theme ", Name/binary>>)]),
+        ike_html:el(p, [
+            anchor(<<"/mod/themes">>, <<"themes">>),
+            ike_html:text(
+                case Active of
+                    true -> <<". the site's: saved, it is what every page wears.">>;
+                    false -> <<". not the site's: this page wears it, nothing else does.">>
+                end
+            )
+        ]),
+        ike_html:el(form, [{method, <<"post">>}, {action, <<"/mod/themes/", Name/binary>>}], [
+            ike_html:el(input, [{type, <<"hidden">>}, {name, <<"csrf">>}, {value, Csrf}], []),
+            ike_html:el(p, [
+                ike_html:el(
+                    textarea,
+                    [
+                        {name, <<"css">>},
+                        {class, <<"css">>},
+                        {rows, <<"30">>},
+                        {spellcheck, <<"false">>},
+                        {aria_label, <<"stylesheet">>}
+                    ],
+                    [ike_html:text(Css)]
+                )
+            ]),
+            ike_html:el(p, [
+                ike_html:el(button, [{type, <<"submit">>}], [ike_html:text(<<"save">>)])
+            ])
+        ])
+        | Sample
+    ]).
+
 %% a page that only says something
 -spec message(Title :: binary(), Text :: binary()) -> ike_html:html().
 message(Title, Text) ->
@@ -2311,38 +2477,6 @@ message(Title, Text) ->
         ike_html:el(h1, [ike_html:text(Title)]),
         ike_html:el(p, [ike_html:text(Text)])
     ]).
-
-%% plain looks: what is added green, what is taken red, a revision's
-%% count of lines beside its header until it is opened
--spec style() -> iodata().
-style() ->
-    <<
-        "ins { color: #116329; background: #dafbe1; text-decoration: none; }\n"
-        "del { color: #82071e; background: #ffebe9; }\n"
-        "header details { display: inline; }\n"
-        "header details[open] { display: block; }\n"
-        "header details > summary { display: inline; cursor: pointer; }\n"
-        ".spoiler { background: #24292f; color: #24292f; }\n"
-        ".spoiler:hover { color: #ffffff; }\n"
-        ".gone { color: #6e7781; }\n"
-        ".added { color: #116329; }\n"
-        ".removed { color: #82071e; }\n"
-        "a.missing { color: #cf222e; }\n"
-        %% a link out of ike says so before it (lux); a site's own icon later
-        "a.out::before { content: \"\\2197\\FE0E\\00A0\"; font-size: 0.85em; }\n"
-        ".title { font-weight: bold; }\n"
-        ".specimen .sample { font-size: 48px; width: 100%; min-height: 3em;"
-        " box-sizing: border-box; border: 1px dashed #8c959f; background: transparent; }\n"
-        "textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }\n"
-        %% kinds of tag and page, in danbooru's colours (lux: a theme may
-        %% tell them apart as it likes)
-        "a.tag-artist, .page-artist { color: #c00004; }\n"
-        "a.tag-canon, .page-canon { color: #a800aa; }\n"
-        "a.tag-character, .page-character { color: #00ab2c; }\n"
-        "a.tag-meta, .page-meta { color: #fd9200; }\n"
-        "ul.tags { list-style: none; padding-left: 0; }\n"
-        "h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }\n"
-    >>.
 
 %% keys for a text box, for whoever runs scripts: ctrl+enter sends the
 %% form, ctrl+b and ctrl+i put [b] and [i] around what is selected; and
@@ -2425,13 +2559,37 @@ user(Name, Posts) ->
 
 -spec layout(Title :: binary(), [ike_html:html()]) -> ike_html:html().
 layout(Title, Content) ->
-    ike_html:document(Title, [
+    styled(Title, ike_media:style_url(), [], Content).
+
+%% a page whose main says what kind of page it is, for a theme to lay out
+%% as it likes (lux: themes have layouts as well as colours)
+-spec layout(Title :: binary(), Class :: binary(), [ike_html:html()]) -> ike_html:html().
+layout(Title, Class, Content) ->
+    styled(Title, ike_media:style_url(), [{class, Class}], Content).
+
+%% a booru page: a side with its search bar and whatever else, beside
+%% its content, where a theme puts them
+-spec sided(Title :: binary(), Class :: binary(), Aside :: [ike_html:html()], [ike_html:html()]) ->
+    ike_html:html().
+sided(Title, Class, Aside, Content) ->
+    layout(Title, <<"sided ", Class/binary>>, [
+        ike_html:el(aside, Aside),
+        ike_html:el(section, Content)
+    ]).
+
+-spec styled(binary(), binary(), [ike_html:attr()], [ike_html:html()]) -> ike_html:html().
+styled(Title, Style, Main, Content) ->
+    ike_html:document(Title, Style, [
         ike_html:el(nav, [
             anchor(<<"/">>, <<"ike">>),
             ike_html:text(<<" ">>),
+            anchor(<<"/booru">>, <<"booru">>),
+            ike_html:text(<<" ">>),
+            anchor(<<"/wiki">>, <<"wiki">>),
+            ike_html:text(<<" ">>),
             anchor(<<"/account">>, <<"account">>)
         ]),
-        ike_html:el(main, Content)
+        ike_html:el(main, Main, Content)
     ]).
 
 -spec anchor(Href :: binary(), Text :: binary()) -> ike_html:html().

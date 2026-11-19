@@ -518,11 +518,15 @@ inv04_text_is_escaped(Config) ->
             [] = [
                 H
              || [H] <- Hrefs,
-                H =/= <<"/style.css">>,
                 re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match,
-                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~-]*$", [{capture, none}]) =/=
+                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~/+-]*$", [{capture, none}]) =/=
                     match,
-                re:run(H, "^/wiki/([a-z0-9_()!:.-]|%27|%3F)*$", [{capture, none}]) =/= match,
+                re:run(
+                    H,
+                    "^/wiki/((artist|character|canon|description|meta|info)/)?"
+                    "([a-z0-9_()!:.-]|%27|%3F)*$",
+                    [{capture, none}]
+                ) =/= match,
                 re:run(H, "^https?://[^\"<>\\s`]+$", [{capture, none}]) =/= match
             ],
             {match, Classes} = re:run(Page, "class=\"([^\"]*)\"", [
@@ -532,6 +536,8 @@ inv04_text_is_escaped(Config) ->
                 C
              || [C] <- Classes,
                 not lists:member(C, [
+                    %% a thread page's main, for themes
+                    <<"thread">>,
                     <<"name">>,
                     <<"name account">>,
                     <<"name role">>,
@@ -630,11 +636,15 @@ inv04_text_is_escaped(Config) ->
             [] = [
                 H
              || [H] <- Hrefs,
-                H =/= <<"/style.css">>,
                 re:run(H, "^[#/a-z0-9]*$", [{capture, none}]) =/= match,
-                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~-]*$", [{capture, none}]) =/=
+                re:run(H, "^/booru/search\\?tags=[A-Za-z0-9%_()!.:'*~/+-]*$", [{capture, none}]) =/=
                     match,
-                re:run(H, "^/wiki/([a-z0-9_()!:.-]|%27|%3F)*$", [{capture, none}]) =/= match,
+                re:run(
+                    H,
+                    "^/wiki/((artist|character|canon|description|meta|info)/)?"
+                    "([a-z0-9_()!:.-]|%27|%3F)*$",
+                    [{capture, none}]
+                ) =/= match,
                 re:run(H, "^https?://[^\"<>\\s`]+$", [{capture, none}]) =/= match
             ]
         end,
@@ -644,6 +654,29 @@ inv04_text_is_escaped(Config) ->
             <<"> > #<script>\n** [[x'y|<b>]] {{\"><b>}} >>1\"<b> meta #1\"<b> booru #1'x">>
         ]
     ),
+    %% a theme's stylesheet, on the page where a moderator edits it, is
+    %% text in a text box like any other
+    Styler = ike_browser:login(Config, <<"escaped-styler">>, #{groups => [<<"ike-moderator">>]}),
+    #{csrf := StylerCsrf} = Styler,
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/mod/themes/cream",
+        ike_browser:cookies(Styler),
+        {form,
+            uri_string:compose_query([
+                {"csrf", StylerCsrf}, {"css", "a{}</textarea><script>alert(1)</script>"}
+            ])}
+    ),
+    {200, _, Themed} = ike_browser:request(
+        Config, get, "/mod/themes/cream", ike_browser:cookies(Styler), none
+    ),
+    scriptless(Themed),
+    true = lists:all(fun known_tag/1, tags(Themed)),
+    {200, _, Listed} = ike_browser:request(
+        Config, get, "/mod/themes", ike_browser:cookies(Styler), none
+    ),
+    scriptless(Listed),
     %% per-request pages: what a request says of itself is never echoed
     Attack = uri_string:quote("\"><script>alert(1)</script>"),
     lists:foreach(
@@ -767,6 +800,31 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         ["/", "/board/b/new", "/health", "/nothing", "/upload"]
     ),
     Before2 = ike_browser:posts(Config),
+    %% a stylesheet is a moderator's (lux: themes), so a user's bytes: on
+    %% the media origin, typed as css and not sniffed, and the main
+    %% origin has none, nor do its pages take one from anywhere else
+    Moderator = ike_browser:login(Config, <<"styler">>, #{groups => [<<"ike-moderator">>]}),
+    #{csrf := ModCsrf} = Moderator,
+    Sheet = <<"body { color: red; }\n/* </style><script>alert(1)</script> */\n">>,
+    {303, _, _} = ike_browser:request(
+        Config,
+        post,
+        "/mod/themes/plain",
+        ike_browser:cookies(Moderator),
+        {form, uri_string:compose_query([{"csrf", ModCsrf}, {"css", Sheet}])}
+    ),
+    {200, StyleHeaders, Sheet} = ike_browser:media(Config, "http://media.test/style.css"),
+    "text/css" = hd(string:split(proplists:get_value("content-type", StyleHeaders), ";")),
+    "nosniff" = proplists:get_value("x-content-type-options", StyleHeaders),
+    {404, _, NotHere} = ike_browser:request(Config, get, "/style.css", [], none),
+    nomatch = binary:match(NotHere, <<"color: red">>),
+    {200, FrontHeaders, Front} = ike_browser:request(Config, get, "/", [], none),
+    {_, _} = binary:match(
+        Front, <<"<link rel=\"stylesheet\" href=\"http://media.test/style.css\">">>
+    ),
+    Policy = proplists:get_value("content-security-policy", FrontHeaders),
+    true = string:find(Policy, "style-src http://media.test;") =/= nomatch,
+    nomatch = string:find(Policy, "'unsafe-inline'"),
     %% and the tree the web server reads from holds pages, nothing else
     Pages = files(filename:join(?config(dir, Config), "pages")),
     [_ | _] = Pages,
@@ -774,7 +832,7 @@ inv05_no_user_bytes_on_the_main_origin(Config) ->
         F
      || F <- Pages,
         filename:extension(F) =/= ".html",
-        not lists:member(filename:basename(F), ["style.css", "ike.js"])
+        filename:basename(F) =/= "ike.js"
     ].
 
 %% 6. No decoder or metadata stripper runs inside the BEAM.
@@ -1311,9 +1369,9 @@ inv10_private_metas_are_their_owners_and_moderators(Config) ->
             {200, _, Trunk} = ike_browser:request(Config, get, "/trunk", Cookies, none),
             nomatch = binary:match(Trunk, list_to_binary(Meta ++ "\"")),
             {404, _, Missing} = ike_browser:request(Config, get, Meta, Cookies, none),
-            nomatch = binary:match(Missing, <<"media.test">>),
+            nomatch = binary:match(unstyled(Missing), <<"media.test">>),
             {200, _, Uploads} = ike_browser:request(Config, get, "/upload", Cookies, none),
-            nomatch = binary:match(Uploads, <<"media.test">>)
+            nomatch = binary:match(unstyled(Uploads), <<"media.test">>)
         end
      || Cookies <- [ike_browser:cookies(Other), ike_browser:cookies(Janitor), []]
     ],
@@ -2050,7 +2108,6 @@ known_routes() ->
         [<<"booru">>, <<"search">>],
         [<<"booru">>, booru, <<"tags">>],
         [<<"wiki">>],
-        [<<"style.css">>],
         [<<"ike.js">>],
         [<<"user">>, name],
         [<<"trunk">>],
@@ -2071,6 +2128,8 @@ known_routes() ->
         [<<"logout">>],
         [<<"mod">>],
         [<<"mod">>, <<"post">>, post],
+        [<<"mod">>, <<"themes">>],
+        [<<"mod">>, <<"themes">>, theme],
         [<<"mod">>, <<"board">>, board],
         [<<"mod">>, <<"account">>, account],
         [<<"upload">>],
@@ -2113,6 +2172,9 @@ known_tables(Config) ->
         [<<"tag_search_data">>],
         [<<"tag_search_docsize">>],
         [<<"tag_search_idx">>],
+        %% the site's looks and who changed them: no one's posts
+        [<<"theme">>],
+        [<<"theme_change">>],
         [<<"thread">>],
         [<<"upload">>]
     ] = Tables.
@@ -2172,6 +2234,13 @@ act(Config, Cookies, Html, Action, Kind, Reason) ->
     Fields = [{N, V} || [N, V] <- Hidden] ++ [{Field, unicode:characters_to_binary(Reason)}],
     ike_browser:request(Config, post, Action, Cookies, {form, uri_string:compose_query(Fields)}).
 
+%% a page without the site's stylesheet, the one thing every page takes
+%% from the media origin
+unstyled(Html) ->
+    binary:replace(
+        Html, <<"<link rel=\"stylesheet\" href=\"http://media.test/style.css\">">>, <<>>, [global]
+    ).
+
 scriptless(Html) ->
     %% the one script, ike's own, from this origin, deferred; a page
     %% works without it, which is what the rest of this suite shows
@@ -2186,12 +2255,17 @@ scriptless(Html) ->
     nomatch = re:run(Lower, "<(iframe|object|embed|style|svg|math)[\\s>]", [
         {capture, none}
     ]),
-    %% the one stylesheet, from this origin, and no other link
+    %% the one stylesheet, the site's (or on a theme's page, that theme's),
+    %% from the media origin (invariant 5), and no other link
     [] = [
         L
      || {match, Ls} <- [re:run(Lower, "<link[^>]*>", [global, {capture, first, binary}])],
         [L] <- Ls,
-        L =/= <<"<link rel=\"stylesheet\" href=\"/style.css\">">>
+        re:run(
+            L,
+            "^<link rel=\"stylesheet\" href=\"http://media\\.test/(style|theme\\.[a-z0-9-]+)\\.css\">$",
+            [{capture, none}]
+        ) =/= match
     ],
     %% an image is a plain one, from the media origin
     Images =
@@ -2237,6 +2311,7 @@ known_tag(Name) ->
     lists:member(Name, [
         <<"a">>,
         <<"article">>,
+        <<"aside">>,
         <<"b">>,
         <<"blockquote">>,
         <<"body">>,
@@ -2264,6 +2339,7 @@ known_tag(Name) ->
         <<"li">>,
         <<"link">>,
         <<"main">>,
+        <<"section">>,
         <<"meta">>,
         <<"nav">>,
         <<"ol">>,

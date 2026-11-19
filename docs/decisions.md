@@ -1574,3 +1574,46 @@ a kind and a name, since `:` is ikext's.
 - **Addresses:** `/wiki/kind/name` (and `/edit`, `/history`) for a page;
   saving goes there. `/wiki/name` still reads, edits and starts the page
   a name alone leads to.
+
+## Themes
+
+lux, 2026-11-19: no static CSS; theming in `/mod`, any moderator
+changing the site's styles by editing a theme's stylesheet directly; two
+example themes with the colours and layout of 4chan and e621, no
+branding.
+
+- **Themes are rows** (migration 0030), each a name and its stylesheet,
+  one of them the site's; `theme_change` keeps every change with who
+  made it and the sheet it saved. ike seeds three from `priv/themes` the
+  first time: `plain` (the old looks, and the site's), `cream` (an
+  imageboard's cream, maroon and peach, replies boxed beside the first
+  post, green quotes) and `navy` (a big booru's blues, a bar on top, the
+  search and tags in a column on the left, thumbnails on tiles). Neutral
+  names, no logos or names of either site.
+- **On the media origin, not the main one:** a moderator's stylesheet is
+  bytes a user supplied, and invariant 5 says the main origin serves
+  none. So the writer writes `theme.NAME.css` and the site's `style.css`
+  into the media directory, the pages link `MEDIA/style.css`, and the
+  pages' policy says `style-src` the media origin (`'self'` is gone).
+  `/style.css` on the main origin is no more. The name stays the same,
+  so a change of theme needs no page made again; the sheet is served
+  `no-cache`.
+- **What a stylesheet may do:** it is text up to 256 KiB, nothing more is
+  checked. What it can reach is the pages' policy's to say: images and
+  fonts from the media origin only, no other stylesheet, no script. A
+  moderator can still make the site unreadable, or use attribute
+  selectors to load media-origin urls that tell a field's value to
+  whoever reads that origin's traffic (nobody: its log is off); that is
+  a moderator's trust, kept with who did it.
+- **Who:** moderators and admins; janitors and everyone else find
+  `/mod/themes` not there. Edits are kept in `theme_change`, not the
+  public mod log: they act on no one's post.
+- **A theme's page wears it**, with a sample of posts, quotes, changes
+  and each kind of tag, so a theme is tried before it is the site's.
+- **Layouts:** the booru's pages now have a side (`aside`: the search
+  bar, and on a card its tags) beside their content (`section`), in a
+  `main class="sided ..."`; a thread's main is `thread`. Themes lay these
+  out as they like; plain puts the side on the left when there is room.
+  The top bar gained booru and wiki.
+- *Simplified:* one theme for the whole site; a reader picking their own
+  (as imageboards let) is Q48.

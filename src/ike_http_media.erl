@@ -13,24 +13,13 @@
 init(Req, public = State) ->
     Reply =
         case {cowboy_req:method(Req), cowboy_req:binding(file, Req)} of
+            %% a stylesheet: the site's, or a theme's; asked after each time
             {Method, Name} when
                 (Method =:= <<"GET">> orelse Method =:= <<"HEAD">>), is_binary(Name)
             ->
-                case ike_media:parse(Name) of
-                    {ok, _, Mime} ->
-                        case
-                            file:read_file(<<(ike_config:media_dir())/binary, "/", Name/binary>>)
-                        of
-                            {ok, Bytes} ->
-                                Headers = (typed(Mime))#{
-                                    <<"cache-control">> => <<"public, max-age=31536000, immutable">>
-                                },
-                                cowboy_req:reply(200, Headers, Bytes, Req);
-                            {error, _} ->
-                                missing(Req)
-                        end;
-                    error ->
-                        missing(Req)
+                case ike_media:styled(Name) of
+                    true -> stylesheet(Name, Req);
+                    false -> public(Name, Req)
                 end;
             _ ->
                 missing(Req)
@@ -61,6 +50,38 @@ init(Req, State) ->
                 missing(Req)
         end,
     {ok, Reply, State}.
+
+%% a shown asset's file, which never changes
+-spec public(binary(), cowboy_req:req()) -> cowboy_req:req().
+public(Name, Req) ->
+    case ike_media:parse(Name) of
+        {ok, _, Mime} ->
+            case file:read_file(<<(ike_config:media_dir())/binary, "/", Name/binary>>) of
+                {ok, Bytes} ->
+                    Headers = (typed(Mime))#{
+                        <<"cache-control">> => <<"public, max-age=31536000, immutable">>
+                    },
+                    cowboy_req:reply(200, Headers, Bytes, Req);
+                {error, _} ->
+                    missing(Req)
+            end;
+        error ->
+            missing(Req)
+    end.
+
+%% a stylesheet, which a moderator may change at any time
+-spec stylesheet(binary(), cowboy_req:req()) -> cowboy_req:req().
+stylesheet(Name, Req) ->
+    case file:read_file(<<(ike_config:media_dir())/binary, "/", Name/binary>>) of
+        {ok, Bytes} ->
+            Headers = (headers())#{
+                <<"content-type">> => <<"text/css; charset=utf-8">>,
+                <<"cache-control">> => <<"no-cache">>
+            },
+            cowboy_req:reply(200, Headers, Bytes, Req);
+        {error, _} ->
+            missing(Req)
+    end.
 
 -spec part(term()) -> {ok, ike_staged:part()} | error.
 part(undefined) -> {ok, file};

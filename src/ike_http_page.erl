@@ -8,8 +8,6 @@
 -spec init(cowboy_req:req(), State) -> {ok, cowboy_req:req(), State}.
 init(Req, missing = State) ->
     {ok, ike_http:not_found(Req), State};
-init(Req, style = State) ->
-    {ok, plain(<<"style.css">>, <<"text/css; charset=utf-8">>, Req), State};
 init(Req, script = State) ->
     {ok, plain(<<"ike.js">>, <<"text/javascript; charset=utf-8">>, Req), State};
 init(Req, State) ->
@@ -87,7 +85,7 @@ searched(Req) ->
         _:_ -> []
     end.
 
-%% the stylesheet or the script, as the renderer wrote them
+%% the script, as the renderer wrote it
 -spec plain(binary(), binary(), cowboy_req:req()) -> cowboy_req:req().
 plain(Name, Type, Req) ->
     case file:read_file(<<(ike_config:pages_dir())/binary, "/", Name/binary>>) of

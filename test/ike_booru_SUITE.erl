@@ -427,7 +427,7 @@ kinds_tell_tags_apart(Config) ->
     {_, _} = binary:match(Canon, <<"href=\"/booru/search?tags=canon/spider-man\"">>),
     {404, _, _} = request(Config, get, "/wiki/nokind/spider-man", [], none),
     %% and a theme can tell the kinds apart
-    {200, _, Style} = request(Config, get, "/style.css", [], none),
+    {200, _, Style} = ike_browser:media(Config, "http://media.test/style.css"),
     {_, _} = binary:match(Style, <<"a.tag-artist">>),
     %% [[kind/name]] in a post leads to that kind's page
     {303, H, _} = ike_browser:post(

@@ -89,6 +89,8 @@ Danbooru reads them; the fetcher reaches public addresses only, tested).
 search; + and - beside each tag; tags lead to the wiki). `phi/kinds`
 (tags and pages are kind/name: artist, character, canon, description,
 meta, and info for pages; shown by name alone while unambiguous).
+`phi/themes` (no static stylesheet: themes moderators edit at
+`/mod/themes`, served from the media origin; plain, cream and navy).
 
 - **M1 owes:** vichan's "file" box; static meshes for anons once meshes
   exist.
@@ -103,6 +105,7 @@ meta, and info for pages; shown by name alone while unambiguous).
 
 ## Blocked on lux
 
+- **Q48:** a reader's own theme.
 - **Q46:** groups, stashed. **Q47:** favicons, X's logged-in way, next sites.
 - **Q44:** fonts' loose ends.
 - **Q43:** trashed posts and their owners.

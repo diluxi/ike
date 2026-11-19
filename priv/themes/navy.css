@@ -1,0 +1,67 @@
+/* navy: a big booru's looks. deep blue ground, pale blue links, a bar
+   on top, the search and the tags in a column on the left, thumbnails
+   on dark tiles. no one site's name or marks; a moderator edits it at
+   /mod/themes */
+
+body { background: #012e57; color: #ffffff; font-family: verdana, geneva, sans-serif;
+	font-size: 85%; margin: 0; }
+a { color: #b4c7d9; text-decoration: none; }
+a:hover { color: #2e76b4; }
+nav { background: #152f56; padding: 8px 16px; }
+nav a { color: #fdba31; font-weight: bold; margin-right: 1em; }
+main { background: #1f3c67; margin: 8px 16px; padding: 8px 16px; border-radius: 6px; }
+h1 { font-size: 1.6em; margin: 0.4em 0; }
+h2 { font-size: 1.2em; }
+img, video { max-width: 100%; height: auto; }
+textarea, input[type="text"], input[type="search"] { background: #ffffff; color: #000000;
+	border: 1px solid #284a81; border-radius: 3px; }
+button { background: #fdba31; color: #000000; border: none; border-radius: 3px; padding: 2px 8px; }
+
+/* the booru: the search and the tags in a column on the left */
+@media (min-width: 50em) {
+	main.sided { display: grid; grid-template-columns: 15em minmax(0, 1fr); gap: 1.5em; }
+}
+main.sided > aside { background: #152f56; padding: 8px; border-radius: 4px; align-self: start; }
+form.search input { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+ul.tags { list-style: none; padding-left: 0; margin: 0; }
+ul.tags li { margin: 2px 0; }
+ul.tags a.with, ul.tags a.without { color: #b4c7d9; font-weight: bold; }
+ul.thumbs { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+ul.thumbs li { background: #284a81; border-radius: 4px; padding: 4px; width: 150px; height: 150px;
+	display: flex; align-items: center; justify-content: center; }
+ul.thumbs img { max-width: 150px; max-height: 150px; }
+
+/* kinds of tag and page, as such boorus colour them */
+a.tag-artist, .page-artist { color: #f2ac08; }
+a.tag-canon, .page-canon { color: #dd00dd; }
+a.tag-character, .page-character { color: #00aa00; }
+a.tag-description, .page-description { color: #b4c7d9; }
+a.tag-meta, .page-meta { color: #ffffff; }
+
+/* threads and comments on lighter tiles */
+ol { padding-left: 0; list-style: none; }
+article { background: #284a81; border-radius: 4px; padding: 6px 10px; margin: 6px 0; }
+.name { color: #fdba31; font-weight: bold; }
+.title { font-weight: bold; }
+blockquote { border-left: 3px solid #b4c7d9; margin: 0 0 0 0.5em; padding-left: 0.5em; color: #d8e3ee; }
+
+ins { color: #b9f6ca; background: #1b5e20; text-decoration: none; }
+del { color: #ffcdd2; background: #7f1d1d; }
+header details { display: inline; }
+header details[open] { display: block; }
+header details > summary { display: inline; cursor: pointer; }
+.spoiler { background: #000000; color: #000000; }
+.spoiler:hover { color: #ffffff; }
+.gone { color: #8fa4b8; }
+.added { color: #3ee07a; }
+.removed { color: #ff6b6b; }
+a.missing { color: #ff6b6b; }
+a.out::before { content: "\2197\FE0E\00A0"; font-size: 0.85em; }
+.specimen .sample { font-size: 48px; width: 100%; min-height: 3em; box-sizing: border-box;
+	border: 1px dashed #b4c7d9; background: transparent; color: #ffffff; }
+textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }
+h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }
+
+/* a theme's own page, where it is edited */
+textarea.css { font-family: monospace; width: 100%; box-sizing: border-box; }
+form.inline { display: inline; }

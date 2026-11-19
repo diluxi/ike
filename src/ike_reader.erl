@@ -8,7 +8,7 @@
 -export([staged/1, staged_file/1, posted/1, out_of_sight/0, password/1, reports/0]).
 -export([entry_state/1, search/1, page/1, revisions/1, pages/0, links/1, signed/1]).
 -export([metas/1, meta/2, known/2, axes/1, comments/1, attached/1, trunk/0]).
--export([entry_page/2, tagged/1, resolved/1, shown/1]).
+-export([entry_page/2, tagged/1, resolved/1, shown/1, themes/0, theme/1]).
 -export_type([staged/0, meta/0, viewer/0]).
 
 %% who looks at the trunk: an account or nobody, and whether a moderator
@@ -233,6 +233,22 @@ tagged(Word) ->
             gen_server:call(?MODULE, {tagged, Kind, Name}) =:= true;
         _ ->
             false
+    end.
+
+%% the themes, by name, and which is the site's
+-spec themes() -> [{binary(), boolean()}].
+themes() ->
+    case gen_server:call(?MODULE, themes) of
+        {ok, Rows} when is_list(Rows) -> [{N, A =:= 1} || [N, A] <- Rows, is_binary(N)];
+        _ -> []
+    end.
+
+%% a theme's stylesheet, and whether it is the site's
+-spec theme(binary()) -> {ok, binary(), boolean()} | none.
+theme(Name) ->
+    case gen_server:call(?MODULE, {theme, Name}) of
+        {ok, [[Css, A]]} when is_binary(Css) -> {ok, Css, A =:= 1};
+        _ -> none
     end.
 
 %% tags and pages (kind/name) as they are shown: by their name alone
@@ -732,6 +748,10 @@ handle_call({tagged, Kind, Name}, _From, Conn) when is_binary(Kind), is_binary(N
         " AND EXISTS (SELECT 1 FROM booru_tag bt WHERE bt.tag = t.id)"
     >>,
     {reply, ike_db:q(Conn, Sql, [Kind, Name]) =:= {ok, [[1]]}, Conn};
+handle_call(themes, _From, Conn) ->
+    {reply, ike_db:q(Conn, <<"SELECT name, active FROM theme ORDER BY name">>, []), Conn};
+handle_call({theme, Name}, _From, Conn) when is_binary(Name) ->
+    {reply, ike_db:q(Conn, <<"SELECT css, active FROM theme WHERE name = ?1">>, [Name]), Conn};
 handle_call({shown, Words}, _From, Conn) when is_list(Words) ->
     {reply, ike_render:shown(Conn, [W || W <- Words, is_binary(W)]), Conn};
 handle_call({resolved, Name}, _From, Conn) when is_binary(Name) ->

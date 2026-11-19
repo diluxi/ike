@@ -91,7 +91,7 @@ machine.succeed("install -m 0640 -o ike -g ike /etc/ike-test/base.png /var/cache
 machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i '^content-type: image/png'")
 machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/" + "a" * 64 + ".png | grep -i \"^content-security-policy: default-src 'none'; sandbox\"")
 machine.succeed("rm /var/cache/ike/media/" + "a" * 64 + ".png")
-machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src http://media.localhost; media-src http://media.localhost; font-src http://media.localhost;\"")
+machine.succeed("curl -fsS -D - -o /dev/null http://localhost/ | grep -i \"^content-security-policy: default-src 'none'; script-src 'self'; style-src http://media.localhost; img-src http://media.localhost; media-src http://media.localhost; font-src http://media.localhost;\"")
 # the secret is a credential of the unit's, not a file ike's user owns
 machine.succeed("grep -qx not-a-secret /run/credentials/ike.service/oidc-secret")
 machine.succeed("curl -fsS -H 'X-Forwarded-For: 203.0.113.77' http://localhost/health | grep -x ok")
@@ -106,3 +106,10 @@ machine.succeed("systemctl stop ike.service")
 machine.fail("systemctl is-failed ike.service")
 # and the pages are files: caddy serves them with ike down
 machine.succeed("curl -fsS http://localhost/ | grep -q '<h1>ike</h1>'")
+
+# themes (lux): the site's stylesheet is on the media origin, typed and
+# asked after each time; the main origin has none
+machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/style.css | grep -i '^content-type: text/css'")
+machine.succeed("curl -fsS -D - -o /dev/null -H 'Host: media.localhost' http://localhost/style.css | grep -i '^cache-control: no-cache'")
+machine.succeed("curl -fsS -H 'Host: media.localhost' http://localhost/theme.navy.css | grep -q 012e57")
+machine.fail("curl -fsS -o /dev/null http://localhost/style.css")

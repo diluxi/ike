@@ -1,0 +1,48 @@
+/* plain: ike's own looks, few of them. every page works without any of
+   this; a moderator edits it at /mod/themes */
+
+body { font-family: sans-serif; line-height: 1.4; margin: 0 auto; padding: 0 16px; max-width: 72em; }
+nav { padding: 0.5em 0; }
+img, video { max-width: 100%; height: auto; }
+
+/* what is added green, what is taken red; a revision's count of lines
+   beside its header until it is opened */
+ins { color: #116329; background: #dafbe1; text-decoration: none; }
+del { color: #82071e; background: #ffebe9; }
+header details { display: inline; }
+header details[open] { display: block; }
+header details > summary { display: inline; cursor: pointer; }
+.spoiler { background: #24292f; color: #24292f; }
+.spoiler:hover { color: #ffffff; }
+.gone { color: #6e7781; }
+.added { color: #116329; }
+.removed { color: #82071e; }
+a.missing { color: #cf222e; }
+/* a link out of ike says so before it (lux); a site's own icon later */
+a.out::before { content: "\2197\FE0E\00A0"; font-size: 0.85em; }
+.title { font-weight: bold; }
+.specimen .sample { font-size: 48px; width: 100%; min-height: 3em; box-sizing: border-box;
+	border: 1px dashed #8c959f; background: transparent; }
+textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }
+h1 a.edit { font-size: 0.5em; font-weight: normal; vertical-align: middle; }
+
+/* kinds of tag and page, in danbooru's colours */
+a.tag-artist, .page-artist { color: #c00004; }
+a.tag-canon, .page-canon { color: #a800aa; }
+a.tag-character, .page-character { color: #00ab2c; }
+a.tag-meta, .page-meta { color: #fd9200; }
+
+/* the booru: a side with the search and the tags, beside the rest when
+   there is room */
+ul.tags { list-style: none; padding-left: 0; }
+ul.tags a.with, ul.tags a.without { text-decoration: none; color: #6e7781; }
+ul.thumbs { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+ul.thumbs img { max-width: 150px; max-height: 150px; }
+form.search input { width: 12em; max-width: 100%; }
+@media (min-width: 50em) {
+	main.sided { display: grid; grid-template-columns: 14em minmax(0, 1fr); gap: 2em; }
+}
+
+/* a theme's own page, where it is edited */
+textarea.css { font-family: monospace; width: 100%; box-sizing: border-box; }
+form.inline { display: inline; }

@@ -42,7 +42,6 @@ dispatch() ->
         {'_', [
             {"/health", ike_http_health, []},
             {"/", ike_http_page, front},
-            {"/style.css", ike_http_page, style},
             {"/ike.js", ike_http_page, script},
             {"/board", ike_http_page, boards},
             {"/booru", ike_http_page, booru},
@@ -78,6 +77,8 @@ dispatch() ->
             {"/mod", ike_http_mod, front},
             {"/mod/post/:post", [{post, int}], ike_http_mod, post},
             {"/mod/board/:board", [Board], ike_http_mod, board},
+            {"/mod/themes", ike_http_theme, index},
+            {"/mod/themes/:theme", ike_http_theme, theme},
             {"/mod/account/:account", [{account, int}], ike_http_mod, account},
             {"/mod/report/:report", [{report, int}], ike_http_mod, report},
             {"/mod/booru/:booru", [{booru, int}], ike_http_mod, booru},
@@ -125,12 +126,13 @@ headers() ->
         <<"cache-control">> => <<"no-store">>
     }.
 
-%% images, videos and fonts come from the media origin, and from nowhere
-%% else
+%% images, videos, fonts and the stylesheet come from the media origin,
+%% and from nowhere else (the stylesheet is a moderator's: so not from
+%% here, invariant 5)
 -spec csp() -> binary().
 csp() ->
     Media = ike_config:media_origin(),
-    <<"default-src 'none'; script-src 'self'; style-src 'self'; img-src ", Media/binary,
+    <<"default-src 'none'; script-src 'self'; style-src ", Media/binary, "; img-src ", Media/binary,
         "; media-src ", Media/binary, "; font-src ", Media/binary,
         "; form-action 'self'; base-uri 'none'; frame-ancestors 'none'">>.
 

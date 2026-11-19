@@ -189,6 +189,18 @@ fog's egress rules, if any, must let it.
 
 To check it on a host, by hand: `test/live/x-tweet.sh` (in `nix-shell`).
 
+## Themes
+
+No stylesheet is static (lux, 2026-11-19): ike comes with three themes
+(`plain`, the site's at first; `cream`; `navy`), seeded from
+`priv/themes` the first time it starts, and from then on they are rows
+any moderator edits at `/mod/themes`. Each is written to the media
+directory as `theme.NAME.css`, and the site's also as `style.css`; Caddy
+serves those from the media host with `Cache-Control: no-cache`, and the
+pages' policy is `style-src` the media origin (no stylesheet comes from
+the main origin, invariant 5). Nothing to set. The rows are the truth:
+the files are made again at every start.
+
 ## Where the stripper runs
 
 Every upload is decoded by the stripper, and nothing else of ike's ever

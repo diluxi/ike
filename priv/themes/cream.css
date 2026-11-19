@@ -1,0 +1,72 @@
+/* cream: an imageboard's old looks. cream ground, maroon words, replies
+   in peach boxes beside the thread's first post, green quotes. no one
+   site's name or marks; a moderator edits it at /mod/themes */
+
+body { background: #ffffee; color: #800000; font-family: arial, helvetica, sans-serif;
+	font-size: 10pt; margin: 0; padding: 0 8px; }
+a { color: #0000ee; }
+a:hover { color: #dd0000; }
+nav { font-size: 9pt; padding: 2px 0 8px; }
+nav a { text-decoration: none; }
+nav a::before { content: "["; color: #800000; }
+nav a::after { content: "]"; color: #800000; }
+h1 { color: #af0a0f; font-family: tahoma, sans-serif; font-size: 28px; font-weight: bold;
+	letter-spacing: -2px; text-align: center; margin: 8px 0; }
+h1 + p { text-align: center; }
+h2 { color: #af0a0f; font-size: 12pt; }
+hr { border: none; border-top: 1px solid #d9bfb7; }
+img, video { max-width: 100%; height: auto; }
+
+/* the thread: the first post bare, every reply a box, >> before it */
+main.thread ol { list-style: none; padding: 0; }
+main.thread ol > li { margin: 4px 0; }
+main.thread ol > li + li::before { content: ">>"; color: #e0bfb7; float: left; margin: 2px 4px 0 0; }
+main.thread ol > li + li > article { display: inline-block; background: #f0e0d6;
+	border: 1px solid #d9bfb7; border-left: none; border-top: none; padding: 4px 8px; max-width: 90%; }
+article > p { margin: 8px 24px; }
+.name { color: #117743; font-weight: bold; }
+.title { color: #cc1105; font-weight: bold; }
+article header a { color: #800000; text-decoration: none; }
+article header time { color: #800000; }
+blockquote { color: #789922; margin: 0 0 0 1em; }
+blockquote::before { content: ">"; }
+
+/* forms as the post box: labels on warm ground */
+form label { background: #eeaa88; border: 1px solid #000000; padding: 0 4px; font-weight: bold;
+	color: #000000; }
+textarea, input[type="text"], input[type="search"] { border: 1px solid #aaaaaa; background: #ffffff;
+	font-family: arial, helvetica, sans-serif; }
+
+ins { color: #116329; background: #dafbe1; text-decoration: none; }
+del { color: #82071e; background: #ffebe9; }
+header details { display: inline; }
+header details[open] { display: block; }
+header details > summary { display: inline; cursor: pointer; }
+.spoiler { background: #000000; color: #000000; }
+.spoiler:hover { color: #ffffff; }
+.gone { color: #707070; }
+.added { color: #117743; }
+.removed { color: #cc1105; }
+a.missing { color: #dd0000; }
+a.out::before { content: "\2197\FE0E\00A0"; font-size: 0.85em; }
+.specimen .sample { font-size: 48px; width: 100%; min-height: 3em; box-sizing: border-box;
+	border: 1px dashed #d9bfb7; background: transparent; color: #800000; }
+textarea.tags { font-family: monospace; width: 100%; max-width: 50em; }
+h1 a.edit { font-size: 0.4em; font-weight: normal; letter-spacing: 0; vertical-align: middle; }
+
+a.tag-artist, .page-artist { color: #aa0000; }
+a.tag-canon, .page-canon { color: #aa00aa; }
+a.tag-character, .page-character { color: #117743; }
+a.tag-meta, .page-meta { color: #cc6600; }
+
+ul.tags { list-style: none; padding-left: 0; }
+ul.tags a.with, ul.tags a.without { text-decoration: none; color: #800000; }
+ul.thumbs { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+ul.thumbs img { max-width: 150px; max-height: 150px; border: 1px solid #d9bfb7; }
+@media (min-width: 50em) {
+	main.sided { display: grid; grid-template-columns: 14em minmax(0, 1fr); gap: 1.5em; }
+}
+
+/* a theme's own page, where it is edited */
+textarea.css { font-family: monospace; width: 100%; box-sizing: border-box; }
+form.inline { display: inline; }

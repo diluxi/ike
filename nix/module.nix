@@ -11,7 +11,7 @@
 	media = "/var/cache/ike/media";
 
 	# what cowboy sends with its own responses, for the pages caddy serves
-	csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; font-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+	csp = "default-src 'none'; script-src 'self'; style-src ${cfg.media.origin}; img-src ${cfg.media.origin}; media-src ${cfg.media.origin}; font-src ${cfg.media.origin}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 	# the stripper's socket; a unit behind it runs once per upload
 	stripSocket = "/run/ike-strip/strip.sock";
@@ -431,6 +431,14 @@ in {
 					header @woff Content-Type font/woff
 					@woff2 path_regexp ^/[0-9a-f]{64}\.woff2$
 					header @woff2 Content-Type font/woff2
+					# the stylesheets, the site's and each theme's: a moderator
+					# changes them, so they are asked after each time
+					@style path_regexp ^/(style|theme\.[a-z0-9-]{1,32})\.css$
+					header @style Cache-Control no-cache
+					handle @style {
+						root * ${media}
+						file_server
+					}
 					@file path_regexp ^/[0-9a-f]{64}\.(jpg|png|webp|svg|webm|mp4|ttf|otf|woff|woff2|thumb\.webp)$
 					handle @file {
 						root * ${media}

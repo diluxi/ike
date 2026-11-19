@@ -133,6 +133,14 @@ here.
   account lux gives (its cookies a credential in the fetcher's unit,
   never ike's); (c) which sites next (pixiv, bluesky...); (d) a
   userscript that hands ike a page's source and commentary instead.
+- **Q48 Themes for readers.** Built: one theme the whole site wears,
+  which moderators choose and edit (decisions.md, "Themes"). Should a
+  reader pick another for themselves, as imageboards let? Without
+  scripts that needs every page to name every theme as an alternate
+  stylesheet (Firefox lists them; pages made again when a theme is made
+  or dropped), or the stylesheet's address to depend on a cookie, which
+  the media origin never sees. With ike.js, a choice kept in the
+  browser. Which, if any?
 - **Q15 Old M0 paths.** `/t/N` and `/new` are gone without redirects,
   since nothing was ever deployed under them.
 

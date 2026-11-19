@@ -8,6 +8,7 @@
 -export([start_link/0, local_actor/3, post/1, moderate/1, upload/1, retract/2, snapshot/0]).
 -export([report/2, dismiss/1, tag/3, wiki/1, privacy/3, sign_meta/2]).
 -export([curate/4, revise/5, comment/4]).
+-export([theme/3, use_theme/2, drop_theme/2]).
 -export([open_session/5, close_session/1, expire_sessions/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export_type([new_post/0, action/0]).
@@ -71,6 +72,8 @@
 -define(SNAPSHOT_TIMEOUT, 120000).
 %% bytes
 -define(MAX_BODY, 16384).
+%% a theme's stylesheet, as the schema has it
+-define(MAX_CSS, 262144).
 -define(MAX_REASON, 1000).
 %% the one actor shared by everyone who is nobody; the log is written
 %% as it, and the row beside each entry says who it was
@@ -306,6 +309,23 @@ privacy(Meta, Owner, Private) when is_integer(Meta), Meta > 0 ->
 sign_meta(Meta, Owner) when is_integer(Meta), Meta > 0 ->
     done(call({sign_meta, Meta, ike_id:to_integer(Owner)})).
 
+%% a theme saved by a moderator (lux): made, or its stylesheet replaced.
+%% a theme is text, of a size, and nothing else is asked of it: what a
+%% stylesheet may reach is the pages' policy's to say (media only)
+-spec theme(binary(), binary(), ike_id:actor()) -> ok | {error, bad_name | bad_css} | error().
+theme(Name, Css, Actor) ->
+    done(call({theme, Name, Css, ike_id:to_integer(Actor)})).
+
+%% a theme made the site's
+-spec use_theme(binary(), ike_id:actor()) -> ok | {error, no_such_theme} | error().
+use_theme(Name, Actor) ->
+    done(call({use_theme, Name, ike_id:to_integer(Actor)})).
+
+%% a theme dropped, if it is not the site's
+-spec drop_theme(binary(), ike_id:actor()) -> ok | {error, no_such_theme | in_use} | error().
+drop_theme(Name, Actor) ->
+    done(call({drop_theme, Name, ike_id:to_integer(Actor)})).
+
 %% a public meta tagged and posted to the booru (lux): its curation, an
 %% entry, whose thread is the meta's, with the curation's first revision
 %% in it. bytes with an entry already are not curated again
@@ -449,6 +469,7 @@ init([]) ->
                             ok = backfilled(Conn),
                             ok = inherited(Conn),
                             ok = republished(Conn),
+                            ok = themed(Conn),
                             _ = erlang:send_after(?CHECKPOINT, self(), checkpoint),
                             {ok, Conn};
                         {error, Reason} ->
@@ -590,6 +611,104 @@ handle_call({wiki, Name, Actor, Body, Password}, _From, Conn) when
                 );
             {true, _} ->
                 {error, no_such_page}
+        end,
+    {reply, Reply, Conn};
+handle_call({theme, Name, Css, Actor}, _From, Conn) when
+    is_binary(Name), is_binary(Css), is_integer(Actor)
+->
+    Reply =
+        case {ike_media:theme_name(Name), stylesheet(Css)} of
+            {false, _} ->
+                {error, bad_name};
+            {_, false} ->
+                {error, bad_css};
+            {true, true} ->
+                Time = erlang:system_time(second),
+                Done = ike_db:transaction(Conn, fun() ->
+                    steps(Conn, [
+                        {
+                            <<
+                                "INSERT INTO theme (name, css) VALUES (?1, ?2)"
+                                " ON CONFLICT (name) DO UPDATE SET css = excluded.css"
+                            >>,
+                            [Name, Css]
+                        },
+                        {
+                            <<
+                                "INSERT INTO theme_change (theme, actor, time, what, css)"
+                                " VALUES (?1, ?2, ?3, 'edited', ?4)"
+                            >>,
+                            [Name, Actor, Time, Css]
+                        }
+                    ])
+                end),
+                case settled(Done) of
+                    ok -> styled(Conn, Name);
+                    Other -> Other
+                end
+        end,
+    {reply, Reply, Conn};
+handle_call({use_theme, Name, Actor}, _From, Conn) when is_binary(Name), is_integer(Actor) ->
+    Time = erlang:system_time(second),
+    Done = ike_db:transaction(Conn, fun() ->
+        case ike_db:q(Conn, <<"SELECT 1 FROM theme WHERE name = ?1">>, [Name]) of
+            {ok, [_]} ->
+                steps(Conn, [
+                    {<<"UPDATE theme SET active = 0 WHERE active = 1">>, []},
+                    {<<"UPDATE theme SET active = 1 WHERE name = ?1">>, [Name]},
+                    {
+                        <<
+                            "INSERT INTO theme_change (theme, actor, time, what)"
+                            " VALUES (?1, ?2, ?3, 'used')"
+                        >>,
+                        [Name, Actor, Time]
+                    }
+                ]);
+            {ok, _} ->
+                {error, no_such_theme};
+            {error, _} = Error ->
+                Error
+        end
+    end),
+    Reply =
+        case settled(Done) of
+            ok -> styled(Conn, Name);
+            Other -> Other
+        end,
+    {reply, Reply, Conn};
+handle_call({drop_theme, Name, Actor}, _From, Conn) when is_binary(Name), is_integer(Actor) ->
+    Time = erlang:system_time(second),
+    Done = ike_db:transaction(Conn, fun() ->
+        case ike_db:q(Conn, <<"SELECT active FROM theme WHERE name = ?1">>, [Name]) of
+            {ok, [[0]]} ->
+                steps(Conn, [
+                    {<<"DELETE FROM theme WHERE name = ?1">>, [Name]},
+                    {
+                        <<
+                            "INSERT INTO theme_change (theme, actor, time, what)"
+                            " VALUES (?1, ?2, ?3, 'dropped')"
+                        >>,
+                        [Name, Actor, Time]
+                    }
+                ]);
+            {ok, [[1]]} ->
+                {error, in_use};
+            {ok, _} ->
+                {error, no_such_theme};
+            {error, _} = Error ->
+                Error
+        end
+    end),
+    Reply =
+        case settled(Done) of
+            ok ->
+                %% (ike_media:theme_name/1 held when it was made)
+                _ = file:delete(
+                    filename:join(ike_config:media_dir(), ike_media:theme_file(Name))
+                ),
+                ok;
+            Other ->
+                Other
         end,
     {reply, Reply, Conn};
 handle_call({privacy, Meta, Owner, Flag}, _From, Conn) when
@@ -2746,6 +2865,98 @@ unlinked([Hex | Rest]) ->
 unlinked([]) ->
     ok.
 
+%% at start: the themes there are, the first time the ones ike comes with
+%% (priv/themes, plain the site's), then each theme's file on the media
+%% origin, and the site's
+-spec themed(ike_db:writer()) -> ok.
+themed(Conn) ->
+    case ike_db:q(Conn, <<"SELECT count(*) FROM theme">>, []) of
+        {ok, [[0]]} -> ok = seeded(Conn);
+        _ -> ok
+    end,
+    case ike_db:q(Conn, <<"SELECT name FROM theme">>, []) of
+        {ok, Rows} ->
+            lists:foreach(fun(N) -> styled_name(Conn, N) end, [N || [N] <- Rows]);
+        {error, _} ->
+            ok
+    end.
+
+-spec styled_name(ike_db:writer(), term()) -> ok.
+styled_name(Conn, Name) when is_binary(Name) ->
+    _ = styled(Conn, Name),
+    ok;
+styled_name(_Conn, _Name) ->
+    ok.
+
+-spec seeded(ike_db:writer()) -> ok.
+seeded(Conn) ->
+    Dir =
+        case code:priv_dir(ike) of
+            Priv when is_list(Priv) -> Priv ++ "/themes";
+            _ -> "."
+        end,
+    Time = erlang:system_time(second),
+    Seeds = [
+        {binary:part(B, 0, byte_size(B) - 4), Css}
+     || F <- filelib:wildcard("*.css", Dir),
+        B <- [list_to_binary(F)],
+        {ok, Css} <- [file:read_file(Dir ++ "/" ++ F)]
+    ],
+    _ = ike_db:transaction(Conn, fun() ->
+        steps(
+            Conn,
+            [
+                Step
+             || {Name, Css} <- Seeds,
+                ike_media:theme_name(Name),
+                stylesheet(Css),
+                Step <- [
+                    {<<"INSERT INTO theme (name, css, active) VALUES (?1, ?2, ?3)">>, [
+                        Name,
+                        Css,
+                        case Name of
+                            <<"plain">> -> 1;
+                            _ -> 0
+                        end
+                    ]},
+                    {
+                        <<
+                            "INSERT INTO theme_change (theme, time, what, css)"
+                            " VALUES (?1, ?2, 'seeded', ?3)"
+                        >>,
+                        [Name, Time, Css]
+                    }
+                ]
+            ]
+        )
+    end),
+    ok.
+
+%% a theme's file on the media origin, and the site's too if it is the
+%% site's: written beside its place and renamed into it
+-spec styled(ike_db:writer(), binary()) -> ok | error().
+styled(Conn, Name) ->
+    case ike_db:q(Conn, <<"SELECT css, active FROM theme WHERE name = ?1">>, [Name]) of
+        {ok, [[Css, Active]]} when is_binary(Css) ->
+            Dir = ike_config:media_dir(),
+            _ = filelib:ensure_path(Dir),
+            ok = placed(filename:join(Dir, ike_media:theme_file(Name)), Css),
+            case Active of
+                1 -> placed(filename:join(Dir, <<"style.css">>), Css);
+                _ -> ok
+            end;
+        {ok, _} ->
+            {error, no_such_theme};
+        {error, _} = Error ->
+            Error
+    end.
+
+-spec placed(file:filename_all(), binary()) -> ok.
+placed(Path, Bytes) ->
+    Tmp = iolist_to_binary([Path, <<".tmp">>]),
+    ok = file:write_file(Tmp, Bytes),
+    ok = file:rename(Tmp, Path).
+
 %% at start: the media origin's files made to match what is shown
 -spec republished(ike_db:writer()) -> ok.
 republished(Conn) ->
@@ -3074,6 +3285,13 @@ text(Body) when byte_size(Body) =:= 0; byte_size(Body) > ?MAX_BODY ->
     false;
 text(Body) ->
     printable(Body).
+
+%% a stylesheet: text, of a size; a line may end in a carriage return
+-spec stylesheet(binary()) -> boolean().
+stylesheet(Css) when byte_size(Css) > ?MAX_CSS ->
+    false;
+stylesheet(Css) ->
+    printable(binary:replace(Css, <<"\r">>, <<>>, [global])).
 
 -spec printable(binary()) -> boolean().
 printable(<<>>) -> true;

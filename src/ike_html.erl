@@ -4,7 +4,7 @@
 %% Element and attribute names are a closed set, spelled out below.
 -module(ike_html).
 
--export([text/1, el/2, el/3, document/2, to_iodata/1]).
+-export([text/1, el/2, el/3, document/3, to_iodata/1]).
 -export_type([html/0, tag/0, attr/0]).
 
 -type tag() ::
@@ -28,6 +28,8 @@
     | button
     | del
     | details
+    | aside
+    | section
     | 'div'
     | footer
     | form
@@ -119,9 +121,11 @@ el(Tag, Children) -> {el, Tag, [], Children}.
 -spec el(tag(), [attr()], [html()]) -> html().
 el(Tag, Attrs, Children) -> {el, Tag, Attrs, Children}.
 
-%% a whole page
--spec document(Title :: binary(), [html()]) -> html().
-document(Title, Body) ->
+%% a whole page, with its stylesheet: the site's theme, on the media
+%% origin (a moderator's bytes, so never this origin's, invariant 5);
+%% nothing depends on it
+-spec document(Title :: binary(), Style :: binary(), [html()]) -> html().
+document(Title, Style, Body) ->
     el(html, [{lang, <<"en">>}], [
         el(head, [
             el(meta, [{charset, <<"utf-8">>}], []),
@@ -134,8 +138,7 @@ document(Title, Body) ->
                 []
             ),
             el(title, [text(Title)]),
-            %% plain looks, from this origin; nothing depends on them
-            el(link, [{rel, <<"stylesheet">>}, {href, <<"/style.css">>}], []),
+            el(link, [{rel, <<"stylesheet">>}, {href, Style}], []),
             %% keys for the text box, and nothing a page needs (invariant 2)
             el(script, [{src, <<"/ike.js">>}, defer], [])
         ]),
@@ -208,6 +211,8 @@ tag(s) -> <<"s">>;
 tag(script) -> <<"script">>;
 tag(u) -> <<"u">>;
 tag(article) -> <<"article">>;
+tag(aside) -> <<"aside">>;
+tag(section) -> <<"section">>;
 tag(body) -> <<"body">>;
 tag(br) -> <<"br">>;
 tag(button) -> <<"button">>;
